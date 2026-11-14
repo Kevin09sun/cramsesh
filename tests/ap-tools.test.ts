@@ -193,7 +193,19 @@ function ctxOf(
 	papers: ApPapersPort,
 	sitting?: ApSitting,
 ): ApToolContext {
-	return { chatId: "chat_now", courseId: "ap_course_1", courses, papers, ...(sitting ? { sitting } : {}) };
+	return {
+		chatId: "chat_now",
+		courseId: "ap_course_1",
+		courses,
+		papers,
+		// Stage 2 seams: an empty index, no recorded attempts and no answers.
+		// The free-response suite (ap-frq-tools.test.ts) exercises them.
+		index: { get: () => null, retagPart: () => {} },
+		attempts: { record: (courseId) => courses.get(courseId)! },
+		answeredFrq: () => "none",
+		recordedFrq: () => false,
+		...(sitting ? { sitting } : {}),
+	};
 }
 
 /** A scripted pi engine — the agent factories need one injected (BYOK). */
@@ -261,6 +273,11 @@ describe("apTools registry", () => {
 			"propose_units",
 			"ap_progress",
 			"ap_mcq",
+			"ap_frq",
+			"ap_rubric",
+			"ap_view_photo",
+			"ap_record_frq",
+			"ap_retag_part",
 			"ap_record_result",
 			"read",
 			"ls",
@@ -792,7 +809,7 @@ describe("ap_progress", () => {
 		const tool = apTools(ctxOf(fake.courses, papers.papers)).ap_progress!;
 		const result = await tool.execute("call_p", {} as never);
 		const text = (result.content[0] as { text: string }).text;
-		assert.match(text, /ced\.pdf · Course and Exam Description · MISSING on this computer/);
+		assert.match(text, /ced\.pdf · ced · Course and Exam Description · MISSING on this computer/);
 	});
 
 	it("lists a present document by page count", async () => {
@@ -801,7 +818,7 @@ describe("ap_progress", () => {
 		const tool = apTools(ctxOf(fake.courses, papers.papers)).ap_progress!;
 		const result = await tool.execute("call_p", {} as never);
 		const text = (result.content[0] as { text: string }).text;
-		assert.match(text, /ced\.pdf · Course and Exam Description · 3 pages/);
+		assert.match(text, /ced\.pdf · ced · Course and Exam Description · 3 pages/);
 	});
 
 	it("reports a sitting whose scope no longer exists", async () => {

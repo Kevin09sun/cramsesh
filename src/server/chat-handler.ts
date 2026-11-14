@@ -9,6 +9,7 @@ import {
 	type TeachingAgent,
 } from "../agent/teacher-agent.ts";
 import { piEngineForSpec, type PiEngine } from "../agent/models.ts";
+import { answeredFrqFrom, recordedFrqFrom } from "../agent/tools/ap.ts";
 import { connectionBackgroundAllowed as subscriptionBackgroundAllowed, connectionScopeCurrent, isSubscriptionProvider } from "../agent/subscription-connections.ts";
 import { nativeSubscriptionError } from "../agent/subscription-stream.ts";
 import { chatGPTStreamError } from "../agent/chatgpt-stream.ts";
@@ -526,6 +527,22 @@ export async function handleChatInput(
 						sitting: apSitting,
 						courses: stores.apCourseStore,
 						papers: apPapers,
+						// The synced released-question index and the graded
+						// free-response attempts (stage 2).
+						index: {
+							get: (courseId) => stores.apIndexStore.get(courseId),
+							retagPart: (courseId, questionId, label, topicId) => {
+								stores.apIndexStore.retagPart(courseId, questionId, label, topicId);
+							},
+						},
+						attempts: {
+							record: (courseId, attempt, topics) =>
+								stores.apCourseStore.recordRealAttempt(courseId, attempt, topics),
+						},
+						// Derived from THIS turn's message list — the write-ahead
+						// record plus the answer that re-enters this turn.
+						answeredFrq: (questionId) => answeredFrqFrom(agentMessages, questionId),
+						recordedFrq: (questionId) => recordedFrqFrom(agentMessages, questionId),
 						// The rarely-needed set, wired exactly like test prep's: the
 						// research + pdf jobs.
 						jobs: {

@@ -23,16 +23,21 @@
 import * as path from "node:path";
 import { Type } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
-import { apMcqInputObject, apMcqInputProblems } from "../../core/question-core.ts";
+import { apFrqInputObject, apMcqInputObject, apMcqInputProblems } from "../../core/question-core.ts";
 import { planProblems, readiness, readinessPercent } from "../../core/test-prep.ts";
 import type { AnswerResult, PlanDraftSection } from "../../core/test-prep.ts";
 import { scopedQueue, sittingLabel, sittingScopeProblem, topicInScope } from "../../core/ap.ts";
 import type { ApCourseRecord, ApDocument, ApSitting } from "../../core/ap.ts";
-import { apPaperFileName } from "../../core/ap-frq.ts";
+import { apPaperFileName, attemptProblems, eligibleRealQuestions, scoreAttempt } from "../../core/ap-frq.ts";
+import { apQuestionTitle } from "../../core/ap-frq.ts";
+import type { ApQuestionIndex, ApRealAttempt } from "../../core/ap-frq.ts";
+import type { LhMessage } from "../../core/native-messages.ts";
 import type { SearchProvider } from "../../core/search.ts";
 import type { EnabledTools } from "../../core/pending.ts";
-import { invalidInputResult, questionResult } from "../tool-execute.ts";
-import { parsePageSpec, pdfInfo, pdfPageCount } from "../subagents/pdf-ops.ts";
+import { invalidInputResult, questionResult, serverExecute } from "../tool-execute.ts";
+import { parsePageSpec, pdfExtract, pdfInfo, pdfPageCount } from "../subagents/pdf-ops.ts";
+import { loadLearnerImage } from "./learner-image.ts";
+import type { ReadModel } from "./read.ts";
 import { createPdfReadTools } from "./pdf-read.ts";
 import { healEncodedArguments, healToolRecord } from "./heal.ts";
 import { readTool } from "./read.ts";
@@ -64,6 +69,30 @@ export interface ApPapersPort {
 	importFile(courseId: string, sourcePath: string, file: string): Promise<{ file: string; bytes: number }>;
 }
 
+/** The synced question-index port: read the course's indexed released
+ *  questions and correct one part's topic tag. Structurally satisfied by
+ *  store/ap-index.ts. */
+export interface ApIndexPort {
+	get(courseId: string): ApQuestionIndex | null;
+	retagPart(courseId: string, questionId: string, label: string, topicId: string | undefined): void;
+}
+
+/** The real-attempt port: record one graded free-response attempt and fold
+ *  its per-topic outcomes into the course record. Structurally satisfied by
+ *  store/ap-courses.ts. */
+export interface ApAttemptsPort {
+	record(
+		courseId: string,
+		attempt: ApRealAttempt,
+		topics: { topicId: string; result: AnswerResult }[],
+	): ApCourseRecord;
+}
+
+/** Whether the learner has answered one released question in this chat:
+ *  "none" = never posed (or dismissed), "pending" = on screen, "answered" =
+ *  the answer result has come back. */
+export type ApFrqAnswerState = "answered" | "pending" | "none";
+
 /** The record-reading context the gates need (the practice-tools idiom). */
 export interface ApToolContext {
 	chatId: string;
@@ -72,6 +101,14 @@ export interface ApToolContext {
 	sitting?: ApSitting;
 	courses: ApCourseStorePort;
 	papers: ApPapersPort;
+	/** The synced released-question index. */
+	index: ApIndexPort;
+	/** The graded free-response attempts (stage 2). */
+	attempts: ApAttemptsPort;
+	/** Derived from the chat record's messages (answeredFrqFrom). */
+	answeredFrq: (questionId: string) => ApFrqAnswerState;
+	/** Derived from the chat record's messages (recordedFrqFrom). */
+	recordedFrq: (questionId: string) => boolean;
 	/** THE RARELY-NEEDED SET (the practice-tools idiom): the research job,
 	 *  injected by the composition root. Absent (tests, wiring bugs) = absent
 	 *  from the registry. */
@@ -112,6 +149,27 @@ const AP_PDF_EXTRACT_REFUSAL = `Read at most ${AP_PDF_EXTRACT_MAX_PAGES} pages o
 /** Plain-text result (these tools answer the model in prose, not JSON). */
 function textResult(text: string): AgentToolResult<string> {
 	return { content: [{ type: "text", text }], details: text };
+}
+
+/** Model-facing prose with NOTHING in details (the rubric must never reach
+ *  the UI before grading). */
+function proseResult(text: string): AgentToolResult<null> {
+	return { content: [{ type: "text", text }], details: null };
+}
+
+/** The course document behind a question's paper or scoring id. */
+function documentFor(course: ApCourseRecord, id: string): ApDocument | undefined {
+	return course.documents.find((document) => document.id === id);
+}
+
+/** The local file name a document id names (ids are file names without .pdf). */
+function documentFile(course: ApCourseRecord, id: string): string {
+	return documentFor(course, id)?.file ?? `${id}.pdf`;
+}
+
+/** The human label a question's paper is named by in refusals. */
+function documentLabel(course: ApCourseRecord, id: string): string {
+	return documentFor(course, id)?.label ?? documentFile(course, id);
 }
 
 /** Readiness from integer counts: the shared count-based rule (100% only
@@ -156,6 +214,111 @@ function topicGateProblems(course: ApCourseRecord, sitting: ApSitting, topicId: 
 		return [`topicId "${topicId}" is outside this sitting's scope`];
 	}
 	return [];
+}
+
+/** Has the learner missed a question in this chat? The store-derived rule
+ *  ap_mcq uses for one topic, widened to the whole course record: the latest
+ *  graded history entry in this chat decides, and anything other than
+ *  "correct" (wrong or "I don't know") is a miss. A free-response attempt
+ *  writes one history entry per tagged topic, so any topic of that attempt
+ *  other than correct counts. */
+function missedThisChat(course: ApCourseRecord, chatId: string): boolean {
+	let latestAt: string | null = null;
+	let latestResults: AnswerResult[] = [];
+	for (const unit of course.sections) {
+		for (const topic of unit.points) {
+			const last = topic.history.at(-1);
+			if (!last || last.chatId !== chatId) continue;
+			if (latestAt === null || last.at > latestAt) {
+				latestAt = last.at;
+				latestResults = [last.result];
+			} else if (last.at === latestAt) {
+				// One attempt writes the same `at` for every topic it covered;
+				// ANY of its topics other than correct is a miss.
+				latestResults.push(last.result);
+			}
+		}
+	}
+	return latestResults.some((result) => result !== "correct");
+}
+
+// ─── the answered/recorded derivations ──────────────────────────────────────
+
+interface FrqCall {
+	toolCallId: string;
+	questionId: string | null;
+	messageIndex: number;
+}
+
+function frqCalls(messages: readonly LhMessage[], toolName: string): FrqCall[] {
+	const calls: FrqCall[] = [];
+	messages.forEach((message, messageIndex) => {
+		if (message.role !== "assistant") return;
+		for (const part of message.content) {
+			if (part.type !== "toolCall" || part.name !== toolName) continue;
+			const args = part.arguments as { questionId?: unknown } | undefined;
+			calls.push({
+				toolCallId: part.id,
+				questionId: typeof args?.questionId === "string" ? args.questionId : null,
+				messageIndex,
+			});
+		}
+	});
+	return calls;
+}
+
+interface FrqResult {
+	messageIndex: number;
+	isError: boolean;
+	details: unknown;
+}
+
+function frqResult(messages: readonly LhMessage[], toolCallId: string): FrqResult | null {
+	for (let messageIndex = 0; messageIndex < messages.length; messageIndex++) {
+		const message = messages[messageIndex]!;
+		if (message.role === "toolResult" && message.toolCallId === toolCallId) {
+			return { messageIndex, isError: message.isError === true, details: message.details };
+		}
+	}
+	return null;
+}
+
+function isDismissed(details: unknown): boolean {
+	return typeof details === "object" && details !== null && (details as { dismissed?: unknown }).dismissed === true;
+}
+
+/** The last pose of this question, and what became of it. */
+function lastAnswer(messages: readonly LhMessage[], questionId: string): {
+	call: FrqCall;
+	result: FrqResult | null;
+} | null {
+	const call = frqCalls(messages, "ap_frq")
+		.filter((candidate) => candidate.questionId === questionId)
+		.at(-1);
+	return call === undefined ? null : { call, result: frqResult(messages, call.toolCallId) };
+}
+
+/** "answered" | "pending" | "none" for one released question, from the chat
+ *  record's native messages. A refused pose and a dismissal pose nothing, so
+ *  both read "none". */
+export function answeredFrqFrom(messages: readonly LhMessage[], questionId: string): ApFrqAnswerState {
+	const answer = lastAnswer(messages, questionId);
+	if (!answer) return "none";
+	if (!answer.result) return "pending";
+	if (answer.result.isError || isDismissed(answer.result.details)) return "none";
+	return "answered";
+}
+
+/** True once a successful ap_record_frq for this question's answer is in the
+ *  record. A refused grading does not count. */
+export function recordedFrqFrom(messages: readonly LhMessage[], questionId: string): boolean {
+	const answer = lastAnswer(messages, questionId);
+	if (!answer?.result || answer.result.isError || isDismissed(answer.result.details)) return false;
+	return frqCalls(messages, "ap_record_frq").some((call) => {
+		if (call.questionId !== questionId || call.messageIndex <= answer.result!.messageIndex) return false;
+		const result = frqResult(messages, call.toolCallId);
+		return result !== null && !result.isError;
+	});
 }
 
 // ─── ap_save_document ───────────────────────────────────────────────────────
@@ -384,10 +547,13 @@ function apProgressTool(ctx: ApToolContext): AgentTool<typeof emptyInputObject> 
 		label: "ap_progress",
 		description:
 			"Report where this AP course stands: whether this is the setup session or a practice sitting (with its " +
-			"scope and question kind), the readiness overall and per unit, the stored documents and whether each is " +
-			"present on this computer, and — in a practice sitting — the topic queue in work order " +
-			"(`topicId · reason · unit › topic`, capped at 30). Read-only. Call it at the start of every session, " +
-			"then work the queue in order.",
+			"scope and question kind), the readiness overall and per unit, the stored documents — each named with " +
+			"its kind and year and whether it is present on this computer — the number of released questions " +
+			"indexed, and — in a practice sitting — the topic queue in work order " +
+			"(`topicId · reason · unit › topic`, capped at 30). In a `frq` or `mixed` sitting it also lists the " +
+			"eligible released questions (at most 20) as `<id> · <unused|used> · <part>→<topic>`, marking a paper " +
+			"missing on this computer, or says none for this scope. Read-only. Call it at the start of every " +
+			"session, then work the queue in order.",
 		parameters: emptyInputObject,
 		prepareArguments: (args: unknown) => healEncodedArguments(args, emptyInputObject) as never,
 		executionMode: "sequential",
@@ -422,12 +588,15 @@ function apProgressTool(ctx: ApToolContext): AgentTool<typeof emptyInputObject> 
 			lines.push("", "Documents:");
 			for (const document of course.documents) {
 				const present = ctx.papers.present(ctx.courseId, document.file);
+				const identity = document.year === undefined ? document.kind : `${document.kind} ${document.year}`;
 				lines.push(
 					present
-						? `${document.file} · ${document.label} · ${document.pages ?? 0} pages`
-						: `${document.file} · ${document.label} · MISSING on this computer`,
+						? `${document.file} · ${identity} · ${document.label} · ${document.pages ?? 0} pages`
+						: `${document.file} · ${identity} · ${document.label} · MISSING on this computer`,
 				);
 			}
+			const index = ctx.index.get(ctx.courseId);
+			lines.push(`Released questions indexed: ${index?.questions.length ?? 0}`);
 
 			if (sitting) {
 				const byTopic = new Map<string, { unitTitle: string; text: string }>();
@@ -443,6 +612,32 @@ function apProgressTool(ctx: ApToolContext): AgentTool<typeof emptyInputObject> 
 						return `${entry.pointId} · ${entry.reason} · ${info?.unitTitle ?? "?"} › ${info?.text ?? ""}`;
 					});
 				lines.push("", ...(queue.length > 0 ? ["Queue:", ...queue] : ["Queue: nothing left"]));
+
+				if (sitting.kind === "frq" || sitting.kind === "mixed") {
+					const eligible = eligibleRealQuestions(
+						course,
+						index,
+						sitting.scope,
+						ctx.chatId,
+						course.realAttempts ?? [],
+					);
+					if (eligible.length === 0) {
+						lines.push("", "Real questions: none for this scope");
+					} else {
+						const listed = eligible.slice(0, 20).map((entry) => {
+							const file = documentFile(course, entry.question.paperId);
+							const parts = entry.question.parts.map((part) => {
+								const topic = part.topicId === undefined ? undefined : byTopic.get(part.topicId);
+								return `${part.label}→${topic?.text ?? "none"}`;
+							});
+							const missing = ctx.papers.present(ctx.courseId, file)
+								? ""
+								: " · PAPER MISSING on this computer";
+							return `${entry.question.id} · ${entry.used ? "used" : "unused"} · ${parts.join("; ")}${missing}`;
+						});
+						lines.push("", "Real questions:", ...listed);
+					}
+				}
 			}
 			return textResult(lines.join("\n"));
 		},
@@ -494,6 +689,408 @@ function apMcqTool(ctx: ApToolContext): AgentTool<typeof apMcqInputObject> {
 				]);
 			}
 			return questionResult();
+		},
+	};
+}
+
+// ─── ap_frq ─────────────────────────────────────────────────────────────────
+
+function apFrqTool(ctx: ApToolContext): AgentTool<typeof apFrqInputObject> {
+	return {
+		name: "ap_frq",
+		label: "ap_frq",
+		description:
+			"Pose one REAL released free-response question from the course's synced question index, exactly as " +
+			"ap_progress lists it. The question's original paper pages and every part come from the index; " +
+			"questionId must be an id from ap_progress. ONE question per turn: pose it, then end your turn; the " +
+			"learner answers part by part and may attach photos of written work. AFTER A MISS this chat the fresh " +
+			"question MUST carry the short diagnosis in `details` — the call is rejected without it. Refused in the " +
+			"setup session, in a multiple-choice sitting, for an unknown id, for a question with no part in this " +
+			"sitting's scope, when its paper is not on this computer, and for an already answered question while an " +
+			"unused eligible one remains. The rubric is NEVER included here: fetch it with ap_rubric only after the " +
+			"learner has answered.",
+		parameters: apFrqInputObject,
+		prepareArguments: (args: unknown) => healEncodedArguments(args, apFrqInputObject) as never,
+		executionMode: "sequential",
+		execute: async (_toolCallId, input) => {
+			if ((input.questionId ?? "").trim().length === 0) {
+				return invalidInputResult("ap_frq", ["questionId must not be blank"]);
+			}
+			const course = ctx.courses.get(ctx.courseId);
+			const sitting = ctx.sitting;
+			const listingProblems = listingGateProblems(course, sitting, ctx.courseId);
+			if (listingProblems.length > 0) return invalidInputResult("ap_frq", listingProblems);
+			const confirmedCourse = course!;
+			const confirmedSitting = sitting!;
+			if (confirmedSitting.kind === "mcq") {
+				return invalidInputResult("ap_frq", ["this sitting is multiple-choice only"]);
+			}
+			const index = ctx.index.get(ctx.courseId);
+			if (!index) {
+				return invalidInputResult("ap_frq", [
+					"no released questions are indexed — save the released papers and index them with ap_index_papers first",
+				]);
+			}
+			const question = index.questions.find((candidate) => candidate.id === input.questionId);
+			if (!question) {
+				return invalidInputResult("ap_frq", [
+					`question "${input.questionId}" is not in the question index — use an id from ap_progress`,
+				]);
+			}
+			const inScope = question.parts.some(
+				(part) => part.topicId !== undefined && topicInScope(confirmedCourse, confirmedSitting.scope, part.topicId),
+			);
+			if (!inScope) {
+				return invalidInputResult("ap_frq", [
+					`question ${question.id} tests nothing in this sitting's scope`,
+				]);
+			}
+			const paperFile = documentFile(confirmedCourse, question.paperId);
+			if (!ctx.papers.present(ctx.courseId, paperFile)) {
+				return invalidInputResult("ap_frq", [
+					`${documentLabel(confirmedCourse, question.paperId)} is not on this computer — the learner can download it from the course page`,
+				]);
+			}
+			// The released paper is a one-time question while unused eligible
+			// questions remain. Only a used question with nothing else left may
+			// be asked again.
+			const eligible = eligibleRealQuestions(
+				confirmedCourse,
+				index,
+				confirmedSitting.scope,
+				ctx.chatId,
+				confirmedCourse.realAttempts ?? [],
+			);
+			const used = eligible.find((entry) => entry.question.id === question.id)?.used ?? false;
+			const nextUnused = eligible.find((entry) => !entry.used && entry.question.id !== question.id);
+			if (used && nextUnused) {
+				return invalidInputResult("ap_frq", [
+					`${question.id} was already answered; ask ${nextUnused.question.id} first`,
+				]);
+			}
+			// THE POST-MISS DIAGNOSIS, widened to the whole course record (see
+			// missedThisChat): after a miss in THIS chat the fresh question must
+			// carry the diagnosis on its visible `details` field.
+			if (missedThisChat(confirmedCourse, ctx.chatId) && (input.details ?? "").trim().length === 0) {
+				return invalidInputResult("ap_frq", [
+					"after a miss, put the short explanation (including the right answer) in `details` — the learner sees it with the fresh question",
+				]);
+			}
+			return questionResult();
+		},
+	};
+}
+
+// ─── ap_rubric ──────────────────────────────────────────────────────────────
+
+const apRubricInputObject = Type.Object({
+	questionId: Type.String({
+		description:
+			"REQUIRED — the released question the learner just answered, exactly as posed with ap_frq.",
+	}),
+});
+
+function apRubricTool(ctx: ApToolContext): AgentTool<typeof apRubricInputObject> {
+	return {
+		name: "ap_rubric",
+		label: "ap_rubric",
+		description:
+			"Read the official rubric of a released free-response question AFTER the learner has answered it: the " +
+			"question text (from the paper on this computer), each part with its topic and every scoring point, and " +
+			"the scoring guideline file and pages. The learner NEVER sees this — it is grading material only, and " +
+			"the answer card stays hidden until ap_record_frq records the grading. Refused before the learner has " +
+			"answered this question in this chat (`answeredFrq`).",
+		parameters: apRubricInputObject,
+		prepareArguments: (args: unknown) => healEncodedArguments(args, apRubricInputObject) as never,
+		executionMode: "sequential",
+		execute: async (_toolCallId, input) => {
+			if ((input.questionId ?? "").trim().length === 0) {
+				return invalidInputResult("ap_rubric", ["questionId must not be blank"]);
+			}
+			// THE SECRECY GATE: no rubric before the answer.
+			if (ctx.answeredFrq(input.questionId) !== "answered") {
+				return invalidInputResult("ap_rubric", [
+					"the rubric is available only after the learner has answered this question",
+				]);
+			}
+			const course = ctx.courses.get(ctx.courseId);
+			if (!course) return invalidInputResult("ap_rubric", [`course "${ctx.courseId}" was not found`]);
+			const index = ctx.index.get(ctx.courseId);
+			const question = index?.questions.find((candidate) => candidate.id === input.questionId);
+			if (!question) {
+				return invalidInputResult("ap_rubric", [
+					`question "${input.questionId}" is not in the question index — use an id from ap_progress`,
+				]);
+			}
+
+			const lines: string[] = [apQuestionTitle(question)];
+			const paperFile = documentFile(course, question.paperId);
+			const paperLabel = documentLabel(course, question.paperId);
+			if (!ctx.papers.present(ctx.courseId, paperFile)) {
+				lines.push("", `${paperLabel} is not on this computer — the question's text cannot be read here.`);
+			} else {
+				try {
+					const extracted = await pdfExtract(
+						path.join(ctx.papers.dir(ctx.courseId), paperFile),
+						question.pages.join(","),
+					);
+					lines.push("", extracted.trim());
+				} catch {
+					lines.push(
+						"",
+						`${paperLabel} could not be read on this computer — the question's text is unavailable.`,
+					);
+				}
+			}
+			for (const part of question.parts) {
+				const topic = part.topicId === undefined ? undefined : locateTopic(course, part.topicId)?.topic;
+				lines.push("", `(${part.label}) topic: ${topic?.text ?? "none"}`);
+				for (const point of part.points) lines.push(`${point.id}: ${point.text}`);
+			}
+			lines.push(
+				"",
+				`Scoring guideline: ${documentFile(course, question.scoringId)}, pages ${question.scoringPages.join(", ")}`,
+			);
+			return proseResult(lines.join("\n"));
+		},
+	};
+}
+
+// ─── ap_view_photo ──────────────────────────────────────────────────────────
+
+const apViewPhotoInputObject = Type.Object({
+	path: Type.String({
+		description:
+			"REQUIRED — the local path of one photo of the learner's written work, exactly as the answer result listed it.",
+	}),
+});
+
+/** Look at one photo of the learner's written work. The image rides the read
+ *  tool's escape hatch (a native image content part); a model that cannot see
+ *  images gets one honest sentence instead. Any guard refusal (missing file,
+ *  oversized, unsupported format) is returned as a NORMAL result — the tutor
+ *  can say so and grade the dictated answer only. `model` is rebound per
+ *  engine in teacher-agent.ts, exactly like read. */
+export function createApViewPhotoTool(model?: ReadModel): AgentTool<typeof apViewPhotoInputObject> {
+	return {
+		name: "ap_view_photo",
+		label: "ap_view_photo",
+		description:
+			"Look at one photo of the learner's written free-response work (jpg, png, gif, webp or bmp; at most " +
+			"25 MiB). Use it only for a photo the learner's answer result lists. If the file cannot be opened the " +
+			"reason is returned as the result — say so and grade the dictated answer only. This model receives the " +
+			"image as an attachment when it can see images.",
+		parameters: apViewPhotoInputObject,
+		prepareArguments: (args: unknown) => healEncodedArguments(args, apViewPhotoInputObject) as never,
+		executionMode: "sequential",
+		execute: serverExecute("ap_view_photo", apViewPhotoInputObject, async ({ path: rawPath }, { signal }) => {
+			if (model && !model.input.includes("image")) {
+				return { text: "This model cannot see images. Say so, and grade the dictated answer only." };
+			}
+			try {
+				const image = await loadLearnerImage(rawPath, signal);
+				return {
+					text: "Photo of the learner's written work.",
+					images: [{ data: image.data, mimeType: image.mimeType }],
+				};
+			} catch (error) {
+				return { text: error instanceof Error ? error.message : String(error) };
+			}
+		}),
+	};
+}
+
+/** The unwrapped tool (teacher-agent rebinds its execute to the live model). */
+export const apViewPhotoTool = createApViewPhotoTool();
+
+// ─── ap_record_frq ──────────────────────────────────────────────────────────
+
+const apRecordFrqInputObject = Type.Object({
+	questionId: Type.String({
+		description: "REQUIRED — the released question the learner answered, exactly as posed with ap_frq.",
+	}),
+	dontKnow: Type.Optional(
+		Type.Boolean({
+			description:
+				'Set true when the learner said "I don\'t know" instead of attempting the question; every part ' +
+				"then scores zero and every tagged topic is recorded as dontKnow.",
+		}),
+	),
+	parts: Type.Array(
+		Type.Object({
+			label: Type.String({ description: "REQUIRED — one part label from ap_rubric, e.g. \"a\"." }),
+			earned: Type.Array(Type.String(), {
+				description:
+					"REQUIRED — the ids of the rubric points this part earned, exactly as ap_rubric lists them " +
+					"(empty when none). An omitted part is refused.",
+			}),
+		}),
+		{
+			description:
+				"REQUIRED — the grading for EVERY part of the question, point by point against the official rubric. " +
+				"A right answer reached by flawed reasoning earns no point.",
+		},
+	),
+});
+
+function apRecordFrqTool(ctx: ApToolContext): AgentTool<typeof apRecordFrqInputObject> {
+	return {
+		name: "ap_record_frq",
+		label: "ap_record_frq",
+		description:
+			"Record the learner's graded free-response answer point by point against the official rubric, once per " +
+			"answer, after ap_rubric. Pass every part with the rubric point ids it earned (or dontKnow). Validates " +
+			"the grading with the shared attemptProblems rule, folds each tagged topic to correct/wrong/dontKnow in " +
+			"the course record, and returns the score card details for the UI: question id and title, earned/total, " +
+			"and one row per part with its outcome (earned, missed, or not counted when the part has no listed " +
+			"topic). Refused before the learner has answered this question and when the answer is already recorded.",
+		parameters: apRecordFrqInputObject,
+		prepareArguments: (args: unknown) => healEncodedArguments(args, apRecordFrqInputObject) as never,
+		executionMode: "sequential",
+		execute: async (_toolCallId, input) => {
+			if ((input.questionId ?? "").trim().length === 0) {
+				return invalidInputResult("ap_record_frq", ["questionId must not be blank"]);
+			}
+			if (ctx.answeredFrq(input.questionId) !== "answered") {
+				return invalidInputResult("ap_record_frq", [
+					"the learner has not answered this question in this session — ask it first",
+				]);
+			}
+			if (ctx.recordedFrq(input.questionId)) {
+				return invalidInputResult("ap_record_frq", [
+					"the learner's answer to this question is already recorded",
+				]);
+			}
+			const course = ctx.courses.get(ctx.courseId);
+			if (!course) {
+				return invalidInputResult("ap_record_frq", [`course "${ctx.courseId}" was not found`]);
+			}
+			const index = ctx.index.get(ctx.courseId);
+			const question = index?.questions.find((candidate) => candidate.id === input.questionId);
+			if (!question) {
+				return invalidInputResult("ap_record_frq", [
+					`question "${input.questionId}" is not in the question index — use an id from ap_progress`,
+				]);
+			}
+			const problems = attemptProblems(question, input.parts);
+			if (problems.length > 0) return invalidInputResult("ap_record_frq", problems);
+
+			const knownTopicIds = new Set(
+				course.sections.flatMap((unit) => unit.points.map((topic) => topic.id)),
+			);
+			const attempt: ApRealAttempt = {
+				questionId: question.id,
+				chatId: ctx.chatId,
+				at: new Date().toISOString(),
+				...(input.dontKnow ? { dontKnow: true } : {}),
+				parts: input.parts.map((part) => ({ label: part.label, earned: [...part.earned] })),
+			};
+			const score = scoreAttempt(question, attempt, knownTopicIds);
+			let updated: ApCourseRecord;
+			try {
+				updated = ctx.attempts.record(ctx.courseId, attempt, score.topics);
+			} catch (error) {
+				return invalidInputResult("ap_record_frq", [
+					error instanceof Error ? error.message : String(error),
+				]);
+			}
+
+			const lines: string[] = [`${apQuestionTitle(question)}: ${score.earned}/${score.total} points.`];
+			for (const part of score.parts) lines.push(`(${part.label}) ${part.earned}/${part.total}`);
+			for (const topic of score.topics) {
+				const status = locateTopic(updated, topic.topicId)?.topic.status ?? "unknown";
+				lines.push(`Topic ${topic.topicId} is now ${status}.`);
+			}
+			const ready = readiness(updated);
+			const totals = ready.sections.reduce(
+				(acc, unit) => ({ solid: acc.solid + unit.solid, total: acc.total + unit.total }),
+				{ solid: 0, total: 0 },
+			);
+			lines.push(
+				`Overall readiness: ${pct(totals.solid, totals.total)} (${totals.solid}/${totals.total} points solid).`,
+			);
+
+			return {
+				content: [{ type: "text" as const, text: lines.join("\n") }],
+				details: {
+					questionId: question.id,
+					title: apQuestionTitle(question),
+					earned: score.earned,
+					total: score.total,
+					parts: score.parts.map((part) => ({
+						label: part.label,
+						earned: part.earned,
+						total: part.total,
+						...(part.topicId === undefined
+							? {}
+							: { topicText: locateTopic(updated, part.topicId)?.topic.text ?? "none" }),
+						outcome: part.topicId === undefined ? "not counted" : part.complete ? "earned" : "missed",
+					})),
+				},
+			};
+		},
+	};
+}
+
+// ─── ap_retag_part ──────────────────────────────────────────────────────────
+
+const apRetagPartInputObject = Type.Object({
+	questionId: Type.String({
+		description: "REQUIRED — the released question whose part tag is wrong, exactly as ap_progress lists it.",
+	}),
+	part: Type.String({ description: "REQUIRED — the lettered part to retag, e.g. \"a\"." }),
+	topicId: Type.String({
+		description:
+			'REQUIRED — the confirmed topic id this part really tests, or the empty string "" to remove the tag ' +
+			"(the part then counts for no topic). A topic id not in the confirmed list is refused.",
+	}),
+});
+
+function apRetagPartTool(ctx: ApToolContext): AgentTool<typeof apRetagPartInputObject> {
+	return {
+		name: "ap_retag_part",
+		label: "ap_retag_part",
+		description:
+			"Correct one part's topic tag in the synced released-question index, at the learner's request: pass the " +
+			"confirmed topic id it really tests, or \"\" to remove the tag. Allowed in any AP session (setup or " +
+			"sitting), but not while a question is on screen — wait for the answer first. Refused for a topic id " +
+			"not in the confirmed list and for an unknown question or part.",
+		parameters: apRetagPartInputObject,
+		prepareArguments: (args: unknown) => healEncodedArguments(args, apRetagPartInputObject) as never,
+		executionMode: "sequential",
+		execute: async (_toolCallId, input) => {
+			if (ctx.answeredFrq(input.questionId) === "pending") {
+				return invalidInputResult("ap_retag_part", [
+					"a question on screen cannot be retagged — wait for the answer",
+				]);
+			}
+			const course = ctx.courses.get(ctx.courseId);
+			if (!course) return invalidInputResult("ap_retag_part", [`course "${ctx.courseId}" was not found`]);
+			const topicId = input.topicId.trim();
+			if (topicId.length > 0 && !locateTopic(course, topicId)) {
+				return invalidInputResult("ap_retag_part", [
+					`topicId "${topicId}" is not in the confirmed list — use an id from the list the learner confirmed`,
+				]);
+			}
+			try {
+				ctx.index.retagPart(
+					ctx.courseId,
+					input.questionId,
+					input.part,
+					topicId.length > 0 ? topicId : undefined,
+				);
+			} catch (error) {
+				return invalidInputResult("ap_retag_part", [
+					error instanceof Error ? error.message : String(error),
+				]);
+			}
+			const question = ctx.index.get(ctx.courseId)?.questions.find((candidate) => candidate.id === input.questionId);
+			const title = question ? apQuestionTitle(question) : input.questionId;
+			if (topicId.length === 0) {
+				return proseResult(`Part (${input.part}) of ${title} is now untagged.`);
+			}
+			const topicText = locateTopic(course, topicId)?.topic.text ?? topicId;
+			return proseResult(`Part (${input.part}) of ${title} is now tagged to ${topicText}.`);
 		},
 	};
 }
@@ -650,6 +1247,11 @@ export function apTools(ctx: ApToolContext, enabled?: EnabledTools): Record<stri
 		propose_units: proposeUnitsTool(ctx),
 		ap_progress: apProgressTool(ctx),
 		ap_mcq: apMcqTool(ctx),
+		ap_frq: apFrqTool(ctx),
+		ap_rubric: apRubricTool(ctx),
+		ap_view_photo: apViewPhotoTool,
+		ap_record_frq: apRecordFrqTool(ctx),
+		ap_retag_part: apRetagPartTool(ctx),
 		ap_record_result: apRecordResultTool(ctx),
 		...(ctx.jobs ? { ap_index_papers: apIndexPapersTool(ctx, ctx.jobs) } : {}),
 		read: readTool,
