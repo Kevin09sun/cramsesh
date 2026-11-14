@@ -18,6 +18,8 @@ export * from "./jobs.ts";
 export * from "./stores.ts";
 // Official AP papers live outside the synced data repo (data/ap-papers/<courseId>/).
 export * from "./ap-papers.ts";
+// Page images are rendered once into the same local tree's pages/ folder.
+export * from "./ap-pages.ts";
 export { readRenderSettings, writeRenderSettings } from "../store/render-settings.ts";
 // The settings record + prompt overrides (settings-storage wave, 2026-09-19).
 // The *Record aliases keep the app/api/settings routes explicit about which
