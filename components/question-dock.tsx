@@ -7,6 +7,7 @@ import { finishDictation, isDictationActive, joinDictation, useDictationTarget }
 import { useEnterSubmits } from "@/components/enter-submits";
 import { PathInput } from "@/components/path-input";
 import { MalformedQuestion } from "@/components/malformed-question";
+import { FrqQuestion } from "@/components/ap/frq-question";
 import { ToolContentResponse } from "@/components/ai-elements/message";
 import { cn } from "@/lib/utils";
 import {
@@ -21,6 +22,7 @@ import {
 	seededRandom,
 	shuffleOptions,
 	toolQuestionKind,
+	parseApFrqInput,
 	parseApMcqInput,
 	parseAskInput,
 	parseQuizInput,
@@ -28,6 +30,7 @@ import {
 	toggleOption,
 	toggleOther,
 	type AnswerRequest,
+	type ApFrqToolInput,
 	type ApMcqToolInput,
 	type AskToolInput,
 	type DockSelection,
@@ -63,9 +66,12 @@ import { CONFIDENCE_COLORS, confidenceRailStyle } from "@/components/confidence-
  */
 
 export interface QuestionDockProps {
-	toolName: "quiz" | "probe" | "ask_user_question" | "explain" | "recall" | "check_point" | "ap_mcq";
+	toolName: "quiz" | "probe" | "ask_user_question" | "explain" | "recall" | "check_point" | "ap_mcq" | "ap_frq";
 	toolCallId: string;
-	input: QuizToolInput | AskToolInput | ExplainToolInput | ApMcqToolInput;
+	input: QuizToolInput | AskToolInput | ExplainToolInput | ApMcqToolInput | ApFrqToolInput;
+	/** The AP course the question belongs to (ap_frq only): the form fetches
+	 *  the released question and its page images through the course's route. */
+	apCourseId?: string;
 	/** Collapse state, owned by the DockOverlay (it drives the shell's height morph). */
 	expanded: boolean;
 	/**
@@ -105,6 +111,7 @@ export function QuestionDock({
 	toolName,
 	toolCallId,
 	input,
+	apCourseId,
 	expanded,
 	reveal = false,
 	onExpand,
@@ -125,7 +132,13 @@ export function QuestionDock({
 	// "I don't know") but parses against its own schema and withholds the
 	// verdict: its label names the generated origin.
 	const canonical =
-		toolName === "probe" || toolName === "ap_mcq" ? "quiz" : toolName === "recall" || toolName === "check_point" ? "explain" : toolName;
+		toolName === "probe" || toolName === "ap_mcq"
+			? "quiz"
+			: toolName === "recall" || toolName === "check_point"
+				? "explain"
+				: toolName === "ap_frq"
+					? "ask_user_question"
+					: toolName;
 	// The chip's display name carries the tool's OWN name (owner
 	// 2026-10-09): probe-phase questions label Probe/Recall in the
 	// composer; check_point labels Check; AP questions label AP · generated;
@@ -139,7 +152,9 @@ export function QuestionDock({
 					? "Check"
 					: toolName === "ap_mcq"
 						? "AP · generated"
-						: undefined;
+						: toolName === "ap_frq"
+							? "AP · released"
+							: undefined;
 	// Parse, don't cast (src/core/tool-parts.ts): the model authored this
 	// input, and only the schema the tool declared vouches for its shape.
 	// The dock mounts on input-available parts (already validated at the
@@ -149,11 +164,13 @@ export function QuestionDock({
 	const parsed =
 		toolName === "ap_mcq"
 			? parseApMcqInput(input)
-			: canonical === "quiz"
-				? parseQuizInput(input)
-				: canonical === "explain"
-					? parseExplainInput(input)
-					: parseAskInput(input);
+			: toolName === "ap_frq"
+				? parseApFrqInput(input)
+				: canonical === "quiz"
+					? parseQuizInput(input)
+					: canonical === "explain"
+						? parseExplainInput(input)
+						: parseAskInput(input);
 	if (!parsed) {
 		return <MalformedQuestion />;
 	}
@@ -162,7 +179,7 @@ export function QuestionDock({
 			{!expanded && (
 				<QuestionDockBar
 					toolName={canonical}
-					question={parsed.question}
+					question={"question" in parsed ? parsed.question : ""}
 					onExpand={onExpand}
 					variant={reveal ? "reveal" : "collapsed"}
 					toolLabel={toolLabel}
@@ -175,19 +192,37 @@ export function QuestionDock({
 				/>
 			)}
 			<div className={expanded ? "dock-variant" : "invisible h-0 overflow-hidden"}>
-				<QuestionDockForm
-					toolName={toolName}
-					toolCallId={toolCallId}
-					input={parsed}
-					phase={phase}
-					active={expanded}
-					onSubmit={onSubmit}
-					initialDraft={initialDraft}
-					onSaveDraft={onSaveDraft}
-					onEscape={onEscape}
-					dictationClaim={dictationClaim}
-					compactionRunning={compactionRunning}
-				/>
+				{toolName === "ap_frq" ? (
+					// A released free-response question is its own shape: the
+					// form fetches the public projection (pages, parts, tags)
+					// and owns the multi-part body. The dock only delegates.
+					<FrqQuestion
+						questionId={(parsed as ApFrqToolInput).questionId}
+						apCourseId={apCourseId}
+						toolCallId={toolCallId}
+						details={(parsed as ApFrqToolInput).details}
+						onSubmit={onSubmit}
+						initialDraft={initialDraft}
+						onSaveDraft={onSaveDraft}
+						onEscape={onEscape}
+						dictationClaim={dictationClaim}
+						compactionRunning={compactionRunning}
+					/>
+				) : (
+					<QuestionDockForm
+						toolName={toolName}
+						toolCallId={toolCallId}
+						input={parsed}
+						phase={phase}
+						active={expanded}
+						onSubmit={onSubmit}
+						initialDraft={initialDraft}
+						onSaveDraft={onSaveDraft}
+						onEscape={onEscape}
+						dictationClaim={dictationClaim}
+						compactionRunning={compactionRunning}
+					/>
+				)}
 			</div>
 		</>
 	);
@@ -320,7 +355,7 @@ function QuestionDockForm({
 			// The role (owner 2026-10-03): predict questions gate by it in the
 			// view (never collapsed) and the answered card tucks the explanation.
 			questionType: kind === "quiz" ? normalizeQuizType((input as { type?: unknown }).type) : undefined,
-			question: input.question,
+			question: "question" in input ? input.question : "",
 			context: input.details,
 			mode,
 			options: ordered,

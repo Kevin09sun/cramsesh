@@ -2,13 +2,14 @@
 
 import { useState } from "react";
 import { ConfidenceRail } from "@/components/confidence-rail";
+import { QuestionPages } from "@/components/ap/question-pages";
 import { GlyphMark } from "@/components/ui/glyph-mark";
 import { ThinkingBlock } from "@/components/thinking-block";
 import { PathText } from "@/components/file-path-chip";
 import { cn } from "@/lib/utils";
 import { ToolContentResponse } from "@/components/ai-elements/message";
 import type { QuestionAnswerData } from "@/src/core";
-import { answerForPresentation, parseApMcqInput, parseAskInput, parseExplainInput, parseQuizInput } from "@/src/core";
+import { answerForPresentation, parseApFrqInput, parseApMcqInput, parseAskInput, parseExplainInput, parseQuizInput } from "@/src/core";
 
 /**
  * Static rendering of an answered question (tool part in `output-available`).
@@ -20,7 +21,17 @@ import { answerForPresentation, parseApMcqInput, parseAskInput, parseExplainInpu
  * client — the card reveals his answer, the committed correct answer, and
  * the explanation, with NO verdict chips (owner ruling 2026-09-27).
  */
-export function AnsweredCard({ answer: savedAnswer, input }: { answer: QuestionAnswerData; input?: unknown }) {
+export function AnsweredCard({
+	answer: savedAnswer,
+	input,
+	apCourseId,
+}: {
+	answer: QuestionAnswerData;
+	input?: unknown;
+	/** The AP course the released question belongs to (ap_frq only): the
+	 *  "Show question" page images load through its route. */
+	apCourseId?: string;
+}) {
 	const answer = answerForPresentation(savedAnswer, input);
 	const [whyOpen, setWhyOpen] = useState(false); // the tucked explanation (predictions, owner 2026-10-03)
 	if (answer.dismissed) {
@@ -30,6 +41,9 @@ export function AnsweredCard({ answer: savedAnswer, input }: { answer: QuestionA
 			</div>
 		);
 	}
+	// AP's released free-response answer is a record of parts and photos —
+	// never a verdict (the tutor's score card is the only verdict surface).
+	if (answer.kind === "frq") return <FrqAnsweredCard answer={answer} input={input} apCourseId={apCourseId} />;
 
 	const isQuiz = answer.kind === "quiz";
 	// AP multiple choice is quiz-shaped, but the verdict is the tutor's
@@ -253,5 +267,95 @@ export function AnsweredCard({ answer: savedAnswer, input }: { answer: QuestionA
 			)}
 		</div>
 		</>
+	);
+}
+
+function photoName(path: string): string {
+	const pieces = path.split(/[\\/]/);
+	return pieces[pieces.length - 1] || path;
+}
+
+/**
+ * AP's answered free-response record (stage 2, 2026-11-14): the released
+ * question's title, its original pages behind "Show question", every part's
+ * label with the learner's words (a blank part is an em dash) and the
+ * attached photos by file name. No verdict of any kind: the tutor's score
+ * card is the only place a result is shown.
+ */
+function FrqAnsweredCard({
+	answer,
+	input,
+	apCourseId,
+}: {
+	answer: QuestionAnswerData;
+	input?: unknown;
+	apCourseId?: string;
+}) {
+	const [questionOpen, setQuestionOpen] = useState(false);
+	const details = parseApFrqInput(input)?.details;
+	const frq = answer.frq;
+	const showPages = frq !== undefined && apCourseId !== undefined;
+
+	return (
+		<div
+			className="rounded-xl border bg-card p-4 text-card-foreground [&>*:last-child]:mb-0"
+			data-testid="answered-card"
+		>
+			<div className="mb-1 flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+				AP · released
+			</div>
+			<div className="mb-3 font-medium">
+				<ToolContentResponse>{answer.questionText}</ToolContentResponse>
+			</div>
+			{details && (
+				<div className="mb-3 text-sm text-muted-foreground">
+					<ToolContentResponse>{details}</ToolContentResponse>
+				</div>
+			)}
+			{showPages && (
+				<div className="mb-3" data-testid="answered-frq-pages">
+					<button
+						type="button"
+						onClick={() => setQuestionOpen((open) => !open)}
+						className="text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+					>
+						{questionOpen ? "Hide question" : "Show question"}
+					</button>
+					{questionOpen && (
+						<QuestionPages
+							courseId={apCourseId}
+							file={frq.file}
+							pages={frq.pages}
+							title={frq.title}
+							className="mt-2 flex flex-col gap-2"
+						/>
+					)}
+				</div>
+			)}
+			<div className="flex flex-col gap-2 text-sm">
+				{(answer.parts ?? []).map((part) => (
+					<div key={part.label} className="rounded-lg border px-3 py-2">
+						<div className="mb-1 font-medium">({part.label})</div>
+						<div className="lh-prose whitespace-pre-wrap">
+							{part.text.trim() ? (
+								<PathText text={part.text} />
+							) : (
+								<span className="text-muted-foreground">—</span>
+							)}
+						</div>
+					</div>
+				))}
+			</div>
+			{(answer.photos ?? []).length > 0 && (
+				<div className="mt-2 flex flex-col gap-1 text-sm text-muted-foreground">
+					{answer.photos!.map((path) => (
+						<div key={path} className="truncate">
+							Photo attached: {photoName(path)}
+						</div>
+					))}
+				</div>
+			)}
+			{answer.dontKnow && <div className="mt-2 text-sm text-muted-foreground">Answered “I don't know”.</div>}
+		</div>
 	);
 }
