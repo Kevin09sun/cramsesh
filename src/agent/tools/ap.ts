@@ -1,6 +1,7 @@
 /**
  * THE AP TOOLS (AP prep stage 1, 2026-11-13): the AP tutor's toolset —
- * `ap_save_document` (store the official College Board course description),
+ * `ap_save_document` (store the official College Board course description,
+ * released free-response papers and their scoring guidelines),
  * the three pdf readers over the course's local papers folder,
  * `propose_units` (author the unit/topic list for learner review),
  * `ap_progress` (session kind, readiness, documents, the scoped queue),
@@ -27,6 +28,7 @@ import { planProblems, readiness, readinessPercent } from "../../core/test-prep.
 import type { AnswerResult, PlanDraftSection } from "../../core/test-prep.ts";
 import { scopedQueue, sittingLabel, sittingScopeProblem, topicInScope } from "../../core/ap.ts";
 import type { ApCourseRecord, ApDocument, ApSitting } from "../../core/ap.ts";
+import { apPaperFileName } from "../../core/ap-frq.ts";
 import type { SearchProvider } from "../../core/search.ts";
 import type { EnabledTools } from "../../core/pending.ts";
 import { invalidInputResult, questionResult } from "../tool-execute.ts";
@@ -85,6 +87,21 @@ const CED_FILE = "ced.pdf";
 const CED_ID = "ced";
 const CED_FIRST =
 	"save the course description with ap_save_document first — the unit and topic list must come from it";
+
+/** The document kinds ap_save_document stores: the course description plus
+ *  stage 2's released papers and their scoring guidelines. */
+const DOCUMENT_KINDS = ["ced", "frq", "scoring"] as const;
+
+function isDocumentKind(kind: string): kind is (typeof DOCUMENT_KINDS)[number] {
+	return (DOCUMENT_KINDS as readonly string[]).includes(kind);
+}
+
+/** A sitting could otherwise replace a saved document — every kind is a
+ *  setup-session write, with the description's own stage 1 wording. */
+const CED_SITTING_REFUSAL =
+	"The course description is saved only in the course's setup session, not during a sitting.";
+const RELEASED_SITTING_REFUSAL =
+	"Released papers are saved only in a setup or papers session, not during a sitting.";
 
 /** The course description is read a few pages at a time: one pdf_extract call
  *  may resolve to at most this many pages, so a whole 200-page CED cannot
@@ -146,11 +163,25 @@ function topicGateProblems(course: ApCourseRecord, sitting: ApSitting, topicId: 
 const apSaveDocumentInputObject = Type.Object({
 	kind: Type.String({
 		description:
-			'REQUIRED — the document kind. Stage 1 accepts only "ced" (the Course and Exam Description); ' +
-			"free-response and scoring documents arrive in a later version.",
+			'REQUIRED — the document kind: "ced" (the Course and Exam Description), "frq" (a released ' +
+			'free-response paper) or "scoring" (a released paper\'s scoring guideline). "frq" and "scoring" ' +
+			"require a year (1990–2100) and may take a set (1–9).",
 	}),
 	label: Type.String({ description: "REQUIRED — a human label, e.g. \"Course and Exam Description (2026)\"." }),
-	year: Type.Optional(Type.Integer({ description: "Optional. The document's edition year." })),
+	year: Type.Optional(
+		Type.Integer({
+			description:
+				'The document\'s edition year. REQUIRED for "frq" and "scoring" (1990–2100); optional for the ' +
+				"course description.",
+		}),
+	),
+	set: Type.Optional(
+		Type.Integer({
+			description:
+				'Optional. The released paper\'s set number (1–9) when that year has several sets; only for "frq" ' +
+				'and "scoring".',
+		}),
+	),
 	url: Type.Optional(
 		Type.String({
 			description:
@@ -170,26 +201,53 @@ function apSaveDocumentTool(ctx: ApToolContext): AgentTool<typeof apSaveDocument
 		name: "ap_save_document",
 		label: "ap_save_document",
 		description:
-			"Save the AP course's official Course and Exam Description into the course's local papers folder — " +
-			"from a College Board `url` or from a learner file `path` (exactly one). Only kind \"ced\" is accepted " +
-			"in this version. Returns the stored file name and page count; pdf_info, pdf_extract and pdf_search read " +
-			"it by that file name. A refused download returns the reason as a retryable error.",
+			"Save an official AP document into the course's local papers folder — from a College Board `url` or " +
+			'from a learner file `path` (exactly one). Kinds: "ced" (the Course and Exam Description), "frq" (a ' +
+			'released free-response paper) and "scoring" (its scoring guideline); "frq" and "scoring" require a ' +
+			"four-digit `year` (1990–2100) and may take a `set` (1–9), and their file name is built from them. " +
+			"Returns the stored file name and page count; pdf_info, pdf_extract and pdf_search read it by that " +
+			"file name. A refused download returns the reason as a retryable error.",
 		parameters: apSaveDocumentInputObject,
 		prepareArguments: (args: unknown) => healEncodedArguments(args, apSaveDocumentInputObject) as never,
 		executionMode: "sequential",
 		execute: async (_toolCallId, input) => {
-			// A sitting could otherwise replace ced.pdf and break every
-			// topic's source page — the description is a setup-session write.
+			if (!isDocumentKind(input.kind)) {
+				return invalidInputResult("ap_save_document", [
+					`kind "${input.kind}" is not a document kind — use "ced", "frq" or "scoring"`,
+				]);
+			}
+			const kind = input.kind;
+			// A sitting could otherwise replace a saved paper and break every
+			// topic's source page — every kind is a setup-session write.
 			if (ctx.sitting) {
 				return invalidInputResult("ap_save_document", [
-					"The course description is saved only in the course's setup session, not during a sitting.",
+					kind === "ced" ? CED_SITTING_REFUSAL : RELEASED_SITTING_REFUSAL,
 				]);
 			}
-			if (input.kind !== "ced") {
-				return invalidInputResult("ap_save_document", [
-					`kind "${input.kind}" is not available yet — only the course description ("ced") is accepted in this version; free-response and scoring documents arrive in a later version`,
-				]);
+
+			// The description keeps stage 1's fixed identity; a released paper
+			// or scoring guideline is named and identified by its year and set,
+			// so re-saving the same one replaces the document.
+			let file: string;
+			let id: string;
+			if (kind === "ced") {
+				file = CED_FILE;
+				id = CED_ID;
+			} else {
+				const year = input.year;
+				if (year === undefined || !Number.isInteger(year) || year < 1990 || year > 2100) {
+					return invalidInputResult("ap_save_document", [
+						"year is required for a released paper or scoring guideline",
+					]);
+				}
+				const set = input.set;
+				if (set !== undefined && (!Number.isInteger(set) || set < 1 || set > 9)) {
+					return invalidInputResult("ap_save_document", ["set must be a whole number from 1 to 9"]);
+				}
+				file = apPaperFileName(kind, year, set);
+				id = file.slice(0, -".pdf".length);
 			}
+
 			const hasUrl = typeof input.url === "string" && input.url.trim().length > 0;
 			const hasPath = typeof input.path === "string" && input.path.trim().length > 0;
 			if (hasUrl === hasPath) {
@@ -202,12 +260,13 @@ function apSaveDocumentTool(ctx: ApToolContext): AgentTool<typeof apSaveDocument
 
 			let pages: number;
 			try {
-				if (hasUrl) await ctx.papers.download(ctx.courseId, input.url!, CED_FILE);
-				else await ctx.papers.importFile(ctx.courseId, input.path!, CED_FILE);
-				// The PDF tools' own info function: the page count the learner
-				// will see, measured from the bytes actually stored.
-				const info = await pdfInfo(path.join(ctx.papers.dir(ctx.courseId), CED_FILE));
-				pages = info.page_count;
+				if (hasUrl) await ctx.papers.download(ctx.courseId, input.url!, file);
+				else await ctx.papers.importFile(ctx.courseId, input.path!, file);
+				// The description keeps the PDF tools' own info function (the page
+				// count the learner will see); a released paper only needs the
+				// cheap page count.
+				const stored = path.join(ctx.papers.dir(ctx.courseId), file);
+				pages = kind === "ced" ? (await pdfInfo(stored)).page_count : await pdfPageCount(stored);
 			} catch (error) {
 				return invalidInputResult("ap_save_document", [
 					error instanceof Error ? error.message : String(error),
@@ -215,15 +274,18 @@ function apSaveDocumentTool(ctx: ApToolContext): AgentTool<typeof apSaveDocument
 			}
 
 			const doc: ApDocument = {
-				id: CED_ID,
-				kind: "ced",
+				id,
+				kind,
 				label: input.label,
 				...(input.year !== undefined ? { year: input.year } : {}),
 				url: hasUrl ? input.url!.trim() : "",
-				file: CED_FILE,
+				file,
 				pages,
 			};
 			ctx.courses.putDocument(ctx.courseId, doc);
+			if (kind !== "ced") {
+				return textResult(`Saved ${input.label} as ${file} (${pages} page${pages === 1 ? "" : "s"}).`);
+			}
 			return textResult(
 				`Saved ${CED_FILE} (${pages} page${pages === 1 ? "" : "s"}) to this course's papers folder. ` +
 					`pdf_info, pdf_extract and pdf_search read it by the file name "${CED_FILE}".`,

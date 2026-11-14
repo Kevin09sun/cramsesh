@@ -388,14 +388,174 @@ describe("ap_save_document", () => {
 		assert.equal(fake.calls.putDocument.length, 0, "a refused download stores nothing");
 	});
 
-	it("REFUSES kinds stage 1 does not carry yet", async () => {
+	it("downloads a released paper to frq-<year>.pdf and records the document", async () => {
 		const fake = fakeCourses(courseOf());
 		const papers = fakePapers();
 		const tool = apTools(ctxOf(fake.courses, papers.papers)).ap_save_document!;
-		const result = await tool.execute("call_save", { kind: "frq", label: "FRQ", url: "https://apcentral.collegeboard.org/frq.pdf" } as never);
-		assert.equal(result.isError, true);
-		assert.match((result.details as { problems: string[] }).problems[0]!, /later version/i);
+		const result = await tool.execute("call_save", {
+			kind: "frq",
+			label: "2023 FRQ",
+			year: 2023,
+			url: "https://apcentral.collegeboard.org/frq-2023.pdf",
+		} as never);
+
+		assert.equal(result.isError, undefined);
+		assert.deepEqual(papers.calls.download, [
+			{ courseId: "ap_course_1", url: "https://apcentral.collegeboard.org/frq-2023.pdf", file: "frq-2023.pdf" },
+		]);
+		assert.equal(fake.calls.putDocument.length, 1);
+		const stored = fake.calls.putDocument[0]!;
+		assert.equal(stored.doc.id, "frq-2023");
+		assert.equal(stored.doc.kind, "frq");
+		assert.equal(stored.doc.year, 2023);
+		assert.equal(stored.doc.file, "frq-2023.pdf");
+		assert.equal(stored.doc.pages, 2, "the page count comes from the stored PDF");
+		assert.equal(
+			(result.content[0] as { text: string }).text,
+			"Saved 2023 FRQ as frq-2023.pdf (2 pages).",
+		);
+	});
+
+	it("appends a set number to a released paper's file name and id", async () => {
+		const fake = fakeCourses(courseOf());
+		const papers = fakePapers();
+		const tool = apTools(ctxOf(fake.courses, papers.papers)).ap_save_document!;
+		const result = await tool.execute("call_save", {
+			kind: "frq",
+			label: "2023 Set 2 FRQ",
+			year: 2023,
+			set: 2,
+			path: "C:/learner/frq.pdf",
+		} as never);
+
+		assert.equal(result.isError, undefined);
+		assert.deepEqual(papers.calls.importFile, [
+			{ courseId: "ap_course_1", sourcePath: "C:/learner/frq.pdf", file: "frq-2023-set2.pdf" },
+		]);
+		assert.equal(fake.calls.putDocument[0]!.doc.id, "frq-2023-set2");
+		assert.equal(fake.calls.putDocument[0]!.doc.file, "frq-2023-set2.pdf");
+		assert.equal(fake.calls.putDocument[0]!.doc.year, 2023);
+	});
+
+	it("downloads a scoring guideline to scoring-<year>.pdf", async () => {
+		const fake = fakeCourses(courseOf());
+		const papers = fakePapers();
+		const tool = apTools(ctxOf(fake.courses, papers.papers)).ap_save_document!;
+		const result = await tool.execute("call_save", {
+			kind: "scoring",
+			label: "2023 Scoring Guidelines",
+			year: 2023,
+			url: "https://apcentral.collegeboard.org/scoring-2023.pdf",
+		} as never);
+
+		assert.equal(result.isError, undefined);
+		assert.deepEqual(papers.calls.download, [
+			{
+				courseId: "ap_course_1",
+				url: "https://apcentral.collegeboard.org/scoring-2023.pdf",
+				file: "scoring-2023.pdf",
+			},
+		]);
+		const stored = fake.calls.putDocument[0]!;
+		assert.equal(stored.doc.id, "scoring-2023");
+		assert.equal(stored.doc.kind, "scoring");
+		assert.equal(stored.doc.year, 2023);
+		assert.equal(stored.doc.file, "scoring-2023.pdf");
+		assert.equal(
+			(result.content[0] as { text: string }).text,
+			"Saved 2023 Scoring Guidelines as scoring-2023.pdf (2 pages).",
+		);
+	});
+
+	it("REFUSES a released paper or scoring guideline without a year, touching no port", async () => {
+		const fake = fakeCourses(courseOf());
+		const papers = fakePapers();
+		const tool = apTools(ctxOf(fake.courses, papers.papers)).ap_save_document!;
+		for (const kind of ["frq", "scoring"] as const) {
+			const result = await tool.execute("call_save", {
+				kind,
+				label: "Released",
+				url: "https://apcentral.collegeboard.org/paper.pdf",
+			} as never);
+			assert.equal(result.isError, true);
+			assert.equal(
+				(result.details as { problems: string[] }).problems[0],
+				"year is required for a released paper or scoring guideline",
+			);
+		}
 		assert.equal(papers.calls.download.length, 0);
+		assert.equal(papers.calls.importFile.length, 0);
+		assert.equal(fake.calls.putDocument.length, 0);
+	});
+
+	it("REFUSES a year outside 1990–2100 and a set outside 1–9", async () => {
+		const fake = fakeCourses(courseOf());
+		const papers = fakePapers();
+		const tool = apTools(ctxOf(fake.courses, papers.papers)).ap_save_document!;
+		const cases: Array<{ input: Record<string, unknown>; problem: string }> = [
+			{
+				input: { kind: "frq", label: "FRQ", year: 1989, url: "https://apcentral.collegeboard.org/frq.pdf" },
+				problem: "year is required for a released paper or scoring guideline",
+			},
+			{
+				input: { kind: "frq", label: "FRQ", year: 2101, url: "https://apcentral.collegeboard.org/frq.pdf" },
+				problem: "year is required for a released paper or scoring guideline",
+			},
+			{
+				input: { kind: "frq", label: "FRQ", year: 2023, set: 0, url: "https://apcentral.collegeboard.org/frq.pdf" },
+				problem: "set must be a whole number from 1 to 9",
+			},
+			{
+				input: { kind: "scoring", label: "Scoring", year: 2023, set: 10, url: "https://apcentral.collegeboard.org/scoring.pdf" },
+				problem: "set must be a whole number from 1 to 9",
+			},
+		];
+		for (const { input, problem } of cases) {
+			const result = await tool.execute("call_save", input as never);
+			assert.equal(result.isError, true);
+			assert.equal((result.details as { problems: string[] }).problems[0], problem);
+		}
+		assert.equal(papers.calls.download.length, 0);
+		assert.equal(fake.calls.putDocument.length, 0);
+	});
+
+	it("saving the same year and set again replaces the document, not duplicates", async () => {
+		const fake = fakeCourses(courseOf());
+		const papers = fakePapers();
+		const tool = apTools(ctxOf(fake.courses, papers.papers)).ap_save_document!;
+		for (const label of ["2023 FRQ", "2023 FRQ (corrected)"]) {
+			const result = await tool.execute("call_save", {
+				kind: "frq",
+				label,
+				year: 2023,
+				url: "https://apcentral.collegeboard.org/frq-2023.pdf",
+			} as never);
+			assert.equal(result.isError, undefined);
+		}
+
+		assert.equal(fake.calls.putDocument.length, 2, "the second save is a write, not a refusal");
+		const documents = fake.current().documents;
+		assert.equal(documents.length, 1, "the same id replaces the document");
+		assert.equal(documents[0]!.id, "frq-2023");
+		assert.equal(documents[0]!.label, "2023 FRQ (corrected)");
+	});
+
+	it("REFUSES an unknown document kind", async () => {
+		const fake = fakeCourses(courseOf());
+		const papers = fakePapers();
+		const tool = apTools(ctxOf(fake.courses, papers.papers)).ap_save_document!;
+		const result = await tool.execute("call_save", {
+			kind: "syllabus",
+			label: "Syllabus",
+			url: "https://apcentral.collegeboard.org/syllabus.pdf",
+		} as never);
+		assert.equal(result.isError, true);
+		assert.equal(
+			(result.details as { problems: string[] }).problems[0],
+			'kind "syllabus" is not a document kind — use "ced", "frq" or "scoring"',
+		);
+		assert.equal(papers.calls.download.length, 0);
+		assert.equal(fake.calls.putDocument.length, 0);
 	});
 
 	it("REFUSES inside a practice sitting without touching a port or the record", async () => {
@@ -411,6 +571,28 @@ describe("ap_save_document", () => {
 			assert.equal(
 				(result.details as { problems: string[] }).problems[0],
 				"The course description is saved only in the course's setup session, not during a sitting.",
+			);
+		}
+		assert.equal(papers.calls.download.length, 0);
+		assert.equal(papers.calls.importFile.length, 0);
+		assert.equal(fake.calls.putDocument.length, 0);
+	});
+
+	it("REFUSES a released paper inside a sitting with its own message", async () => {
+		const fake = fakeCourses(courseOf());
+		const papers = fakePapers();
+		const tool = apTools(ctxOf(fake.courses, papers.papers, WEAK)).ap_save_document!;
+		for (const kind of ["frq", "scoring"] as const) {
+			const result = await tool.execute("call_save", {
+				kind,
+				label: "Released",
+				year: 2023,
+				url: "https://apcentral.collegeboard.org/paper.pdf",
+			} as never);
+			assert.equal(result.isError, true);
+			assert.equal(
+				(result.details as { problems: string[] }).problems[0],
+				"Released papers are saved only in a setup or papers session, not during a sitting.",
 			);
 		}
 		assert.equal(papers.calls.download.length, 0);
