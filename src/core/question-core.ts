@@ -430,8 +430,8 @@ export const apFrqInputObject = Type.Object({
 	details: Type.Optional(
 		Type.String({
 			description:
-				"Optional extra context shown under the question. This is the VISIBLE channel: after a miss, it " +
-				"carries the diagnosis (the short explanation) with the fresh question.",
+				"Optional extra context shown under the question. This is the VISIBLE channel: use it for any " +
+				"short text the learner should see with the question.",
 		}),
 	),
 });

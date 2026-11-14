@@ -26,10 +26,12 @@ import type { ApCourseRecord, ApDocument, ApSitting } from "../src/core/ap.ts";
 import type { ApQuestionIndex, ApRealAttempt, ApRealQuestion } from "../src/core/ap-frq.ts";
 import type { LhMessage } from "../src/core/native-messages.ts";
 import {
+	AP_SCORING_GUIDELINE_REFUSAL,
 	apTools,
 	answeredFrqCountFrom,
 	answeredFrqFrom,
 	createApViewPhotoTool,
+	gateScoringGuideline,
 	type ApAttemptsPort,
 	type ApCourseStorePort,
 	type ApIndexPort,
@@ -56,7 +58,7 @@ function writePaper(file: string, text = PAGE_TEXT): void {
 	fs.writeFileSync(path.join(PAPERS_DIR, file), tinyPdf([{ runs: [{ text, x: 36, y: 720 }] }]));
 }
 writePaper("frq-2023.pdf");
-writePaper("scoring-2023.pdf");
+writePaper("scoring-2023.pdf", "Award one point for the substitution.");
 writePaper("ced.pdf", "The course and exam description.");
 
 function frqDoc(year = 2023): ApDocument {
@@ -495,7 +497,7 @@ describe("ap_frq", () => {
 		assert.equal(h.attempts.records.length, 0);
 	});
 
-	it("requires details after a miss earlier in this chat", async () => {
+	it("poses without details after a miss earlier in this chat", async () => {
 		const course = courseOf({
 			sections: courseOf().sections.map((section) => ({
 				...section,
@@ -507,38 +509,9 @@ describe("ap_frq", () => {
 			})),
 		});
 		const h = harness({ course, sitting: FRQ });
-		const refused = await h.tools.ap_frq!.execute("call_q", { questionId: "2023-1" } as never);
-		assert.equal(refused.isError, true);
-		assert.match(problemsOf(refused)[0]!, /after a miss, put the short explanation/i);
-
-		const posed = await h.tools.ap_frq!.execute("call_q", {
-			questionId: "2023-1",
-			details: "The substitution is u = x², not x.",
-		} as never);
+		const posed = await h.tools.ap_frq!.execute("call_q", { questionId: "2023-1" } as never);
 		assert.equal(posed.isError, undefined);
-	});
-
-	it("requires details when one attempt's topics disagree (any non-correct counts)", async () => {
-		const at = "2026-11-14T01:00:00.000Z";
-		const course = courseOf({
-			sections: courseOf().sections.map((section) => ({
-				...section,
-				points: section.points.map((point) => ({
-					...point,
-					history: [
-						{
-							at,
-							chatId: "chat_now",
-							result: point.id === "t_limits" ? ("correct" as const) : ("wrong" as const),
-						},
-					],
-				})),
-			})),
-		});
-		const h = harness({ course, sitting: FRQ });
-		const refused = await h.tools.ap_frq!.execute("call_q", { questionId: "2023-1" } as never);
-		assert.equal(refused.isError, true);
-		assert.match(problemsOf(refused)[0]!, /after a miss, put the short explanation/i);
+		assert.equal(posed.terminate, true);
 	});
 
 	it("allows a used question again when no unused eligible question remains", async () => {
@@ -591,8 +564,78 @@ describe("ap_rubric", () => {
 		assert.match(text, /^a2: Evaluates the integral\.$/m);
 		assert.match(text, /^\(b\) topic: 2\.1 Definition of the Derivative$/m);
 		assert.match(text, /^b1: Justifies the step\.$/m);
-		assert.match(text, /^Scoring guideline: scoring-2023\.pdf, pages 1$/m);
+		assert.match(text, /^Scoring guideline text \(pages 1\):$/m);
+		assert.match(text, /Award one point for the substitution\./);
+		assert.doesNotMatch(text, /^Scoring guideline: scoring-2023\.pdf/m);
 		assert.equal(result.details, null, "nothing reaches the UI");
+	});
+
+	it("caps the guideline text at 15 pages and says so", async () => {
+		fs.writeFileSync(
+			path.join(PAPERS_DIR, "scoring-2024.pdf"),
+			tinyPdf(Array.from({ length: 16 }, (_, index) => ({ runs: [{ text: `Scoring page ${index + 1}`, x: 36, y: 720 }] }))),
+		);
+		const scoring: ApDocument = {
+			id: "scoring-2024",
+			kind: "scoring",
+			label: "2024 Scoring",
+			year: 2024,
+			url: "",
+			file: "scoring-2024.pdf",
+			pages: 16,
+		};
+		const course = courseOf({ documents: [frqDoc(), scoring] });
+		const question = questionOf({
+			id: "2024-1",
+			scoringId: "scoring-2024",
+			scoringPages: Array.from({ length: 16 }, (_, index) => index + 1),
+		});
+		const h = harness({ course, sitting: FRQ, answered: () => "answered", index: indexOf(question) });
+		const result = await h.tools.ap_rubric!.execute("call_r", { questionId: "2024-1" } as never);
+		assert.equal(result.isError, undefined);
+		const text = (result.content[0] as { text: string }).text;
+		assert.match(text, /^Scoring guideline text \(pages 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15; first 15 pages\):$/m);
+		assert.match(text, /Scoring page 15/);
+		assert.doesNotMatch(text, /Scoring page 16/);
+	});
+
+	it("says the scoring guideline is missing in one line and continues with the rubric", async () => {
+		const h = harness({ sitting: FRQ, answered: () => "answered", absent: ["scoring-2023.pdf"] });
+		const result = await h.tools.ap_rubric!.execute("call_r", { questionId: "2023-1" } as never);
+		assert.equal(result.isError, undefined);
+		const text = (result.content[0] as { text: string }).text;
+		assert.match(text, /2023 Scoring is not on this computer — the scoring guideline cannot be read here\./);
+		assert.match(text, /^a1: States the substitution\.$/m);
+	});
+
+	it("falls back for both unreadable files and still returns the rubric", async () => {
+		const paper: ApDocument = {
+			id: "frq-2025",
+			kind: "frq",
+			label: "2025 FRQ",
+			year: 2025,
+			url: "",
+			file: "frq-2025.pdf",
+			pages: 1,
+		};
+		const scoring: ApDocument = {
+			id: "scoring-2025",
+			kind: "scoring",
+			label: "2025 Scoring",
+			year: 2025,
+			url: "",
+			file: "scoring-2025.pdf",
+			pages: 1,
+		};
+		const course = courseOf({ documents: [paper, scoring] });
+		const question = questionOf({ id: "2025-1", paperId: "frq-2025", scoringId: "scoring-2025" });
+		const h = harness({ course, sitting: FRQ, answered: () => "answered", index: indexOf(question) });
+		const result = await h.tools.ap_rubric!.execute("call_r", { questionId: "2025-1" } as never);
+		assert.equal(result.isError, undefined);
+		const text = (result.content[0] as { text: string }).text;
+		assert.match(text, /2025 FRQ could not be read on this computer — the question's text is unavailable\./);
+		assert.match(text, /2025 Scoring could not be read on this computer — the scoring guideline text is unavailable\./);
+		assert.match(text, /^a1: States the substitution\.$/m);
 	});
 
 	it("says the paper is missing in one line and continues with the rubric", async () => {
@@ -605,7 +648,8 @@ describe("ap_rubric", () => {
 			/^2023 FRQ is not on this computer — the question's text cannot be read here\.$/m,
 		);
 		assert.match(text, /^\(a\) topic: 1\.1 Introducing Calculus$/m);
-		assert.match(text, /^Scoring guideline: scoring-2023\.pdf, pages 1$/m);
+		assert.match(text, /^Scoring guideline text \(pages 1\):$/m);
+		assert.match(text, /Award one point for the substitution\./);
 	});
 
 	it("says none for a part with no listed topic", async () => {
@@ -1065,7 +1109,7 @@ describe("ap_progress — released questions", () => {
 // ── the scoring-guideline gate on the AP pdf tools ──────────────────────────
 
 describe("the scoring-guideline gate on the AP pdf tools", () => {
-	const REFUSAL = "The scoring guideline can be read only after the learner has answered a question it scores.";
+	const REFUSAL = AP_SCORING_GUIDELINE_REFUSAL;
 
 	type PdfToolName = "pdf_info" | "pdf_extract" | "pdf_search";
 	const PDF_TOOLS: PdfToolName[] = ["pdf_info", "pdf_extract", "pdf_search"];
@@ -1078,36 +1122,60 @@ describe("the scoring-guideline gate on the AP pdf tools", () => {
 				: { path: file, query: "Evaluate" };
 	}
 
-	it("REFUSES all three tools on a scoring guideline during a sitting before an answer", async () => {
+	it("REFUSES every spelling of the scoring guideline before AND after an answer", async () => {
+		for (const answered of [() => "none" as const, () => "answered" as const]) {
+			for (const file of ["SCORING-2023.PDF", "scoring-2023.pdf.", "./scoring-2023.pdf"]) {
+				for (const name of PDF_TOOLS) {
+					const h = harness({ sitting: FRQ, answered });
+					const result = await h.tools[name]!.execute("call_pdf", inputFor(name, file) as never);
+					assert.equal(result.isError, true, `${name} ${file}`);
+					assert.deepEqual(problemsOf(result), [REFUSAL], `${name} ${file}`);
+				}
+			}
+		}
+	});
+
+	it("REFUSES an unknown file during a sitting", async () => {
 		for (const name of PDF_TOOLS) {
-			const h = harness({ sitting: FRQ });
-			const result = await h.tools[name]!.execute("call_pdf", inputFor(name, "scoring-2023.pdf") as never);
+			const h = harness({ sitting: FRQ, answered: () => "answered" });
+			const result = await h.tools[name]!.execute("call_pdf", inputFor(name, "mystery.pdf") as never);
 			assert.equal(result.isError, true, name);
 			assert.deepEqual(problemsOf(result), [REFUSAL], name);
 		}
 	});
 
-	it("allows all three after a question the guideline scores is answered", async () => {
-		for (const name of PDF_TOOLS) {
-			const h = harness({ sitting: FRQ, answered: () => "answered" });
-			const result = await h.tools[name]!.execute("call_pdf", inputFor(name, "scoring-2023.pdf") as never);
-			assert.equal(result.isError, undefined, name);
-			assert.doesNotMatch(JSON.stringify(result.content), /only after the learner/, name);
-		}
-	});
-
-	it("allows all three in a setup session", async () => {
-		for (const name of PDF_TOOLS) {
-			const h = harness();
-			const result = await h.tools[name]!.execute("call_pdf", inputFor(name, "scoring-2023.pdf") as never);
-			assert.equal(result.isError, undefined, name);
-			assert.doesNotMatch(JSON.stringify(result.content), /only after the learner/, name);
-		}
-	});
-
-	it("does not gate a released paper or the course description", async () => {
+	it("allows the course description under any spelling and passes the stored name", async () => {
 		const course = courseOf({ documents: [CED, frqDoc(), scoringDoc()] });
-		for (const file of ["frq-2023.pdf", "ced.pdf"]) {
+		for (const name of PDF_TOOLS) {
+			const h = harness({ course, sitting: FRQ });
+			const result = await h.tools[name]!.execute("call_pdf", inputFor(name, "CED.PDF") as never);
+			assert.equal(result.isError, undefined, name);
+		}
+		const h = harness({ course, sitting: FRQ });
+		const seen: string[] = [];
+		const probe = gateScoringGuideline(
+			{
+				name: "pdf_info",
+				label: "pdf_info",
+				description: "",
+				parameters: {},
+				execute: async (_toolCallId: string, input: unknown) => {
+					seen.push((input as { path: string }).path);
+					return { content: [{ type: "text" as const, text: "ok" }], details: null };
+				},
+			} as never,
+			h.ctx,
+			"pdf_info",
+		);
+		const allowed = await probe.execute!("call_p", { path: "CED.PDF" });
+		assert.equal(allowed.isError, undefined);
+		await probe.execute!("call_p", { path: "./ced.pdf" });
+		assert.deepEqual(seen, ["ced.pdf", "ced.pdf"]);
+	});
+
+	it("allows a released paper under any spelling", async () => {
+		const course = courseOf({ documents: [CED, frqDoc(), scoringDoc()] });
+		for (const file of ["frq-2023.pdf", "FRQ-2023.PDF"]) {
 			for (const name of PDF_TOOLS) {
 				const h = harness({ course, sitting: FRQ });
 				const result = await h.tools[name]!.execute("call_pdf", inputFor(name, file) as never);
@@ -1116,29 +1184,37 @@ describe("the scoring-guideline gate on the AP pdf tools", () => {
 		}
 	});
 
+	it("allows all three in a setup session", async () => {
+		for (const name of PDF_TOOLS) {
+			const h = harness();
+			const result = await h.tools[name]!.execute("call_pdf", inputFor(name, "scoring-2023.pdf") as never);
+			assert.equal(result.isError, undefined, name);
+			assert.doesNotMatch(JSON.stringify(result.content), /only the course description/, name);
+		}
+	});
+
 	it("composes with the 15-page cap on pdf_extract", async () => {
 		fs.writeFileSync(
-			path.join(PAPERS_DIR, "scoring-2024.pdf"),
+			path.join(PAPERS_DIR, "frq-2024.pdf"),
 			tinyPdf(Array.from({ length: 16 }, (_, index) => ({ runs: [{ text: `Page ${index + 1}`, x: 36, y: 720 }] }))),
 		);
-		const scoring: ApDocument = {
-			id: "scoring-2024",
-			kind: "scoring",
-			label: "2024 Scoring",
+		const paper: ApDocument = {
+			id: "frq-2024",
+			kind: "frq",
+			label: "2024 FRQ",
 			year: 2024,
 			url: "",
-			file: "scoring-2024.pdf",
+			file: "frq-2024.pdf",
 			pages: 16,
 		};
-		const course = courseOf({ documents: [frqDoc(), scoringDoc(), scoring] });
+		const course = courseOf({ documents: [frqDoc(), scoringDoc(), paper] });
 		const h = harness({
 			course,
 			sitting: FRQ,
-			answered: () => "answered",
-			index: indexOf(questionOf({ id: "2024-1", scoringId: "scoring-2024" })),
+			index: indexOf(questionOf({ id: "2024-1", paperId: "frq-2024" })),
 		});
 		const result = await h.tools.pdf_extract!.execute("call_pdf", {
-			path: "scoring-2024.pdf",
+			path: "frq-2024.pdf",
 			pages: "all",
 		} as never);
 		assert.equal(result.isError, true);

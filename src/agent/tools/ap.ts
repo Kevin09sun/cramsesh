@@ -218,32 +218,6 @@ function topicGateProblems(course: ApCourseRecord, sitting: ApSitting, topicId: 
 	return [];
 }
 
-/** Has the learner missed a question in this chat? The store-derived rule
- *  ap_mcq uses for one topic, widened to the whole course record: the latest
- *  graded history entry in this chat decides, and anything other than
- *  "correct" (wrong or "I don't know") is a miss. A free-response attempt
- *  writes one history entry per tagged topic, so any topic of that attempt
- *  other than correct counts. */
-function missedThisChat(course: ApCourseRecord, chatId: string): boolean {
-	let latestAt: string | null = null;
-	let latestResults: AnswerResult[] = [];
-	for (const unit of course.sections) {
-		for (const topic of unit.points) {
-			const last = topic.history.at(-1);
-			if (!last || last.chatId !== chatId) continue;
-			if (latestAt === null || last.at > latestAt) {
-				latestAt = last.at;
-				latestResults = [last.result];
-			} else if (last.at === latestAt) {
-				// One attempt writes the same `at` for every topic it covered;
-				// ANY of its topics other than correct is a miss.
-				latestResults.push(last.result);
-			}
-		}
-	}
-	return latestResults.some((result) => result !== "correct");
-}
-
 // ─── the answered/recorded derivations ──────────────────────────────────────
 
 interface FrqCall {
@@ -716,8 +690,8 @@ function apFrqTool(ctx: ApToolContext): AgentTool<typeof apFrqInputObject> {
 			"Pose one REAL released free-response question from the course's synced question index, exactly as " +
 			"ap_progress lists it. The question's original paper pages and every part come from the index; " +
 			"questionId must be an id from ap_progress. ONE question per turn: pose it, then end your turn; the " +
-			"learner answers part by part and may attach photos of written work. AFTER A MISS this chat the fresh " +
-			"question MUST carry the short diagnosis in `details` — the call is rejected without it. Refused in the " +
+			"learner answers part by part and may attach photos of written work. `details`, when given, is shown to " +
+			"the learner with the question. Refused in the " +
 			"setup session, in a multiple-choice sitting, for an unknown id, for a question with no part in this " +
 			"sitting's scope, when its paper is not on this computer, and for an already answered question while an " +
 			"unused eligible one remains. The rubric is NEVER included here: fetch it with ap_rubric only after the " +
@@ -781,14 +755,6 @@ function apFrqTool(ctx: ApToolContext): AgentTool<typeof apFrqInputObject> {
 					`${question.id} was already answered; ask ${nextUnused.question.id} first`,
 				]);
 			}
-			// THE POST-MISS DIAGNOSIS, widened to the whole course record (see
-			// missedThisChat): after a miss in THIS chat the fresh question must
-			// carry the diagnosis on its visible `details` field.
-			if (missedThisChat(confirmedCourse, ctx.chatId) && (input.details ?? "").trim().length === 0) {
-				return invalidInputResult("ap_frq", [
-					"after a miss, put the short explanation (including the right answer) in `details` — the learner sees it with the fresh question",
-				]);
-			}
 			return questionResult();
 		},
 	};
@@ -810,9 +776,9 @@ function apRubricTool(ctx: ApToolContext): AgentTool<typeof apRubricInputObject>
 		description:
 			"Read the official rubric of a released free-response question AFTER the learner has answered it: the " +
 			"question text (from the paper on this computer), each part with its topic and every scoring point, and " +
-			"the scoring guideline file and pages. The learner NEVER sees this — it is grading material only, and " +
-			"the answer card stays hidden until ap_record_frq records the grading. Refused before the learner has " +
-			"answered this question in this chat (`answeredFrq`).",
+			"the scoring guideline's own text for this question's scoring pages (at most 15 pages). The learner " +
+			"NEVER sees this — it is grading material only, and the answer card stays hidden until ap_record_frq " +
+			"records the grading. Refused before the learner has answered this question in this chat (`answeredFrq`).",
 		parameters: apRubricInputObject,
 		prepareArguments: (args: unknown) => healEncodedArguments(args, apRubricInputObject) as never,
 		executionMode: "sequential",
@@ -836,22 +802,26 @@ function apRubricTool(ctx: ApToolContext): AgentTool<typeof apRubricInputObject>
 				]);
 			}
 
+			// Page extractions run under the same serverExecute guard as the
+			// registry's pdf_extract (30s timeout + abort cascade). A timeout or
+			// unreadable file falls through to the one honest line; the rubric
+			// itself is still returned.
+			const readPages = async (fileName: string, pages: number[]): Promise<string> => {
+				const extract = serverExecute("ap_rubric", apRubricInputObject, async () =>
+					pdfExtract(path.join(ctx.papers.dir(ctx.courseId), fileName), pages.join(",")),
+				);
+				const extracted = await extract("ap_rubric_page", { questionId: input.questionId }, signal);
+				return (extracted.content[0] as { text: string }).text.trim();
+			};
+
 			const lines: string[] = [apQuestionTitle(question)];
 			const paperFile = documentFile(course, question.paperId);
 			const paperLabel = documentLabel(course, question.paperId);
 			if (!ctx.papers.present(ctx.courseId, paperFile)) {
 				lines.push("", `${paperLabel} is not on this computer — the question's text cannot be read here.`);
 			} else {
-				// The page extraction runs under the same serverExecute guard as
-				// the registry's pdf_extract (30s timeout + abort cascade). A
-				// timeout or unreadable paper falls through to the one honest
-				// line; the rubric itself is still returned.
-				const extract = serverExecute("ap_rubric", apRubricInputObject, async () =>
-					pdfExtract(path.join(ctx.papers.dir(ctx.courseId), paperFile), question.pages.join(",")),
-				);
 				try {
-					const extracted = await extract("ap_rubric_page", { questionId: input.questionId }, signal);
-					lines.push("", (extracted.content[0] as { text: string }).text.trim());
+					lines.push("", await readPages(paperFile, question.pages));
 				} catch {
 					lines.push(
 						"",
@@ -864,10 +834,29 @@ function apRubricTool(ctx: ApToolContext): AgentTool<typeof apRubricInputObject>
 				lines.push("", `(${part.label}) topic: ${topic?.text ?? "none"}`);
 				for (const point of part.points) lines.push(`${point.id}: ${point.text}`);
 			}
+
+			// THE GUIDELINE TEXT, not a pointer: during a sitting the pdf tools
+			// cannot open the scoring file (gateScoringGuideline), so ap_rubric
+			// itself must carry what the tutor grades against.
+			const scoringFile = documentFile(course, question.scoringId);
+			const scoringLabel = documentLabel(course, question.scoringId);
+			const scoringPages = question.scoringPages.slice(0, AP_PDF_EXTRACT_MAX_PAGES);
+			const capped = question.scoringPages.length > AP_PDF_EXTRACT_MAX_PAGES;
 			lines.push(
 				"",
-				`Scoring guideline: ${documentFile(course, question.scoringId)}, pages ${question.scoringPages.join(", ")}`,
+				`Scoring guideline text (pages ${scoringPages.join(", ")}${capped ? "; first 15 pages" : ""}):`,
 			);
+			if (!ctx.papers.present(ctx.courseId, scoringFile)) {
+				lines.push(`${scoringLabel} is not on this computer — the scoring guideline cannot be read here.`);
+			} else {
+				try {
+					lines.push(await readPages(scoringFile, scoringPages));
+				} catch {
+					lines.push(
+						`${scoringLabel} could not be read on this computer — the scoring guideline text is unavailable.`,
+					);
+				}
+			}
 			return proseResult(lines.join("\n"));
 		},
 	};
@@ -1266,15 +1255,27 @@ export function capPdfExtract(
 // ─── the scoring-guideline gate on the three pdf readers ────────────────────
 
 /**
- * During a sitting, refuse to open a course document of kind "scoring" until
- * the learner has answered a question that document scores. The target is
- * identified from the course record's documents by file name (never from the
- * filename pattern alone); a file that is not one of the course's documents,
- * and every setup session, behaves exactly as before. The wrapped tool's
- * name, schema and description are unchanged.
+ * During a sitting, the AP pdf readers may open ONLY the course description
+ * and released papers — never the scoring guideline, which reaches the tutor
+ * through ap_rubric after the answer. The target is resolved exactly as the
+ * wrapped tool resolves it (inside the papers folder), must sit directly in
+ * that folder (no subfolders), and is matched against the course record's
+ * `ced`/`frq` documents by basename, case-insensitively and after trimming
+ * trailing dots and spaces (Windows strips those when opening a file, so a
+ * trailing-dot spelling names the same file; an 8.3 short name names it too
+ * but is not an allowlisted name). Anything else is refused. A setup or
+ * papers session (no sitting) behaves exactly as before. When the call is
+ * allowed, the canonical stored file name is passed to the wrapped tool.
+ * The tool's name, schema and description are unchanged.
  */
 export const AP_SCORING_GUIDELINE_REFUSAL =
-	"The scoring guideline can be read only after the learner has answered a question it scores.";
+	"During a sitting only the course description and released papers can be read. The scoring guideline reaches you through ap_rubric after the learner answers.";
+
+/** Windows file-name spelling for comparison: case-insensitive, no trailing
+ *  dots or spaces. */
+function normalizedFileName(name: string): string {
+	return name.replace(/[. ]+$/, "").toLowerCase();
+}
 
 export function gateScoringGuideline(
 	tool: AgentTool<any>,
@@ -1288,21 +1289,19 @@ export function gateScoringGuideline(
 			const filePath = typeof params?.path === "string" ? params.path : null;
 			if (ctx.sitting && filePath !== null) {
 				const dir = ctx.papers.dir(ctx.courseId);
-				const target = path.resolve(dir, filePath);
+				const resolved = path.resolve(dir, filePath);
+				const atFolderRoot = path.resolve(path.dirname(resolved)) === path.resolve(dir);
+				const name = normalizedFileName(path.basename(resolved));
 				const course = ctx.courses.get(ctx.courseId);
-				const document = course?.documents.find(
-					(candidate) =>
-						candidate.kind === "scoring" &&
-						(candidate.file === filePath || path.resolve(dir, candidate.file) === target),
-				);
-				if (document) {
-					const index = ctx.index.get(ctx.courseId);
-					const answered = (index?.questions ?? []).some(
-						(question) =>
-							question.scoringId === document.id && ctx.answeredFrq(question.id) === "answered",
-					);
-					if (!answered) return invalidInputResult(toolName, [AP_SCORING_GUIDELINE_REFUSAL]);
-				}
+				const document = atFolderRoot
+					? course?.documents.find(
+							(candidate) =>
+								(candidate.kind === "ced" || candidate.kind === "frq") &&
+								normalizedFileName(candidate.file) === name,
+						)
+					: undefined;
+				if (!document) return invalidInputResult(toolName, [AP_SCORING_GUIDELINE_REFUSAL]);
+				return tool.execute(toolCallId, { ...(input as object), path: document.file }, signal, onUpdate);
 			}
 			return tool.execute(toolCallId, input, signal, onUpdate);
 		},
