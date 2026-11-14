@@ -45,7 +45,11 @@ const submitSchema = Type.Object({
 			}),
 			parts: Type.Array(
 				Type.Object({
-					label: Type.String({ description: "The part's letter, e.g. \"a\"." }),
+					label: Type.String({
+						description:
+							"The part's label: one lower-case letter (\"a\"); a sub-part is joined with a hyphen " +
+							"(\"a-i\"). No digits, capitals or parentheses.",
+					}),
 					topicId: Type.String({
 						description: "One confirmed topic id, or the empty string when no listed topic fits.",
 					}),
@@ -67,6 +71,9 @@ const SYSTEM_PROMPT = [
 	"- Index every free-response question on the paper.",
 	"- `pages` are the paper's pages that show that question; `scoringPages` are the guideline's pages that score it.",
 	"- Give one entry per lettered part. A question with no lettered parts has a single part labelled \"a\".",
+	"- Write each part's label as one lower-case letter (\"a\", \"b\"); write a sub-part as the letter, a hyphen " +
+		"and its lower-case numeral (\"a-i\", \"b-ii\"). Index a sub-part as its own part only when the scoring " +
+		"guideline awards its points separately; otherwise fold it into its lettered part.",
 	"- Each rubric point is one separately awarded point, quoted or closely paraphrased from the guideline.",
 	"- Tag each part with the one listed topic it chiefly tests, or leave `topicId` empty.",
 	"- Never invent a question, a part or a rubric point.",
@@ -120,8 +127,11 @@ function normalizePartLabel(label: string): string {
 }
 
 /** Every problem with one submitted index; empty = usable. One string so the
- *  model receives the whole correction in a single retryable tool error. */
-function submissionProblem(
+ *  model receives the whole correction in a single retryable tool error.
+ *  Exported for the direct guard test: pi's wire layer coerces a fractional
+ *  `number` (1.5 → 1) before this seam, so the integer law cannot be observed
+ *  through a model submission. */
+export function submissionProblem(
 	value: SubmitValue,
 	paperPages: number,
 	scoringPages: number,
@@ -273,7 +283,7 @@ export async function indexApPaper(
 			// The index store refuses a malformed index, and one bad pair must
 			// never take the whole synced file down: the server's own guard is
 			// the last word before a submission is accepted.
-			const malformed = build(value).find((question) => !isApRealQuestion(question as unknown));
+			const malformed = build(value).find((question): boolean => !isApRealQuestion(question));
 			return malformed ? `the index for question ${malformed.number} is not well-formed` : null;
 		},
 	});

@@ -637,8 +637,11 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 			if (loop.abortSignal.aborted) return;
 			try {
 				port.putPaper(courseId, paper.id, questions);
-			} catch {
+			} catch (err) {
 				if (loop.abortSignal.aborted) return;
+				// The real error is ours to read; the brief carries only the
+				// plain reason the learner and the tutor can act on.
+				console.error(`[job ${jobId}] saving ${paper.id}:`, err);
 				failed.push({ paperId: paper.id, reason: "could not be saved" });
 				continue;
 			}

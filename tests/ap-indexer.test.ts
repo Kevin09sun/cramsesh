@@ -31,6 +31,7 @@ const TMP_DATA = fs.mkdtempSync(path.join(os.tmpdir(), "lh-ap-indexer-"));
 process.env.LH_DATA_DIR = TMP_DATA;
 
 const { createJobRunner, apIndexModelOverride } = await import("../src/agent/subagents/runner.ts");
+const { submissionProblem } = await import("../src/agent/subagents/ap-indexer.ts");
 
 const PAPERS_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "lh-ap-indexer-papers-"));
 
@@ -260,6 +261,7 @@ const GOOD_INDEX = {
 async function run(
 	apIndex: JobRunnerDeps["apIndex"],
 	engine: PiEngine,
+	courseId = "ap_course_1",
 ): Promise<{ result: ApIndexResult; job: JobRecord; steers: SteerMessage[]; activities: string[] }> {
 	const jobs = fakeJobs();
 	const job = jobs.create();
@@ -274,7 +276,7 @@ async function run(
 	});
 	apIndexModelOverride.current = engine;
 	try {
-		await runner.runJob(job.id, { courseId: "ap_course_1" });
+		await runner.runJob(job.id, { courseId });
 	} finally {
 		apIndexModelOverride.current = undefined;
 	}
@@ -418,11 +420,25 @@ describe("ap_index job", () => {
 		const course = courseOf([frqDoc(2023), scoringDoc(2023), frqDoc(2024), scoringDoc(2024)]);
 		const fake = fakeIndex(course, undefined, new Set(["frq-2023"]));
 
-		const { result } = await run(
-			fake.port,
-			fauxEngine([submit(GOOD_INDEX, "save-refused"), submit(GOOD_INDEX, "save-good")]),
-		);
+		const logged: unknown[][] = [];
+		const original = console.error;
+		console.error = (...args: unknown[]) => {
+			logged.push(args);
+		};
+		let outcome: Awaited<ReturnType<typeof run>>;
+		try {
+			outcome = await run(
+				fake.port,
+				fauxEngine([submit(GOOD_INDEX, "save-refused"), submit(GOOD_INDEX, "save-good")]),
+			);
+		} finally {
+			console.error = original;
+		}
+		const { result } = outcome;
 
+		assert.equal(logged.length, 1, "the real save error is logged");
+		assert.match(String(logged[0]![0]), /saving frq-2023:/);
+		assert.match(String(logged[0]![1]), /invalid question index/);
 		assert.deepEqual(fake.puts.map((put) => put.paperId), ["frq-2024"]);
 		assert.deepEqual(result.indexed, [{ paperId: "frq-2024", questions: 1 }]);
 		assert.deepEqual(result.failed, [{ paperId: "frq-2023", reason: "could not be saved" }]);
@@ -553,5 +569,136 @@ describe("ap_index job", () => {
 		assert.deepEqual(result.failed, [
 			{ paperId: "frq-2026", reason: "no readable text (scanned document)" },
 		]);
+	});
+
+	it("rejects a fractional question number at the validation seam", () => {
+		// Direct guard test: pi's wire layer runs Value.Convert before the submit
+		// seam and turns 1.5 into 1, so a model submission can never deliver a
+		// fractional number here — the integer law is exercised where it lives.
+		const problem = submissionProblem(
+			{
+				questions: [
+					{
+						number: 1.5,
+						pages: [1],
+						scoringPages: [1],
+						parts: [{ label: "a", topicId: "t_limits", points: ["A point"] }],
+					},
+				],
+			},
+			2,
+			2,
+			new Set(["t_limits"]),
+		);
+
+		assert.equal(problem, "question number 1.5 is not a positive integer");
+	});
+
+	it("normalises a padded part label and trims a padded rubric point", async () => {
+		writePaper("frq-2040.pdf");
+		writePaper("scoring-2040.pdf");
+		const course = courseOf([frqDoc(2040), scoringDoc(2040)]);
+		const fake = fakeIndex(course);
+
+		const padded = {
+			questions: [
+				{
+					number: 1,
+					pages: [1],
+					scoringPages: [1],
+					parts: [{ label: " A ", topicId: "t_limits", points: ["  point  "] }],
+				},
+			],
+		};
+
+		const { result } = await run(fake.port, fauxEngine([submit(padded, "padded")]));
+
+		assert.deepEqual(fake.puts.map((put) => put.paperId), ["frq-2040"]);
+		const part = fake.puts[0]!.questions[0]!.parts[0]!;
+		assert.equal(part.label, "a");
+		assert.deepEqual(part.points, [{ id: "a1", text: "point" }]);
+		assert.deepEqual(result.indexed, [{ paperId: "frq-2040", questions: 1 }]);
+	});
+
+	it("accepts hyphenated sub-part labels and gives each its own point ids", async () => {
+		writePaper("frq-2042.pdf");
+		writePaper("scoring-2042.pdf");
+		const course = courseOf([frqDoc(2042), scoringDoc(2042)]);
+		const fake = fakeIndex(course);
+
+		const subParts = {
+			questions: [
+				{
+					number: 1,
+					pages: [1],
+					scoringPages: [1],
+					parts: [
+						{ label: "a-i", topicId: "t_limits", points: ["First sub-part point"] },
+						{ label: "a-ii", topicId: "", points: ["Second sub-part point"] },
+					],
+				},
+			],
+		};
+
+		const { result } = await run(fake.port, fauxEngine([submit(subParts, "sub-parts")]));
+
+		assert.deepEqual(result.indexed, [{ paperId: "frq-2042", questions: 1 }]);
+		const parts = fake.puts[0]!.questions[0]!.parts;
+		assert.deepEqual(
+			parts.map((part) => part.points.map((point) => point.id)),
+			[["a-i1"], ["a-ii1"]],
+		);
+	});
+
+	it("reports an unexpected model failure as could not be read and logs the real error", async () => {
+		writePaper("frq-2041.pdf");
+		writePaper("scoring-2041.pdf");
+		const course = courseOf([frqDoc(2041), scoringDoc(2041)]);
+		const fake = fakeIndex(course);
+
+		const faux = createFauxCore({ tokenSize: { min: 64, max: 64 } });
+		const exploding: PiEngine = {
+			model: faux.getModel(),
+			streamFn: () => {
+				throw new Error("provider blew up");
+			},
+		};
+
+		const logged: unknown[][] = [];
+		const original = console.error;
+		console.error = (...args: unknown[]) => {
+			logged.push(args);
+		};
+		let outcome: Awaited<ReturnType<typeof run>>;
+		try {
+			outcome = await run(fake.port, exploding);
+		} finally {
+			console.error = original;
+		}
+
+		assert.deepEqual(outcome.result.failed, [{ paperId: "frq-2041", reason: "could not be read" }]);
+		assert.equal(outcome.result.brief, "Indexing failed: could not be read");
+		assert.equal(fake.puts.length, 0, "nothing is written from a failed read");
+		assert.equal(outcome.job.status, "error");
+		assert.equal(outcome.job.error, "could not be read");
+		assert.ok(logged.length >= 1, "the real error is logged");
+		assert.match(String(logged[0]![0]), /indexing frq-2041:/);
+	});
+
+	it("fails terminally when the indexing port is absent", async () => {
+		const { job } = await run(undefined, fauxEngine([]));
+
+		assert.equal(job.status, "error");
+		assert.equal(job.error, "paper indexing is not available.");
+		assert.match((job.result as ApIndexResult).brief, /^Indexing failed: paper indexing is not available\./);
+	});
+
+	it("fails terminally when the course was not found", async () => {
+		const fake = fakeIndex(courseOf([]));
+		const { job } = await run(fake.port, fauxEngine([]), "ap_missing");
+
+		assert.equal(job.status, "error");
+		assert.equal(job.error, 'course "ap_missing" was not found');
+		assert.match((job.result as ApIndexResult).brief, /^Indexing failed: course "ap_missing" was not found/);
 	});
 });
