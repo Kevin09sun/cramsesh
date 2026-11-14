@@ -24,7 +24,7 @@ import {
 } from "../../core/contracts.ts";
 import type { ApCourseRecord, ApDocument } from "../../core/ap.ts";
 import type { ApQuestionIndex, ApRealQuestion } from "../../core/ap-frq.ts";
-import { apPaperFileName } from "../../core/ap-frq.ts";
+import { apPaperPair } from "../../core/ap-frq.ts";
 import { indexApPaper } from "./ap-indexer.ts";
 import { registerJobAbort, unregisterJobAbort } from "./aborts.ts";
 import * as fs from "node:fs/promises";
@@ -573,23 +573,17 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 
 		const port = deps.apIndex;
 		if (!port) {
-			await finishJob(jobId, {
-				brief: "Indexing failed: paper indexing is not available.",
-				indexed: [],
-				failed: [],
-				untagged: 0,
-			});
+			const brief = "Indexing failed: paper indexing is not available.";
+			if (stillRunning(jobId)) jobStore.updateJob(jobId, { error: brief.replace(/^Indexing failed:\s*/i, "") });
+			await finishJob(jobId, { brief, indexed: [], failed: [], untagged: 0 });
 			return;
 		}
 
 		const course = courseId ? port.course(courseId) : null;
 		if (!course) {
-			await finishJob(jobId, {
-				brief: `Indexing failed: course "${courseId}" was not found`,
-				indexed: [],
-				failed: [],
-				untagged: 0,
-			});
+			const brief = `Indexing failed: course "${courseId}" was not found`;
+			if (stillRunning(jobId)) jobStore.updateJob(jobId, { error: brief.replace(/^Indexing failed:\s*/i, "") });
+			await finishJob(jobId, { brief, indexed: [], failed: [], untagged: 0 });
 			return;
 		}
 
@@ -618,8 +612,9 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 				continue;
 			}
 
+			let questions: ApRealQuestion[];
 			try {
-				const questions = await indexApPaper(
+				questions = await indexApPaper(
 					{ paper, scoring, paperPath, scoringPath, topics },
 					{
 						engine: model,
@@ -628,16 +623,27 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 						onUsage: (usage) => loop.onUsage(piUsageToStep(usage)),
 					},
 				);
-				// The pair succeeded only in full: a thrown/aborted run never
-				// reaches this write, so no half index is ever stored.
-				if (loop.abortSignal.aborted) return;
-				port.putPaper(courseId, paper.id, questions);
-				indexed.push({ paperId: paper.id, questions: questions.length });
-				jobStore.updateJob(jobId, { activity: `indexed ${paper.label}` });
 			} catch (err) {
 				if (loop.abortSignal.aborted) return;
-				failed.push({ paperId: paper.id, reason: err instanceof Error ? err.message : String(err) });
+				const reason = pairFailureReason(err);
+				// The real error is ours to read; the brief carries only the
+				// plain reason the learner and the tutor can act on.
+				if (reason === "could not be read") console.error(`[job ${jobId}] indexing ${paper.id}:`, err);
+				failed.push({ paperId: paper.id, reason });
+				continue;
 			}
+			// The pair succeeded only in full: a thrown/aborted run never
+			// reaches this write, so no half index is ever stored.
+			if (loop.abortSignal.aborted) return;
+			try {
+				port.putPaper(courseId, paper.id, questions);
+			} catch {
+				if (loop.abortSignal.aborted) return;
+				failed.push({ paperId: paper.id, reason: "could not be saved" });
+				continue;
+			}
+			indexed.push({ paperId: paper.id, questions: questions.length });
+			jobStore.updateJob(jobId, { activity: `indexed ${paper.label}` });
 		}
 
 		const untagged = (port.index(courseId)?.questions ?? []).reduce(
@@ -675,16 +681,23 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 /** The scoring guideline saved beside a released paper: same year and set,
  *  named by the shared file-name rule. Undefined = none was saved. */
 function pairedScoring(course: ApCourseRecord, paper: ApDocument): ApDocument | undefined {
-	if (paper.year === undefined) return undefined;
-	let set: number | undefined;
-	for (let candidate = 1; candidate <= 9; candidate++) {
-		if (apPaperFileName("frq", paper.year, candidate).slice(0, -".pdf".length) === paper.id) {
-			set = candidate;
-			break;
-		}
-	}
-	const scoringId = apPaperFileName("scoring", paper.year, set).slice(0, -".pdf".length);
-	return course.documents.find((document) => document.kind === "scoring" && document.id === scoringId);
+	const pair = apPaperPair(paper);
+	if (!pair) return undefined;
+	return course.documents.find((document) => document.kind === "scoring" && document.id === pair.scoringId);
+}
+
+/** The fixed reasons a pair may fail with, verbatim. Anything else is an
+ *  unexpected extraction/model error and reads as the plain "could not be
+ *  read" (the real error goes to the log, never to the learner). */
+const FIXED_PAIR_REASONS = new Set([
+	"too long to index",
+	"no readable text (scanned document)",
+	"the indexer never submitted a question index",
+]);
+
+function pairFailureReason(err: unknown): string {
+	const message = err instanceof Error ? err.message : String(err);
+	return FIXED_PAIR_REASONS.has(message) ? message : "could not be read";
 }
 
 // ─── module-level pure helpers ──────────────────────────────────────────────

@@ -105,6 +105,37 @@ describe("AP question index store (AP prep stage 2, 2026-11-14)", () => {
 		);
 	});
 
+	it("putPaper refuses a malformed question and leaves the file untouched", () => {
+		const courseId = "ap_put_invalid";
+		apIndexStore.putPaper(courseId, "frq-2022", [
+			question({ id: "2022-1", paperId: "frq-2022", scoringId: "scoring-2022", year: 2022, number: 1 }),
+		]);
+		const before = fs.readFileSync(indexFile(courseId), "utf-8");
+
+		assert.throws(
+			() => apIndexStore.putPaper(courseId, "frq-2023", [question({ pages: [] })]),
+			{ message: "invalid question index" },
+		);
+		assert.equal(fs.readFileSync(indexFile(courseId), "utf-8"), before, "a refused write leaves the bytes alone");
+		assert.deepEqual(
+			apIndexStore.get(courseId)!.questions.map((item) => item.id),
+			["2022-1"],
+			"the earlier paper's questions stay readable",
+		);
+	});
+
+	it("retagPart refuses an invalid result and leaves the file untouched", () => {
+		const courseId = "ap_retag_invalid";
+		apIndexStore.putPaper(courseId, "frq-2023", [question()]);
+		const before = fs.readFileSync(indexFile(courseId), "utf-8");
+
+		assert.throws(
+			() => apIndexStore.retagPart(courseId, "2023-2", "a", ""),
+			{ message: "invalid question index" },
+		);
+		assert.equal(fs.readFileSync(indexFile(courseId), "utf-8"), before, "a refused retag leaves the bytes alone");
+	});
+
 	it("get returns null for missing, malformed, wrong-shaped and invalid-id reads, never rewriting", () => {
 		assert.equal(apIndexStore.get("ap_never_existed"), null);
 

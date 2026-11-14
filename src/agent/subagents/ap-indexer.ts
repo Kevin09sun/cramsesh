@@ -19,7 +19,7 @@ import type { Usage } from "@earendil-works/pi-ai";
 import { Type, type Static } from "typebox";
 import type { PiEngine } from "../models.ts";
 import type { ApDocument } from "../../core/ap.ts";
-import { apPaperFileName, apQuestionId } from "../../core/ap-frq.ts";
+import { AP_PART_LABEL_PATTERN, apPaperPair, apQuestionId, isApRealQuestion } from "../../core/ap-frq.ts";
 import type { ApRealQuestion } from "../../core/ap-frq.ts";
 import { runSubmitAgent } from "./submit-agent.ts";
 import { pdfExtract, pdfPageCount } from "./pdf-ops.ts";
@@ -113,14 +113,10 @@ async function extractDocument(filePath: string): Promise<{
 	return { pages, text: bodies.join("\n"), formatted: formatted.join("\n") };
 }
 
-/** The set encoded in a paper id (`frq-2023-set2` → 2), else undefined.
- *  Rebuilt from the same file-name rule the save tool writes with. */
-function setOfPaper(paper: ApDocument): number | undefined {
-	if (paper.year === undefined) return undefined;
-	for (let set = 1; set <= 9; set++) {
-		if (apPaperFileName("frq", paper.year, set).slice(0, -".pdf".length) === paper.id) return set;
-	}
-	return undefined;
+/** The stored part label: trimmed and lower-cased (the grader's ids depend on
+ *  it). */
+function normalizePartLabel(label: string): string {
+	return label.trim().toLowerCase();
 }
 
 /** Every problem with one submitted index; empty = usable. One string so the
@@ -136,9 +132,14 @@ function submissionProblem(
 
 	const numbers = new Set<number>();
 	for (const question of value.questions) {
+		if (!Number.isInteger(question.number) || question.number < 1) {
+			problems.push(`question number ${question.number} is not a positive integer`);
+			continue;
+		}
 		if (numbers.has(question.number)) problems.push(`question ${question.number} is listed more than once`);
 		numbers.add(question.number);
 
+		if (question.pages.length === 0) problems.push(`question ${question.number} has no pages`);
 		for (const page of question.pages) {
 			if (page < 1 || page > paperPages) {
 				problems.push(
@@ -157,16 +158,26 @@ function submissionProblem(
 		if (question.parts.length === 0) problems.push(`question ${question.number} has no parts`);
 		const labels = new Set<string>();
 		for (const part of question.parts) {
-			if (labels.has(part.label)) {
-				problems.push(`question ${question.number} lists part "${part.label}" more than once`);
+			const label = normalizePartLabel(part.label);
+			if (!AP_PART_LABEL_PATTERN.test(label)) {
+				problems.push(
+					`part label "${part.label}" of question ${question.number} must be one lower-case letter ` +
+						`followed only by lower-case letters or hyphens (at most 8 characters)`,
+				);
 			}
-			labels.add(part.label);
+			if (labels.has(label)) {
+				problems.push(`question ${question.number} lists part "${label}" more than once`);
+			}
+			labels.add(label);
 			if (part.points.length === 0) {
-				problems.push(`part "${part.label}" of question ${question.number} has no rubric points`);
+				problems.push(`part "${label}" of question ${question.number} has no rubric points`);
+			}
+			if (part.points.some((text) => text.trim() === "")) {
+				problems.push(`part "${label}" of question ${question.number} has a blank rubric point`);
 			}
 			if (part.topicId !== "" && !topicIds.has(part.topicId)) {
 				problems.push(
-					`part "${part.label}" of question ${question.number} has an unknown topic "${part.topicId}"`,
+					`part "${label}" of question ${question.number} has an unknown topic "${part.topicId}"`,
 				);
 			}
 		}
@@ -187,7 +198,7 @@ export async function indexApPaper(
 ): Promise<ApRealQuestion[]> {
 	const year = input.paper.year;
 	if (year === undefined) throw new Error("the released paper has no year");
-	const set = setOfPaper(input.paper);
+	const set = apPaperPair(input.paper)?.set;
 
 	const paper = await extractDocument(input.paperPath);
 	const scoring = await extractDocument(input.scoringPath);
@@ -218,6 +229,28 @@ export async function indexApPaper(
 		...topicLines,
 	].join("\n");
 
+	/** The stored questions: labels normalised, point texts trimmed, and the
+	 *  server's own point ids. */
+	const build = (value: SubmitValue): ApRealQuestion[] =>
+		value.questions.map((question) => ({
+			id: apQuestionId(year, question.number, set),
+			paperId: input.paper.id,
+			scoringId: input.scoring.id,
+			year,
+			...(set === undefined ? {} : { set }),
+			number: question.number,
+			pages: question.pages,
+			scoringPages: question.scoringPages,
+			parts: question.parts.map((part) => {
+				const label = normalizePartLabel(part.label);
+				return {
+					label,
+					...(part.topicId === "" ? {} : { topicId: part.topicId }),
+					points: part.points.map((text, index) => ({ id: `${label}${index + 1}`, text: text.trim() })),
+				};
+			}),
+		}));
+
 	const submission = await runSubmitAgent<SubmitValue>({
 		role: "apIndexer",
 		toolName: "submit_index",
@@ -234,22 +267,16 @@ export async function indexApPaper(
 		chatId: opts.chatId,
 		onStep: (usage) => opts.onUsage(usage),
 		neverSubmitted: "the indexer never submitted a question index",
-		validate: (value) => submissionProblem(value, paper.pages, scoring.pages, topicIds),
+		validate: (value) => {
+			const problem = submissionProblem(value, paper.pages, scoring.pages, topicIds);
+			if (problem) return problem;
+			// The index store refuses a malformed index, and one bad pair must
+			// never take the whole synced file down: the server's own guard is
+			// the last word before a submission is accepted.
+			const malformed = build(value).find((question) => !isApRealQuestion(question as unknown));
+			return malformed ? `the index for question ${malformed.number} is not well-formed` : null;
+		},
 	});
 
-	return submission.questions.map((question) => ({
-		id: apQuestionId(year, question.number, set),
-		paperId: input.paper.id,
-		scoringId: input.scoring.id,
-		year,
-		...(set === undefined ? {} : { set }),
-		number: question.number,
-		pages: question.pages,
-		scoringPages: question.scoringPages,
-		parts: question.parts.map((part) => ({
-			label: part.label,
-			...(part.topicId === "" ? {} : { topicId: part.topicId }),
-			points: part.points.map((text, index) => ({ id: `${part.label}${index + 1}`, text })),
-		})),
-	}));
+	return build(submission);
 }

@@ -20,7 +20,7 @@ import { createFauxCore, fauxAssistantMessage, fauxToolCall, type FauxResponseSt
 import type { ChatStore, JobStore } from "../src/core/ports.ts";
 import type { JobRecord, SteerMessage } from "../src/core/contracts.ts";
 import type { ApCourseRecord, ApDocument } from "../src/core/ap.ts";
-import type { ApQuestionIndex, ApRealQuestion } from "../src/core/ap-frq.ts";
+import { isApQuestionIndex, type ApQuestionIndex, type ApRealQuestion } from "../src/core/ap-frq.ts";
 import type { PiEngine } from "../src/agent/models.ts";
 import type { JobRunnerDeps } from "../src/agent/subagents/runner.ts";
 import type { ApIndexResult } from "../src/core/contracts.ts";
@@ -135,7 +135,11 @@ interface FakeApIndex {
 	index(): ApQuestionIndex | null;
 }
 
-function fakeIndex(course: ApCourseRecord, seed?: ApQuestionIndex): FakeApIndex {
+function fakeIndex(
+	course: ApCourseRecord,
+	seed?: ApQuestionIndex,
+	failPuts: ReadonlySet<string> = new Set(),
+): FakeApIndex {
 	let index: ApQuestionIndex | null = seed ?? null;
 	const puts: FakeApIndex["puts"] = [];
 	return {
@@ -145,6 +149,9 @@ function fakeIndex(course: ApCourseRecord, seed?: ApQuestionIndex): FakeApIndex 
 			course: (courseId) => (courseId === course.id ? course : null),
 			index: (courseId) => (courseId === course.id ? index : null),
 			putPaper: (courseId, paperId, questions) => {
+				// The real store refuses a malformed index; a failed save must
+				// not reach storage or drop the pairs already written.
+				if (failPuts.has(paperId)) throw new Error("invalid question index");
 				puts.push({ paperId, questions });
 				const kept = (index?.questions ?? []).filter((candidate) => candidate.paperId !== paperId);
 				index = {
@@ -328,6 +335,99 @@ describe("ap_index job", () => {
 		assert.ok(activities.includes("indexed 2023 FRQ"), "the activity line names the paper");
 		assert.equal(steers.length, 1);
 		assert.ok(steers[0]!.content.includes(result.brief), "the steer carries the brief");
+		assert.equal(isApQuestionIndex(fake.index()!), true, "everything written validates as a question index");
+	});
+
+	it("rejects every structural hole and still stores a good pair in the same job", async () => {
+		// Years this suite's other cases do not touch (the paper folder is shared).
+		const years = [2030, 2031, 2032, 2033, 2034, 2035];
+		const docs: ApDocument[] = [];
+		for (const year of years) {
+			writePaper(`frq-${year}.pdf`);
+			writePaper(`scoring-${year}.pdf`);
+			docs.push(frqDoc(year), scoringDoc(year));
+		}
+		const course = courseOf(docs);
+		const fake = fakeIndex(course);
+
+		const part = (overrides: ToolCall["arguments"] = {}): ToolCall["arguments"] => ({
+			label: "a",
+			topicId: "t_limits",
+			points: ["A point"],
+			...overrides,
+		});
+		const one = (
+			overrides: ToolCall["arguments"],
+			parts: ToolCall["arguments"][] = [part()],
+		): ToolCall["arguments"] => ({
+			questions: [{ number: 1, pages: [1], scoringPages: [1], parts, ...overrides }],
+		});
+		const holes = [
+			one({ pages: [] }),
+			one({ number: 0 }),
+			one({}, [part({ label: "A1" })]),
+			one({}, [part({ points: ["   "] })]),
+			one({}, [part({ label: "A" }), part({ label: "a", points: ["Another point"] })]),
+		];
+
+		// Each invalid answer is retried to the turn limit, so each pair fails;
+		// the last pair's answer is good and must still be stored.
+		const steps: FauxResponseStep[] = [];
+		for (const [index, value] of holes.entries()) {
+			for (let retry = 0; retry < 4; retry++) steps.push(submit(value, `hole-${index}-${retry}`));
+		}
+		steps.push(submit(GOOD_INDEX, "good-after-holes"));
+
+		const { result } = await run(fake.port, fauxEngine(steps));
+
+		assert.deepEqual(fake.puts.map((put) => put.paperId), ["frq-2035"], "nothing malformed is written");
+		assert.deepEqual(result.indexed, [{ paperId: "frq-2035", questions: 1 }]);
+		assert.deepEqual(
+			result.failed.map((failure) => failure.paperId),
+			["frq-2030", "frq-2031", "frq-2032", "frq-2033", "frq-2034"],
+			"every rejected hole fails only its own pair",
+		);
+		for (const failure of result.failed) {
+			assert.equal(failure.reason, "the indexer never submitted a question index");
+		}
+		assert.equal(isApQuestionIndex(fake.index()!), true, "the surviving index is well-formed");
+	});
+
+	it("pairs a set paper with its set scoring guideline", async () => {
+		writePaper("frq-2023-set2.pdf");
+		writePaper("scoring-2023-set2.pdf");
+		const course = courseOf([frqDoc(2023, 2), scoringDoc(2023, 2)]);
+		const fake = fakeIndex(course);
+
+		const { result } = await run(fake.port, fauxEngine([submit(GOOD_INDEX, "set-good")]));
+
+		assert.deepEqual(fake.puts.map((put) => put.paperId), ["frq-2023-set2"]);
+		const q = fake.puts[0]!.questions[0]!;
+		assert.equal(q.id, "2023-s2-1");
+		assert.equal(q.set, 2);
+		assert.equal(q.scoringId, "scoring-2023-set2");
+		assert.equal(result.indexed[0]!.paperId, "frq-2023-set2");
+		assert.equal(isApQuestionIndex(fake.index()!), true);
+	});
+
+	it("reports a refused save as that pair failing and still indexes another pair", async () => {
+		for (const year of [2023, 2024]) {
+			writePaper(`frq-${year}.pdf`);
+			writePaper(`scoring-${year}.pdf`);
+		}
+		const course = courseOf([frqDoc(2023), scoringDoc(2023), frqDoc(2024), scoringDoc(2024)]);
+		const fake = fakeIndex(course, undefined, new Set(["frq-2023"]));
+
+		const { result } = await run(
+			fake.port,
+			fauxEngine([submit(GOOD_INDEX, "save-refused"), submit(GOOD_INDEX, "save-good")]),
+		);
+
+		assert.deepEqual(fake.puts.map((put) => put.paperId), ["frq-2024"]);
+		assert.deepEqual(result.indexed, [{ paperId: "frq-2024", questions: 1 }]);
+		assert.deepEqual(result.failed, [{ paperId: "frq-2023", reason: "could not be saved" }]);
+		assert.match(result.brief, /Failed: 2023 FRQ \(could not be saved\)/);
+		assert.equal(isApQuestionIndex(fake.index()!), true);
 	});
 
 	it("rejects each bad model answer without losing a good pair (Review Focus 3)", async () => {

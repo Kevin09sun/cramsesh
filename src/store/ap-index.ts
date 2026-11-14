@@ -61,6 +61,9 @@ function putPaper(courseId: string, paperId: string, questions: ApRealQuestion[]
 		updatedAt: new Date().toISOString(),
 		questions: [...kept, ...questions].sort(compareQuestions),
 	};
+	// The whole file must stay readable: a malformed question would make every
+	// later read return null and drop the earlier papers on the next write.
+	if (!isApQuestionIndex(next)) throw new Error("invalid question index");
 	fs.mkdirSync(PATHS.apIndex, { recursive: true });
 	writeIndex(next);
 	emit("ap-changed", {});
@@ -101,6 +104,7 @@ function retagPart(
 		updatedAt: new Date().toISOString(),
 		questions,
 	};
+	if (!isApQuestionIndex(next)) throw new Error("invalid question index");
 	fs.mkdirSync(PATHS.apIndex, { recursive: true });
 	writeIndex(next);
 	emit("ap-changed", {});

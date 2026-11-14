@@ -9,12 +9,15 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+	AP_PART_LABEL_PATTERN,
 	apPaperFileName,
+	apPaperPair,
 	apQuestionId,
 	apQuestionTitle,
 	attemptProblems,
 	eligibleRealQuestions,
 	isApQuestionIndex,
+	isApRealQuestion,
 	scoreAttempt,
 	type ApQuestionIndex,
 	type ApRealAttempt,
@@ -84,11 +87,50 @@ describe("AP free-response file names, ids and titles", () => {
 		assert.equal(apQuestionTitle({ year: 2023, number: 2 }), "2023 FRQ 2");
 		assert.equal(apQuestionTitle({ year: 2023, set: 2, number: 2 }), "2023 Set 2 FRQ 2");
 	});
+
+	it("apPaperPair derives a paper's set and its scoring partner id", () => {
+		assert.deepEqual(apPaperPair({ id: "frq-2023", year: 2023 }), { scoringId: "scoring-2023" });
+		assert.deepEqual(apPaperPair({ id: "frq-2023-set2", year: 2023 }), {
+			set: 2,
+			scoringId: "scoring-2023-set2",
+		});
+	});
+
+	it("apPaperPair returns undefined without a year or for a name it did not write", () => {
+		assert.equal(apPaperPair({ id: "frq-2023", year: undefined }), undefined);
+		assert.equal(apPaperPair({ id: "notes", year: 2023 }), undefined);
+		assert.equal(apPaperPair({ id: "frq-2023-set99", year: 2023 }), undefined);
+	});
 });
 
 describe("isApQuestionIndex", () => {
 	it("accepts a well-formed index", () => {
 		assert.equal(isApQuestionIndex(index()), true);
+	});
+
+	it("isApRealQuestion applies the same checks to one question", () => {
+		assert.equal(isApRealQuestion(question()), true);
+		assert.equal(isApRealQuestion({ ...question(), pages: [] }), false);
+		assert.equal(isApRealQuestion({ ...question(), number: 0 }), false);
+		assert.equal(isApRealQuestion({ ...question(), parts: [] }), false);
+		assert.equal(isApRealQuestion(null), false);
+	});
+
+	it("requires a lower-case lettered part label, so server point ids cannot collide", () => {
+		assert.equal(AP_PART_LABEL_PATTERN.test("a"), true);
+		assert.equal(AP_PART_LABEL_PATTERN.test("a-i"), true);
+		assert.equal(AP_PART_LABEL_PATTERN.test("A"), false);
+		assert.equal(AP_PART_LABEL_PATTERN.test("a1"), false);
+		assert.equal(
+			isApQuestionIndex(
+				rawIndex([
+					rawQuestion({
+						parts: [{ label: "a1", topicId: "t11", points: [{ id: "a11", text: "one" }] }],
+					}),
+				]),
+			),
+			false,
+		);
 	});
 
 	it("rejects a question with no parts", () => {

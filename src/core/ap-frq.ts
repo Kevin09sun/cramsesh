@@ -11,7 +11,7 @@
  * deterministic and unit-testable.
  */
 
-import { scopedQueue, topicInScope, type ApCourseRecord, type ApSittingScope } from "./ap.ts";
+import { scopedQueue, topicInScope, type ApCourseRecord, type ApDocument, type ApSittingScope } from "./ap.ts";
 import type { AnswerResult } from "./test-prep.ts";
 
 // ─── records ────────────────────────────────────────────────────────────────
@@ -73,7 +73,37 @@ export function apQuestionTitle(q: Pick<ApRealQuestion, "year" | "set" | "number
 		: `${q.year} Set ${q.set} FRQ ${q.number}`;
 }
 
+/**
+ * The set encoded in a released paper's id and the id of its scoring
+ * guideline, rebuilt from the shared file-name rule (never by string
+ * surgery). Undefined when the paper has no year or its id is not a released
+ * `frq` name: `frq-2023` → `scoring-2023`, `frq-2023-set2` → set 2 and
+ * `scoring-2023-set2`.
+ */
+export function apPaperPair(
+	paper: Pick<ApDocument, "id" | "year">,
+): { set?: number; scoringId: string } | undefined {
+	if (paper.year === undefined) return undefined;
+	const withoutPdf = (name: string) => name.slice(0, -".pdf".length);
+	for (let set = 1; set <= 9; set++) {
+		if (withoutPdf(apPaperFileName("frq", paper.year, set)) === paper.id) {
+			return { set, scoringId: withoutPdf(apPaperFileName("scoring", paper.year, set)) };
+		}
+	}
+	if (withoutPdf(apPaperFileName("frq", paper.year)) === paper.id) {
+		return { scoringId: withoutPdf(apPaperFileName("scoring", paper.year)) };
+	}
+	return undefined;
+}
+
 // ─── index validation ───────────────────────────────────────────────────────
+
+/**
+ * A part label: one lower-case letter, then up to seven lower-case letters or
+ * hyphens. Digits are forbidden because point ids are `<label><n>`; a label
+ * like "a1" would make "a1"+"1" collide with "a"+"11".
+ */
+export const AP_PART_LABEL_PATTERN = /^[a-z][a-z-]{0,7}$/;
 
 function isNonEmptyString(value: unknown): value is string {
 	return typeof value === "string" && value !== "";
@@ -90,7 +120,7 @@ function isPositivePageList(value: unknown): value is number[] {
 function isRealPart(value: unknown): value is ApRealPart {
 	if (typeof value !== "object" || value === null) return false;
 	const part = value as Record<string, unknown>;
-	if (!isNonEmptyString(part.label)) return false;
+	if (!isNonEmptyString(part.label) || !AP_PART_LABEL_PATTERN.test(part.label)) return false;
 	if (part.topicId !== undefined && !isNonEmptyString(part.topicId)) return false;
 	return Array.isArray(part.points) && part.points.length > 0 && part.points.every(isRubricPoint);
 }
@@ -101,7 +131,9 @@ function isRubricPoint(value: unknown): value is ApRubricPoint {
 	return isNonEmptyString(point.id) && isNonEmptyString(point.text);
 }
 
-function isRealQuestion(value: unknown): value is ApRealQuestion {
+/** Strict structural check for one released question (also used by
+ *  `isApQuestionIndex`, so there is one definition). */
+export function isApRealQuestion(value: unknown): value is ApRealQuestion {
 	if (typeof value !== "object" || value === null) return false;
 	const question = value as Record<string, unknown>;
 	if (!isNonEmptyString(question.id)) return false;
@@ -134,8 +166,9 @@ function isRealQuestion(value: unknown): value is ApRealQuestion {
  * hand-edited or half-written). Every field type is checked, `version` must
  * be 1, page numbers must be positive integers, and a question must have
  * parts and at least one paper page, a part must have points, question ids
- * must be unique, part labels must be unique within their question, and
- * rubric point ids must be unique within their question.
+ * must be unique, part labels must follow `AP_PART_LABEL_PATTERN` and be
+ * unique within their question, and rubric point ids must be unique within
+ * their question.
  */
 export function isApQuestionIndex(value: unknown): value is ApQuestionIndex {
 	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
@@ -147,7 +180,7 @@ export function isApQuestionIndex(value: unknown): value is ApQuestionIndex {
 
 	const questionIds = new Set<string>();
 	for (const question of index.questions) {
-		if (!isRealQuestion(question)) return false;
+		if (!isApRealQuestion(question)) return false;
 		if (questionIds.has(question.id)) return false;
 		questionIds.add(question.id);
 	}
