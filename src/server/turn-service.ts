@@ -34,6 +34,37 @@ export class TurnPersistenceError extends Error {
 	}
 }
 
+/** The record-facing note replacing images the model viewed in an AP turn
+ *  (owner decision, stage 2): a photo of handwritten work is seen by the
+ *  tutor while grading but is NEVER kept or synced — the session record,
+ *  which is what syncs, must not carry the bytes. */
+const IMAGE_NOT_KEPT_TEXT = "[Image viewed during this turn; not kept in the session.]";
+
+/**
+ * The AP record's version of a tool result: every image content part is
+ * replaced by ONE note at the first image's position (however many images
+ * the message held); every other part keeps its order and `details` is
+ * untouched. Builds a NEW message — the live turn's array keeps the images
+ * for the rest of the turn (the model still grades against them). Applied
+ * to toolResult messages only, for every tool name.
+ */
+function withoutViewedImages(message: LhMessage): LhMessage {
+	if (message.role !== "toolResult") return message;
+	if (!message.content.some((part) => part.type === "image")) return message;
+	const content: typeof message.content = [];
+	let noted = false;
+	for (const part of message.content) {
+		if (part.type !== "image") {
+			content.push(part);
+			continue;
+		}
+		if (noted) continue;
+		content.push({ type: "text", text: IMAGE_NOT_KEPT_TEXT });
+		noted = true;
+	}
+	return { ...message, content };
+}
+
 /**
  * The canonical state write (Wave B, owner-approved 2026-09-26): append the
  * turn's own messages — the agent loop's native history, provider/model/
@@ -52,6 +83,9 @@ export class TurnPersistenceError extends Error {
  *   context.
  * - Plan blocks: one frozen snapshot per successful plan_init call,
  *   idempotent (persist replays are safe).
+ * - AP images (owner decision, stage 2): a tool result's viewed images
+ *   become one note (withoutViewedImages) in the RECORD only — the live
+ *   message keeps them for this turn; other kinds save exactly as today.
  *
  * Returns the stamped new messages (usage provenance reads them). Throws
  * TurnPersistenceError on failure so the runner can report it before DONE.
@@ -66,6 +100,7 @@ export function persistTurn(
 	try {
 		const record = chatStore.getChat(chatId);
 		if (!record) throw new Error(`Chat not found: ${chatId}`);
+		const isAp = record.kind === "ap";
 		const stamped: LhMessage[] = [];
 		for (const m of turnMessages.slice(baseCount)) {
 			const message = m as LhMessage;
@@ -77,7 +112,8 @@ export function persistTurn(
 			) {
 				continue;
 			}
-			stamped.push(message.id ? message : ({ ...message, id: newMessageId() } as LhMessage));
+			const saved = isAp ? withoutViewedImages(message) : message;
+			stamped.push(saved.id ? saved : ({ ...saved, id: newMessageId() } as LhMessage));
 		}
 		const tree = record.tree;
 		const blocks = planBlocksFor(record.messages, stamped, tree, [
