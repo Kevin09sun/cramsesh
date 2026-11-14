@@ -106,6 +106,27 @@ describe("isApQuestionIndex", () => {
 		assert.equal(isApQuestionIndex(rawIndex([question(), question()])), false);
 	});
 
+	it("rejects a question with an empty pages list, but allows empty scoringPages", () => {
+		assert.equal(isApQuestionIndex(rawIndex([rawQuestion({ pages: [] })])), false);
+		assert.equal(isApQuestionIndex(rawIndex([rawQuestion({ scoringPages: [] })])), true);
+	});
+
+	it("rejects duplicate part labels", () => {
+		assert.equal(
+			isApQuestionIndex(
+				rawIndex([
+					rawQuestion({
+						parts: [
+							{ label: "a", topicId: "t11", points: [{ id: "a1", text: "one" }] },
+							{ label: "a", topicId: "t12", points: [{ id: "b1", text: "two" }] },
+						],
+					}),
+				]),
+			),
+			false,
+		);
+	});
+
 	it("rejects duplicate point ids within one question, across its parts", () => {
 		assert.equal(
 			isApQuestionIndex(
@@ -253,6 +274,23 @@ describe("scoreAttempt", () => {
 		assert.deepEqual(score.topics, [{ topicId: "t11", result: "wrong" }]);
 	});
 
+	it("a topic is correct when every part tagged to it is complete", () => {
+		const shared: ApRealQuestion = question({
+			parts: [
+				{ label: "a", topicId: "t11", points: [{ id: "a1", text: "one" }] },
+				{ label: "b", topicId: "t11", points: [{ id: "b1", text: "two" }] },
+			],
+		});
+
+		const score = scoreAttempt(
+			shared,
+			{ parts: [{ label: "a", earned: ["a1"] }, { label: "b", earned: ["b1"] }] },
+			new Set(["t11"]),
+		);
+
+		assert.deepEqual(score.topics, [{ topicId: "t11", result: "correct" }]);
+	});
+
 	it("'I don't know' scores every part 0 and every tagged topic dontKnow", () => {
 		const score = scoreAttempt(
 			question(),
@@ -294,7 +332,7 @@ describe("scoreAttempt", () => {
 		);
 
 		assert.deepEqual(score.topics, [{ topicId: "t11", result: "correct" }]);
-		assert.deepEqual(score.parts[1], { label: "b", earned: 1, total: 1, topicId: "t12", complete: true });
+		assert.deepEqual(score.parts[1], { label: "b", earned: 1, total: 1, complete: true });
 		assert.deepEqual(score.parts[2], { label: "c", earned: 1, total: 1, complete: true });
 	});
 });
@@ -368,13 +406,34 @@ describe("eligibleRealQuestions", () => {
 		const eligible = eligibleRealQuestions(course, idx, { type: "weak" }, "c1", attempts);
 
 		// Weak queue order is t11, t21, t12 (t22 is solid, so absent from it).
+		// 2023-4 tests t21 and t11, so its best position is t11's.
 		assert.deepEqual(
 			eligible.map((entry) => entry.question.id),
-			["2023-3", "2023-4", "2023-2", "2023-1", "2023-5"],
+			["2023-4", "2023-3", "2023-2", "2023-1", "2023-5"],
 		);
 		assert.deepEqual(
 			eligible.map((entry) => entry.used),
 			[false, false, false, false, true],
+		);
+	});
+
+	it("orders a question by its weakest in-scope topic, not the topic of its first part", () => {
+		// t22 is solid, so it is absent from the weak queue; t11 is the earliest
+		// entry and t12 is mid-queue. A question whose first part tests the
+		// absent topic still sorts first because its second part tests t11.
+		const lateThenEarly = tagged("2023-9", "t22", "t11");
+		const onlyMid = tagged("2023-10", "t12");
+		const eligible = eligibleRealQuestions(
+			course,
+			index({ questions: [onlyMid, lateThenEarly] }),
+			{ type: "weak" },
+			"c1",
+			[],
+		);
+
+		assert.deepEqual(
+			eligible.map((entry) => entry.question.id),
+			["2023-9", "2023-10"],
 		);
 	});
 

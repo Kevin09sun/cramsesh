@@ -110,14 +110,17 @@ function isRealQuestion(value: unknown): value is ApRealQuestion {
 	if (!isPositiveInteger(question.year)) return false;
 	if (question.set !== undefined && !isPositiveInteger(question.set)) return false;
 	if (!isPositiveInteger(question.number)) return false;
-	if (!isPositivePageList(question.pages)) return false;
+	if (!isPositivePageList(question.pages) || question.pages.length === 0) return false;
 	if (!isPositivePageList(question.scoringPages)) return false;
 	if (!Array.isArray(question.parts) || question.parts.length === 0) return false;
 	if (!question.parts.every(isRealPart)) return false;
 
-	// Point ids are unique in the question, across all its parts.
+	// Part labels and point ids are unique in the question.
+	const partLabels = new Set<string>();
 	const pointIds = new Set<string>();
 	for (const part of question.parts as ApRealPart[]) {
+		if (partLabels.has(part.label)) return false;
+		partLabels.add(part.label);
 		for (const point of part.points) {
 			if (pointIds.has(point.id)) return false;
 			pointIds.add(point.id);
@@ -130,8 +133,9 @@ function isRealQuestion(value: unknown): value is ApRealQuestion {
  * Strict structural check for a synced question index (a file that can be
  * hand-edited or half-written). Every field type is checked, `version` must
  * be 1, page numbers must be positive integers, and a question must have
- * parts, a part must have points, question ids must be unique, and rubric
- * point ids must be unique within their question.
+ * parts and at least one paper page, a part must have points, question ids
+ * must be unique, part labels must be unique within their question, and
+ * rubric point ids must be unique within their question.
  */
 export function isApQuestionIndex(value: unknown): value is ApQuestionIndex {
 	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
@@ -218,7 +222,7 @@ export function attemptProblems(
  * `correct` only when every part tagged to it is complete, else `wrong`. With
  * "I don't know" every part scores 0 and every tagged topic is `dontKnow`. A
  * part whose topic is absent or not in the confirmed list is scored but
- * contributes no topic.
+ * contributes no topic and carries no `topicId`.
  */
 export function scoreAttempt(
 	q: ApRealQuestion,
@@ -259,7 +263,9 @@ export function scoreAttempt(
 			label: part.label,
 			earned,
 			total: part.points.length,
-			...(part.topicId === undefined ? {} : { topicId: part.topicId }),
+			...(part.topicId === undefined || !knownTopicIds.has(part.topicId)
+				? {}
+				: { topicId: part.topicId }),
 			complete,
 		};
 	});
@@ -282,9 +288,10 @@ export interface ApEligibleQuestion {
 
 /**
  * Real questions with at least one part tagged to a topic in scope, ordered by
- * the weak-first position of their first in-scope topic, unused before used.
- * A topic absent from the queue sorts after those present. A null index means
- * nothing has been indexed yet.
+ * the weak-first position of their weakest in-scope topic (the earliest queue
+ * entry among all their in-scope topics), unused before used. A topic absent
+ * from the queue sorts after those present. A null index means nothing has
+ * been indexed yet.
  */
 export function eligibleRealQuestions(
 	course: Pick<ApCourseRecord, "sections">,
@@ -310,12 +317,17 @@ export function eligibleRealQuestions(
 		}
 		if (topicIds.length === 0) return [];
 
-		const first = topicIds[0]!;
+		// The question is as weak as its weakest in-scope topic.
+		const bestPosition = topicIds.reduce(
+			(lowest, topicId) =>
+				Math.min(lowest, position.get(topicId) ?? Number.POSITIVE_INFINITY),
+			Number.POSITIVE_INFINITY,
+		);
 		return [{
 			question,
 			used: usedIds.has(question.id),
 			topicIds,
-			position: position.get(first) ?? Number.POSITIVE_INFINITY,
+			position: bestPosition,
 		}];
 	});
 
