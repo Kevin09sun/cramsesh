@@ -30,8 +30,8 @@ process.env.LH_DATA_DIR = TMP_DATA;
 delete process.env.LH_DESKTOP_SERVER;
 delete process.env.LH_DESKTOP_API_SECRET;
 
-const { AP_PAGE_DPI, apPageImage, setApPageRenderer } = await import("../src/server/ap-pages.ts");
-const { apPaperPath, apPapersDir } = await import("../src/server/ap-papers.ts");
+const { AP_PAGE_DPI, apPageImage, clearApPageCache, setApPageRenderer } = await import("../src/server/ap-pages.ts");
+const { apPaperPath, apPapersDir, downloadApPaper, setApPaperFetch } = await import("../src/server/ap-papers.ts");
 const { apCourseStore } = await import("../src/store/ap-courses.ts");
 const { apIndexStore } = await import("../src/store/ap-index.ts");
 
@@ -53,7 +53,8 @@ type ApRealQuestion = import("../src/core/ap-frq.ts").ApRealQuestion;
 
 const BASE = "http://localhost";
 const PDF = "%PDF-1.7\n% test paper\n";
-const PNG = Buffer.from("fake-png-bytes");
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const PNG = Buffer.concat([PNG_SIGNATURE, Buffer.from("fake-png-bytes")]);
 const KNOWN_POINT_TEXT = "KNOWN RUBRIC POINT TEXT";
 
 /** Put a real PDF where the store will look for one. */
@@ -171,14 +172,90 @@ describe("apPageImage", () => {
 		}
 	});
 
+	it("treats an empty or non-PNG cache file as a miss and re-renders", async () => {
+		const courseId = courseWithDocument("AP Page corrupt", "frq", "frq-2023.pdf");
+		writePaper(courseId, "frq-2023.pdf");
+		let calls = 0;
+		setApPageRenderer(async () => {
+			calls++;
+			return PNG;
+		});
+
+		const cached = pageCachePath(courseId, "frq-2023.pdf", 1);
+		fs.mkdirSync(path.dirname(cached), { recursive: true });
+
+		fs.writeFileSync(cached, "");
+		assert.deepEqual(await apPageImage(courseId, "frq-2023.pdf", 1), PNG);
+		assert.equal(calls, 1, "an empty cache file is a miss");
+		assert.deepEqual(fs.readFileSync(cached), PNG, "the miss is overwritten");
+
+		fs.writeFileSync(cached, "not a png");
+		assert.deepEqual(await apPageImage(courseId, "frq-2023.pdf", 1), PNG);
+		assert.equal(calls, 2, "a file without the PNG signature is a miss");
+		assert.deepEqual(fs.readFileSync(cached), PNG, "the garbage is overwritten");
+	});
+
+	it("clearApPageCache tolerates a missing folder and never touches another paper's pages", async () => {
+		const courseId = courseWithDocument("AP Page clear", "frq", "frq-2023.pdf");
+		await clearApPageCache(courseId, "frq-2023.pdf"); // no pages folder yet: no throw
+
+		writePaper(courseId, "frq-2023.pdf");
+		writePaper(courseId, "frq-2023-set2.pdf");
+		setApPageRenderer(async () => PNG);
+		await apPageImage(courseId, "frq-2023.pdf", 1);
+		await apPageImage(courseId, "frq-2023-set2.pdf", 1);
+
+		await clearApPageCache(courseId, "frq-2023.pdf");
+		assert.equal(fs.existsSync(pageCachePath(courseId, "frq-2023.pdf", 1)), false);
+		assert.equal(fs.existsSync(pageCachePath(courseId, "frq-2023-set2.pdf", 1)), true);
+	});
+
 	it("validates the course id and file name through the paper store", async () => {
 		await assert.rejects(apPageImage("../course", "frq-2023.pdf", 1), /Invalid course id/);
 		await assert.rejects(apPageImage("course-safe", "../x.pdf", 1), /Invalid paper file/);
 	});
 });
 
+describe("paper re-save clears the page cache", () => {
+	it("a re-downloaded paper loses its cached pages but another paper keeps its own", async () => {
+		const courseId = courseWithDocument("AP Page resave", "frq", "frq-2023.pdf");
+		writePaper(courseId, "frq-2023.pdf");
+		writePaper(courseId, "frq-2023-set2.pdf");
+		setApPageRenderer(async () => PNG);
+		await apPageImage(courseId, "frq-2023.pdf", 1);
+		await apPageImage(courseId, "frq-2023.pdf", 2);
+		await apPageImage(courseId, "frq-2023-set2.pdf", 1);
+
+		const own = [1, 2].map((page) => pageCachePath(courseId, "frq-2023.pdf", page));
+		const other = pageCachePath(courseId, "frq-2023-set2.pdf", 1);
+		assert.ok(own.every((file) => fs.existsSync(file)), "both pages were cached first");
+
+		setApPaperFetch((async () => new Response(PDF)) as typeof fetch);
+		await downloadApPaper(courseId, "https://www.collegeboard.org/frq-2023.pdf", "frq-2023.pdf");
+
+		assert.equal(own.some((file) => fs.existsSync(file)), false, "the re-saved paper's pages are gone");
+		assert.equal(fs.existsSync(other), true, "another paper's pages survive");
+	});
+
+	it("a refused re-download leaves the cache untouched", async () => {
+		const courseId = courseWithDocument("AP Page failed resave", "frq", "frq-2023.pdf");
+		writePaper(courseId, "frq-2023.pdf");
+		setApPageRenderer(async () => PNG);
+		await apPageImage(courseId, "frq-2023.pdf", 1);
+		const cached = pageCachePath(courseId, "frq-2023.pdf", 1);
+		const before = fs.readFileSync(cached);
+
+		setApPaperFetch((async () => new Response("<html>not a paper</html>")) as typeof fetch);
+		await assert.rejects(
+			downloadApPaper(courseId, "https://www.collegeboard.org/frq-2023.pdf", "frq-2023.pdf"),
+			(error: Error) => error.message === "Not a PDF",
+		);
+		assert.deepEqual(fs.readFileSync(cached), before, "a failed save never clears the old paper's pages");
+	});
+});
+
 describe("GET /api/ap/[id]/pages/[file]/[page]", () => {
-	it("serves a rendered page as an immutable private PNG for an frq or ced document", async () => {
+	it("serves a rendered page as a no-cache PNG for an frq or ced document", async () => {
 		const frqCourse = courseWithDocument("AP Pages frq", "frq", "frq-2023.pdf");
 		writePaper(frqCourse, "frq-2023.pdf");
 		const cedCourse = courseWithDocument("AP Pages ced", "ced", "ced.pdf");
@@ -188,7 +265,7 @@ describe("GET /api/ap/[id]/pages/[file]/[page]", () => {
 		const res = await getPage(frqCourse, "frq-2023.pdf", "2");
 		assert.equal(res.status, 200);
 		assert.equal(res.headers.get("content-type"), "image/png");
-		assert.equal(res.headers.get("cache-control"), "private, max-age=31536000, immutable");
+		assert.equal(res.headers.get("cache-control"), "private, no-cache");
 		assert.deepEqual(Buffer.from(await res.arrayBuffer()), PNG);
 
 		const ced = await getPage(cedCourse, "ced.pdf", "1");
@@ -223,6 +300,46 @@ describe("GET /api/ap/[id]/pages/[file]/[page]", () => {
 		const res = await getPage(courseId, "scoring-2023.pdf", "1");
 		assert.equal(res.status, 404);
 		assert.equal(calls, 0, "a scoring page is never rendered");
+	});
+
+	it("is a 404 with no render for hostile or malformed segments", async () => {
+		const courseId = courseWithDocument("AP Pages segments", "frq", "frq-2023.pdf");
+		writePaper(courseId, "frq-2023.pdf");
+		let calls = 0;
+		setApPageRenderer(async () => {
+			calls++;
+			return PNG;
+		});
+
+		for (const page of ["1e3", "123456789012345678901234567890"]) {
+			assert.equal((await getPage(courseId, "frq-2023.pdf", page)).status, 404, `page ${page} is invalid`);
+		}
+		for (const file of ["..", "%2e%2e%2fced.pdf", "ced.pdf"]) {
+			assert.equal((await getPage(courseId, file, "1")).status, 404, `file ${file} is not servable`);
+		}
+		assert.equal(calls, 0, "nothing is rendered");
+	});
+
+	it("answers 500 and logs when rendering fails unexpectedly", async () => {
+		const courseId = courseWithDocument("AP Pages error", "frq", "frq-2023.pdf");
+		writePaper(courseId, "frq-2023.pdf");
+		setApPageRenderer(async () => {
+			throw new Error("paint exploded");
+		});
+
+		const logged: unknown[][] = [];
+		const original = console.error;
+		console.error = (...args: unknown[]) => {
+			logged.push(args);
+		};
+		try {
+			const res = await getPage(courseId, "frq-2023.pdf", "1");
+			assert.equal(res.status, 500);
+			assert.deepEqual(await res.json(), { error: "Could not render the page" });
+			assert.equal(logged.length, 1, "the failure is logged");
+		} finally {
+			console.error = original;
+		}
 	});
 });
 

@@ -8,26 +8,29 @@
  * tree is already excluded from the synced data, exactly like the PDFs.
  *
  * The cache file name is built only from the validated paper file name and an
- * integer page, and every write is atomic (temp beside the target, exclusive
- * create, rename), so two requests racing on one uncached page both render
- * and the last rename wins — never a half-written image. The renderer is a
- * test seam: tests inject fixed bytes and nothing paints a real PDF.
+ * integer page. Writes share the paper store's atomic writer (temp beside the
+ * target, exclusive create, rename), so two requests racing on one uncached
+ * page both render and the last rename wins — never a half-written image. A
+ * cached file that is empty or lacks the PNG signature is treated as a miss
+ * and overwritten. When a paper is re-saved, the paper store clears its page
+ * cache so old pages never show behind the new bytes. The renderer is a test
+ * seam: tests inject fixed bytes and nothing paints a real PDF.
  */
 
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
-import * as path from "node:path";
-import { randomUUID } from "node:crypto";
-import { apPaperPath, apPapersDir } from "./ap-papers.ts";
+import { apPageCachePath, apPaperPath, clearApPageCache, writeBytesAtomic } from "./ap-papers.ts";
 import { getHeadless } from "../agent/subagents/headless.ts";
 
 /** Page images are rendered at 150 dpi on first view (owner decision). */
 export const AP_PAGE_DPI = 150;
 
-/** The cache filename's suffix convention: "ced.pdf" page 3 → "ced-p3.png". */
-function pageCachePath(courseId: string, file: string, page: number): string {
-	return path.join(apPapersDir(courseId), "pages", `${file.replace(/\.pdf$/, "")}-p${page}.png`);
-}
+/** The eight-byte PNG signature; a cache file that lacks it is not a page. */
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+/** Re-saved papers clear their cached pages through the paper store's clear;
+ *  this is the page layer's public name for the same operation. */
+export { clearApPageCache };
 
 /** A renderer may return undefined when the PDF has no such page. */
 type ApPageRenderer = (pdfPath: string, page: number, dpi: number) => Promise<Buffer | undefined>;
@@ -46,6 +49,11 @@ export function setApPageRenderer(
 	apPageRenderer = render;
 }
 
+/** A cached file is usable only when it is a non-empty PNG. */
+function isPng(bytes: Buffer): boolean {
+	return bytes.byteLength >= PNG_SIGNATURE.length && PNG_SIGNATURE.equals(bytes.subarray(0, PNG_SIGNATURE.length));
+}
+
 /**
  * PNG bytes of one page of a stored paper. Rendered once, then served from
  * the course's page cache. Validates the course id and file through the
@@ -54,12 +62,13 @@ export function setApPageRenderer(
  */
 export async function apPageImage(courseId: string, file: string, page: number): Promise<Buffer> {
 	const paperPath = apPaperPath(courseId, file); // validates the course id and file name
-	if (!Number.isInteger(page) || page < 1) throw new Error("no such page");
+	if (!Number.isSafeInteger(page) || page < 1) throw new Error("no such page");
 	if (!fs.existsSync(paperPath)) throw new Error("paper not on this computer");
 
-	const cachedPath = pageCachePath(courseId, file, page);
+	const cachedPath = apPageCachePath(courseId, file, page);
 	try {
-		return await fsp.readFile(cachedPath);
+		const cached = await fsp.readFile(cachedPath);
+		if (isPng(cached)) return cached;
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 	}
@@ -67,36 +76,6 @@ export async function apPageImage(courseId: string, file: string, page: number):
 	const png = await apPageRenderer(paperPath, page, AP_PAGE_DPI);
 	if (png === undefined) throw new Error("no such page");
 
-	await writePageAtomic(cachedPath, png);
+	await writeBytesAtomic(cachedPath, png);
 	return png;
-}
-
-/** Write beside the target, then rename over it; a failure removes the temp
- *  file so a crash never leaves a half image in the cache. The exclusive
- *  open means an existing file or symlink is never followed or truncated. */
-async function writePageAtomic(target: string, bytes: Uint8Array): Promise<void> {
-	await fsp.mkdir(path.dirname(target), { recursive: true });
-	const temp = `${target}.${randomUUID()}.tmp`;
-	let created = false;
-	try {
-		const handle = await fsp.open(temp, "wx");
-		created = true;
-		try {
-			await handle.writeFile(bytes);
-		} finally {
-			await handle.close();
-		}
-		await fsp.rename(temp, target);
-	} catch (error) {
-		// Never mask the write error; a leftover temp is harmless (it is ignored
-		// with the rest of ap-papers/) and a path we did not create is left alone.
-		if (created) {
-			try {
-				await fsp.rm(temp, { force: true });
-			} catch {
-				// report the original failure, not cleanup noise
-			}
-		}
-		throw error;
-	}
 }
