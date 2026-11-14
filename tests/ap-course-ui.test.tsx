@@ -504,7 +504,7 @@ function renderPart(part: Record<string, unknown>): string {
 }
 
 test("the three AP tools name their live activity", () => {
-	assert.equal(toolActivityLabel("ap_save_document"), "Saving the course description…");
+	assert.equal(toolActivityLabel("ap_save_document"), "Saving the document…");
 	assert.equal(toolActivityLabel("propose_units"), "Proposing units and topics…");
 	assert.equal(toolActivityLabel("ap_progress"), "Checking progress…");
 });

@@ -1,12 +1,13 @@
 "use client";
 
 import { CheckIcon, CircleX } from "lucide-react";
-import type { PdfResult, ResearchResult, SubagentArtifactData } from "@/src/core";
+import type { ApIndexResult, PdfResult, ResearchResult, SubagentArtifactData } from "@/src/core";
 import type { LhViewMessage } from "@/src/core";
 import { isSubagentFailure } from "@/src/core";
 import { DemoOutputCard } from "@/components/artifacts/demo-card";
 import { PdfBriefCard, ResearchBriefCard } from "@/components/artifacts/job-card";
 import { VisualOutputCard } from "@/components/artifacts/visual-card";
+import { MessageResponse } from "@/components/ai-elements/message";
 
 /**
  * The sub-agent result delivery card (contracts.ts "THE ASYNC PROTOCOL" §4).
@@ -55,6 +56,11 @@ export function SubagentSteerCard({ message }: { message: LhViewMessage }) {
 			) : (
 				<PdfCompleteBadge result={data.result as PdfResult} />
 			);
+		case "ap_index":
+			// AP prep stage 2: the indexing result is a compact brief card.
+			// Its title carries the outcome — "Indexing failed" is the
+			// failure shape's own opening (`/^Indexing failed:/i`).
+			return <ApIndexBriefCard output={data.result} />;
 		case "demo":
 			return <DemoOutputCard output={data.result} messageId={message.id} initialInverted={data.ui?.inverted ?? false} />;
 		case "visual":
@@ -101,6 +107,32 @@ function PdfCompleteBadge({ result }: { result: PdfResult }) {
 				<PdfBriefCard output={result} />
 			</div>
 		</details>
+	);
+}
+
+/** The AP indexing brief (stage 2): the same compact brief-card idiom as the
+ *  PDF and research briefs — title, then the model-facing brief text (the
+ *  teacher's wake turn weaves it into the lesson). Failure shape: the brief
+ *  opens with "Indexing failed:" (contracts/jobs.ts), which is the title. */
+function ApIndexBriefCard({ output }: { output: unknown }) {
+	const result = output as ApIndexResult | undefined;
+	if (!result || typeof result.brief !== "string") {
+		return (
+			<div className="rounded-xl border bg-card p-4 text-sm text-muted-foreground">
+				Indexing completed, but the result could not be displayed.
+			</div>
+		);
+	}
+	const failed = /^Indexing failed:/i.test(result.brief);
+	return (
+		<div className="rounded-xl border bg-card p-4 text-card-foreground" data-testid="ap-index-brief-card">
+			<div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+				{failed ? "Indexing failed" : "Released papers indexed"}
+			</div>
+			<div className="text-sm [&_p:first-child]:mt-0 [&_p:last-child]:mb-0">
+				<MessageResponse>{result.brief}</MessageResponse>
+			</div>
+		</div>
 	);
 }
 

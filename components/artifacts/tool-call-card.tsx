@@ -49,6 +49,8 @@ function headlineArg(tool: string, input: unknown): string {
 		return typeof inp.path === "string" ? inp.path : "";
 	}
 	if (tool === "ap_record_result" && typeof inp.topicId === "string") return inp.topicId;
+	// Stage 2's tag correction names the released question it fixes.
+	if (tool === "ap_retag_part" && typeof inp.questionId === "string") return inp.questionId;
 	if (typeof inp.pattern === "string") return inp.pattern;
 	// list_propositions: the session id is the call's subject — the
 	// collapsed line reads "list_propositions chat_…". Shown as given

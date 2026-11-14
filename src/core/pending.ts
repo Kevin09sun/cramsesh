@@ -188,12 +188,18 @@ const ACTIVITY_LABELS: Record<string, string> = {
 	pdf: "Reading a PDF…",
 	plan_init: "Drawing up the plan…",
 	probe_done: "Concluding the assessment…",
-	// AP prep (2026-11-13): the course-shape proposal, the paper download and
-	// the progress check all run long enough to need their own label.
-	ap_save_document: "Saving the course description…",
+	// AP prep (2026-11-13): the course-shape proposal, the document save and
+	// the progress check all run long enough to need their own label. The
+	// save names the document itself — it now stores the course description,
+	// released papers and scoring guidelines alike (stage 2, 2026-11-14).
+	ap_save_document: "Saving the document…",
 	propose_units: "Proposing units and topics…",
 	ap_progress: "Checking progress…",
 	ap_index_papers: "Indexing released papers…",
+	// AP prep stage 2 (2026-11-14): the grading loop's own long calls.
+	ap_rubric: "Reading the scoring guideline…",
+	ap_view_photo: "Looking at your photo…",
+	ap_record_frq: "Recording the score…",
 };
 
 /** The activity label for ONE running tool (owner, streaming round
