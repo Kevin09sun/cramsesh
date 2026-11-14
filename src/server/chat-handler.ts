@@ -9,7 +9,7 @@ import {
 	type TeachingAgent,
 } from "../agent/teacher-agent.ts";
 import { piEngineForSpec, type PiEngine } from "../agent/models.ts";
-import { answeredFrqFrom, recordedFrqFrom } from "../agent/tools/ap.ts";
+import { answeredFrqCountFrom, answeredFrqFrom } from "../agent/tools/ap.ts";
 import { connectionBackgroundAllowed as subscriptionBackgroundAllowed, connectionScopeCurrent, isSubscriptionProvider } from "../agent/subscription-connections.ts";
 import { nativeSubscriptionError } from "../agent/subscription-stream.ts";
 import { chatGPTStreamError } from "../agent/chatgpt-stream.ts";
@@ -542,7 +542,7 @@ export async function handleChatInput(
 						// Derived from THIS turn's message list — the write-ahead
 						// record plus the answer that re-enters this turn.
 						answeredFrq: (questionId) => answeredFrqFrom(agentMessages, questionId),
-						recordedFrq: (questionId) => recordedFrqFrom(agentMessages, questionId),
+						answeredFrqCount: (questionId) => answeredFrqCountFrom(agentMessages, questionId),
 						// The rarely-needed set, wired exactly like test prep's: the
 						// research + pdf jobs.
 						jobs: {

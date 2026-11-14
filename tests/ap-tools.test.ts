@@ -203,7 +203,7 @@ function ctxOf(
 		index: { get: () => null, retagPart: () => {} },
 		attempts: { record: (courseId) => courses.get(courseId)! },
 		answeredFrq: () => "none",
-		recordedFrq: () => false,
+		answeredFrqCount: () => 0,
 		...(sitting ? { sitting } : {}),
 	};
 }

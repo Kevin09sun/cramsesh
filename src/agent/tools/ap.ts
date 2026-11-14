@@ -107,8 +107,10 @@ export interface ApToolContext {
 	attempts: ApAttemptsPort;
 	/** Derived from the chat record's messages (answeredFrqFrom). */
 	answeredFrq: (questionId: string) => ApFrqAnswerState;
-	/** Derived from the chat record's messages (recordedFrqFrom). */
-	recordedFrq: (questionId: string) => boolean;
+	/** How many real answered poses of this question the chat record holds
+	 *  (answeredFrqCountFrom). ap_record_frq compares it with the course's
+	 *  recorded attempts so one answer is graded exactly once. */
+	answeredFrqCount: (questionId: string) => number;
 	/** THE RARELY-NEEDED SET (the practice-tools idiom): the research job,
 	 *  injected by the composition root. Absent (tests, wiring bugs) = absent
 	 *  from the registry. */
@@ -298,27 +300,38 @@ function lastAnswer(messages: readonly LhMessage[], questionId: string): {
 	return call === undefined ? null : { call, result: frqResult(messages, call.toolCallId) };
 }
 
+/** True only for the learner's real free-response answer result: its details
+ *  carry `kind: "frq"` and it is not a dismissal. A refused pose and other
+ *  tools' results never count. */
+function realFrqAnswer(details: unknown): boolean {
+	return (
+		typeof details === "object" &&
+		details !== null &&
+		(details as { kind?: unknown }).kind === "frq" &&
+		!isDismissed(details)
+	);
+}
+
+/** How many ap_frq poses of this question in this chat carry a real,
+ *  non-dismissed answer. Every answered pose counts, so a later refusal or
+ *  dismissal cannot hide an earlier answer. */
+export function answeredFrqCountFrom(messages: readonly LhMessage[], questionId: string): number {
+	return frqCalls(messages, "ap_frq").filter((call) => {
+		if (call.questionId !== questionId) return false;
+		const result = frqResult(messages, call.toolCallId);
+		return result !== null && !result.isError && realFrqAnswer(result.details);
+	}).length;
+}
+
 /** "answered" | "pending" | "none" for one released question, from the chat
- *  record's native messages. A refused pose and a dismissal pose nothing, so
- *  both read "none". */
+ *  record's native messages. The latest pose decides whether the question is
+ *  pending; otherwise any answered pose in this chat makes it "answered". A
+ *  refused pose and a dismissal pose nothing, so both read "none". */
 export function answeredFrqFrom(messages: readonly LhMessage[], questionId: string): ApFrqAnswerState {
 	const answer = lastAnswer(messages, questionId);
 	if (!answer) return "none";
 	if (!answer.result) return "pending";
-	if (answer.result.isError || isDismissed(answer.result.details)) return "none";
-	return "answered";
-}
-
-/** True once a successful ap_record_frq for this question's answer is in the
- *  record. A refused grading does not count. */
-export function recordedFrqFrom(messages: readonly LhMessage[], questionId: string): boolean {
-	const answer = lastAnswer(messages, questionId);
-	if (!answer?.result || answer.result.isError || isDismissed(answer.result.details)) return false;
-	return frqCalls(messages, "ap_record_frq").some((call) => {
-		if (call.questionId !== questionId || call.messageIndex <= answer.result!.messageIndex) return false;
-		const result = frqResult(messages, call.toolCallId);
-		return result !== null && !result.isError;
-	});
+	return answeredFrqCountFrom(messages, questionId) > 0 ? "answered" : "none";
 }
 
 // ─── ap_save_document ───────────────────────────────────────────────────────
@@ -803,7 +816,7 @@ function apRubricTool(ctx: ApToolContext): AgentTool<typeof apRubricInputObject>
 		parameters: apRubricInputObject,
 		prepareArguments: (args: unknown) => healEncodedArguments(args, apRubricInputObject) as never,
 		executionMode: "sequential",
-		execute: async (_toolCallId, input) => {
+		execute: async (_toolCallId, input, signal) => {
 			if ((input.questionId ?? "").trim().length === 0) {
 				return invalidInputResult("ap_rubric", ["questionId must not be blank"]);
 			}
@@ -829,12 +842,16 @@ function apRubricTool(ctx: ApToolContext): AgentTool<typeof apRubricInputObject>
 			if (!ctx.papers.present(ctx.courseId, paperFile)) {
 				lines.push("", `${paperLabel} is not on this computer — the question's text cannot be read here.`);
 			} else {
+				// The page extraction runs under the same serverExecute guard as
+				// the registry's pdf_extract (30s timeout + abort cascade). A
+				// timeout or unreadable paper falls through to the one honest
+				// line; the rubric itself is still returned.
+				const extract = serverExecute("ap_rubric", apRubricInputObject, async () =>
+					pdfExtract(path.join(ctx.papers.dir(ctx.courseId), paperFile), question.pages.join(",")),
+				);
 				try {
-					const extracted = await pdfExtract(
-						path.join(ctx.papers.dir(ctx.courseId), paperFile),
-						question.pages.join(","),
-					);
-					lines.push("", extracted.trim());
+					const extracted = await extract("ap_rubric_page", { questionId: input.questionId }, signal);
+					lines.push("", (extracted.content[0] as { text: string }).text.trim());
 				} catch {
 					lines.push(
 						"",
@@ -913,23 +930,26 @@ const apRecordFrqInputObject = Type.Object({
 		Type.Boolean({
 			description:
 				'Set true when the learner said "I don\'t know" instead of attempting the question; every part ' +
-				"then scores zero and every tagged topic is recorded as dontKnow.",
+				"then scores zero and every tagged topic is recorded as dontKnow. Omit `parts` in that case.",
 		}),
 	),
-	parts: Type.Array(
-		Type.Object({
-			label: Type.String({ description: "REQUIRED — one part label from ap_rubric, e.g. \"a\"." }),
-			earned: Type.Array(Type.String(), {
-				description:
-					"REQUIRED — the ids of the rubric points this part earned, exactly as ap_rubric lists them " +
-					"(empty when none). An omitted part is refused.",
+	parts: Type.Optional(
+		Type.Array(
+			Type.Object({
+				label: Type.String({ description: "REQUIRED — one part label from ap_rubric, e.g. \"a\"." }),
+				earned: Type.Array(Type.String(), {
+					description:
+						"REQUIRED — the ids of the rubric points this part earned, exactly as ap_rubric lists them " +
+						"(empty when none). An omitted part is refused.",
+				}),
 			}),
-		}),
-		{
-			description:
-				"REQUIRED — the grading for EVERY part of the question, point by point against the official rubric. " +
-				"A right answer reached by flawed reasoning earns no point.",
-		},
+			{
+				description:
+					"The grading for EVERY part of the question, point by point against the official rubric. " +
+					"Required unless dontKnow is true; when given with dontKnow it is still validated. A right " +
+					"answer reached by flawed reasoning earns no point.",
+			},
+		),
 	),
 });
 
@@ -939,7 +959,8 @@ function apRecordFrqTool(ctx: ApToolContext): AgentTool<typeof apRecordFrqInputO
 		label: "ap_record_frq",
 		description:
 			"Record the learner's graded free-response answer point by point against the official rubric, once per " +
-			"answer, after ap_rubric. Pass every part with the rubric point ids it earned (or dontKnow). Validates " +
+			"answer, after ap_rubric. Pass every part with the rubric point ids it earned, or dontKnow alone to " +
+			"score every part zero. When parts are given with dontKnow they are still validated. Validates " +
 			"the grading with the shared attemptProblems rule, folds each tagged topic to correct/wrong/dontKnow in " +
 			"the course record, and returns the score card details for the UI: question id and title, earned/total, " +
 			"and one row per part with its outcome (earned, missed, or not counted when the part has no listed " +
@@ -956,14 +977,21 @@ function apRecordFrqTool(ctx: ApToolContext): AgentTool<typeof apRecordFrqInputO
 					"the learner has not answered this question in this session — ask it first",
 				]);
 			}
-			if (ctx.recordedFrq(input.questionId)) {
-				return invalidInputResult("ap_record_frq", [
-					"the learner's answer to this question is already recorded",
-				]);
-			}
+			// THE ONCE-PER-ANSWER GATE: the course file is re-read here (the
+			// port re-reads it in production), so a grading recorded earlier in
+			// this same turn is already visible. Each real answered pose of the
+			// question earns exactly one recording.
 			const course = ctx.courses.get(ctx.courseId);
 			if (!course) {
 				return invalidInputResult("ap_record_frq", [`course "${ctx.courseId}" was not found`]);
+			}
+			const recorded = (course.realAttempts ?? []).filter(
+				(attempt) => attempt.questionId === input.questionId && attempt.chatId === ctx.chatId,
+			).length;
+			if (recorded >= ctx.answeredFrqCount(input.questionId)) {
+				return invalidInputResult("ap_record_frq", [
+					"the learner's answer to this question is already recorded",
+				]);
 			}
 			const index = ctx.index.get(ctx.courseId);
 			const question = index?.questions.find((candidate) => candidate.id === input.questionId);
@@ -972,8 +1000,13 @@ function apRecordFrqTool(ctx: ApToolContext): AgentTool<typeof apRecordFrqInputO
 					`question "${input.questionId}" is not in the question index — use an id from ap_progress`,
 				]);
 			}
-			const problems = attemptProblems(question, input.parts);
-			if (problems.length > 0) return invalidInputResult("ap_record_frq", problems);
+			const givenParts = input.parts ?? [];
+			// A dontKnow grading may omit parts; parts that ARE given are
+			// validated exactly as when attempting the question.
+			if (!input.dontKnow || givenParts.length > 0) {
+				const problems = attemptProblems(question, givenParts);
+				if (problems.length > 0) return invalidInputResult("ap_record_frq", problems);
+			}
 
 			const knownTopicIds = new Set(
 				course.sections.flatMap((unit) => unit.points.map((topic) => topic.id)),
@@ -983,7 +1016,9 @@ function apRecordFrqTool(ctx: ApToolContext): AgentTool<typeof apRecordFrqInputO
 				chatId: ctx.chatId,
 				at: new Date().toISOString(),
 				...(input.dontKnow ? { dontKnow: true } : {}),
-				parts: input.parts.map((part) => ({ label: part.label, earned: [...part.earned] })),
+				parts: input.dontKnow
+					? question.parts.map((part) => ({ label: part.label, earned: [] }))
+					: givenParts.map((part) => ({ label: part.label, earned: [...part.earned] })),
 			};
 			const score = scoreAttempt(question, attempt, knownTopicIds);
 			let updated: ApCourseRecord;
@@ -1053,7 +1088,7 @@ function apRetagPartTool(ctx: ApToolContext): AgentTool<typeof apRetagPartInputO
 		description:
 			"Correct one part's topic tag in the synced released-question index, at the learner's request: pass the " +
 			"confirmed topic id it really tests, or \"\" to remove the tag. Allowed in any AP session (setup or " +
-			"sitting), but not while a question is on screen — wait for the answer first. Refused for a topic id " +
+			"sitting), but not while THAT question is on screen — wait for its answer first. Refused for a topic id " +
 			"not in the confirmed list and for an unknown question or part.",
 		parameters: apRetagPartInputObject,
 		prepareArguments: (args: unknown) => healEncodedArguments(args, apRetagPartInputObject) as never,
@@ -1228,6 +1263,52 @@ export function capPdfExtract(
 	};
 }
 
+// ─── the scoring-guideline gate on the three pdf readers ────────────────────
+
+/**
+ * During a sitting, refuse to open a course document of kind "scoring" until
+ * the learner has answered a question that document scores. The target is
+ * identified from the course record's documents by file name (never from the
+ * filename pattern alone); a file that is not one of the course's documents,
+ * and every setup session, behaves exactly as before. The wrapped tool's
+ * name, schema and description are unchanged.
+ */
+export const AP_SCORING_GUIDELINE_REFUSAL =
+	"The scoring guideline can be read only after the learner has answered a question it scores.";
+
+export function gateScoringGuideline(
+	tool: AgentTool<any>,
+	ctx: ApToolContext,
+	toolName: string,
+): AgentTool<any> {
+	return {
+		...tool,
+		execute: async (toolCallId, input, signal, onUpdate) => {
+			const params = input as { path?: unknown } | null;
+			const filePath = typeof params?.path === "string" ? params.path : null;
+			if (ctx.sitting && filePath !== null) {
+				const dir = ctx.papers.dir(ctx.courseId);
+				const target = path.resolve(dir, filePath);
+				const course = ctx.courses.get(ctx.courseId);
+				const document = course?.documents.find(
+					(candidate) =>
+						candidate.kind === "scoring" &&
+						(candidate.file === filePath || path.resolve(dir, candidate.file) === target),
+				);
+				if (document) {
+					const index = ctx.index.get(ctx.courseId);
+					const answered = (index?.questions ?? []).some(
+						(question) =>
+							question.scoringId === document.id && ctx.answeredFrq(question.id) === "answered",
+					);
+					if (!answered) return invalidInputResult(toolName, [AP_SCORING_GUIDELINE_REFUSAL]);
+				}
+			}
+			return tool.execute(toolCallId, input, signal, onUpdate);
+		},
+	};
+}
+
 // ─── the registry ───────────────────────────────────────────────────────────
 
 /** The AP tutor's whole registry. The three pdf readers are scoped to the
@@ -1241,9 +1322,9 @@ export function apTools(ctx: ApToolContext, enabled?: EnabledTools): Record<stri
 	// (the practice/teacher/test-prep convention).
 	return healToolRecord({
 		ap_save_document: apSaveDocumentTool(ctx),
-		pdf_info: pdfTools.pdf_info!,
-		pdf_extract: capPdfExtract(pdfTools.pdf_extract!, papersDir),
-		pdf_search: pdfTools.pdf_search!,
+		pdf_info: gateScoringGuideline(pdfTools.pdf_info!, ctx, "pdf_info"),
+		pdf_extract: gateScoringGuideline(capPdfExtract(pdfTools.pdf_extract!, papersDir), ctx, "pdf_extract"),
+		pdf_search: gateScoringGuideline(pdfTools.pdf_search!, ctx, "pdf_search"),
 		propose_units: proposeUnitsTool(ctx),
 		ap_progress: apProgressTool(ctx),
 		ap_mcq: apMcqTool(ctx),

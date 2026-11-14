@@ -1,7 +1,7 @@
 /**
  * AP FREE-RESPONSE TOOLS (AP prep stage 2, Task 7): ap_frq, ap_rubric,
  * ap_view_photo, ap_record_frq and ap_retag_part, plus ap_progress's real-
- * question block and the record derivations answeredFrq / recordedFrq.
+ * question block and the record derivations answeredFrq / answeredFrqCount.
  *
  * Hermetic: fakes stand in for the course store, the index store and the
  * papers folder; real tiny PDFs stand in for the released paper (the rubric's
@@ -27,9 +27,9 @@ import type { ApQuestionIndex, ApRealAttempt, ApRealQuestion } from "../src/core
 import type { LhMessage } from "../src/core/native-messages.ts";
 import {
 	apTools,
+	answeredFrqCountFrom,
 	answeredFrqFrom,
 	createApViewPhotoTool,
-	recordedFrqFrom,
 	type ApAttemptsPort,
 	type ApCourseStorePort,
 	type ApIndexPort,
@@ -57,6 +57,7 @@ function writePaper(file: string, text = PAGE_TEXT): void {
 }
 writePaper("frq-2023.pdf");
 writePaper("scoring-2023.pdf");
+writePaper("ced.pdf", "The course and exam description.");
 
 function frqDoc(year = 2023): ApDocument {
 	return {
@@ -210,9 +211,19 @@ function fakeIndex(initial: ApQuestionIndex | null, options: { retagError?: stri
 	return { port, retags, current: () => current };
 }
 
-function fakeCourses(initial: ApCourseRecord) {
+interface RecordedAttempt {
+	courseId: string;
+	attempt: ApRealAttempt;
+	topics: Array<{ topicId: string; result: AnswerResult }>;
+}
+
+/** The course store and the attempt port share ONE current record — exactly
+ *  like production, where ap_record_frq re-reads the course file after the
+ *  attempt store wrote it. */
+function fakeCourseStores(initial: ApCourseRecord) {
 	let current = initial;
-	const port: ApCourseStorePort = {
+	const records: RecordedAttempt[] = [];
+	const courses: ApCourseStorePort = {
 		get: (id) => (current.id === id ? current : null),
 		savePlan: () => {
 			throw new Error("savePlan is not expected");
@@ -224,19 +235,7 @@ function fakeCourses(initial: ApCourseRecord) {
 			throw new Error("putDocument is not expected");
 		},
 	};
-	return { port, current: () => current };
-}
-
-interface RecordedAttempt {
-	courseId: string;
-	attempt: ApRealAttempt;
-	topics: Array<{ topicId: string; result: AnswerResult }>;
-}
-
-function fakeAttempts(initial: ApCourseRecord) {
-	let current = initial;
-	const records: RecordedAttempt[] = [];
-	const port: ApAttemptsPort = {
+	const attempts: ApAttemptsPort = {
 		record: (courseId, attempt, topics) => {
 			records.push({ courseId, attempt, topics });
 			current = {
@@ -253,7 +252,7 @@ function fakeAttempts(initial: ApCourseRecord) {
 			return current;
 		},
 	};
-	return { port, records, current: () => current };
+	return { courses, attempts, records, current: () => current };
 }
 
 function fakePapers(options: { absent?: string[] } = {}) {
@@ -283,29 +282,41 @@ interface HarnessOptions {
 	absent?: string[];
 	retagError?: string;
 	answered?: (questionId: string) => AnswerState;
-	recorded?: (questionId: string) => boolean;
+	/** How many real answered poses the record holds; defaults to one when
+	 *  `answered` says answered. */
+	answeredCount?: (questionId: string) => number;
 }
 
 function harness(options: HarnessOptions = {}) {
 	const course = options.course ?? courseOf();
-	const courses = fakeCourses(course);
+	const stores = fakeCourseStores(course);
 	const papers = fakePapers(options.absent === undefined ? {} : { absent: options.absent });
 	const index = fakeIndex(options.index === undefined ? indexOf(questionOf()) : options.index, {
 		...(options.retagError === undefined ? {} : { retagError: options.retagError }),
 	});
-	const attempts = fakeAttempts(course);
+	const answered = options.answered ?? (() => "none");
+	const answeredCount =
+		options.answeredCount ?? ((questionId: string) => (answered(questionId) === "answered" ? 1 : 0));
 	const ctx: ApToolContext = {
 		chatId: "chat_now",
 		courseId: course.id,
-		courses: courses.port,
+		courses: stores.courses,
 		papers: papers.port,
 		index: index.port,
-		attempts: attempts.port,
-		answeredFrq: options.answered ?? (() => "none"),
-		recordedFrq: options.recorded ?? (() => false),
+		attempts: stores.attempts,
+		answeredFrq: answered,
+		answeredFrqCount: answeredCount,
 		...(options.sitting === undefined ? {} : { sitting: options.sitting }),
 	};
-	return { ctx, course, courses, papers, index, attempts, tools: apTools(ctx) };
+	return {
+		ctx,
+		course,
+		courses: stores.courses,
+		papers,
+		index,
+		attempts: { records: stores.records, current: stores.current },
+		tools: apTools(ctx),
+	};
 }
 
 function problemsOf(result: { details: unknown }): string[] {
@@ -336,26 +347,36 @@ function toolResult(id: string, name: string, details: unknown, isError = false)
 	} as unknown as LhMessage;
 }
 
-describe("answeredFrqFrom and recordedFrqFrom", () => {
-	it("reports none when no ap_frq call names the question", () => {
+describe("answeredFrqFrom and answeredFrqCountFrom", () => {
+	const answer = (id: string, questionId = "2023-1") => [
+		assistantCall(id, "ap_frq", { questionId }),
+		toolResult(id, "ap_frq", { kind: "frq", questionId, parts: [] }),
+	];
+
+	it("reports none and counts nothing when no ap_frq call names the question", () => {
 		assert.equal(answeredFrqFrom([], "2023-1"), "none");
 		const other = [assistantCall("c1", "ap_frq", { questionId: "2023-2" })];
 		assert.equal(answeredFrqFrom(other, "2023-1"), "none");
-		assert.equal(recordedFrqFrom(other, "2023-1"), false);
+		assert.equal(answeredFrqCountFrom(other, "2023-1"), 0);
 	});
 
 	it("reports pending for a posed question with no answer result", () => {
 		const messages = [assistantCall("c1", "ap_frq", { questionId: "2023-1" })];
 		assert.equal(answeredFrqFrom(messages, "2023-1"), "pending");
-		assert.equal(recordedFrqFrom(messages, "2023-1"), false);
+		assert.equal(answeredFrqCountFrom(messages, "2023-1"), 0);
 	});
 
-	it("reports answered for a non-dismissed answer result", () => {
-		const messages = [
-			assistantCall("c1", "ap_frq", { questionId: "2023-1" }),
-			toolResult("c1", "ap_frq", { kind: "frq", questionId: "2023-1", parts: [] }),
-		];
-		assert.equal(answeredFrqFrom(messages, "2023-1"), "answered");
+	it("reports answered for a real free-response answer result", () => {
+		assert.equal(answeredFrqFrom(answer("c1"), "2023-1"), "answered");
+		assert.equal(answeredFrqCountFrom(answer("c1"), "2023-1"), 1);
+	});
+
+	it("does not count a non-free-response result or the question placeholder", () => {
+		for (const details of [{ kind: "quiz" }, { kind: "ask" }, {}, null]) {
+			const messages = [assistantCall("c1", "ap_frq", { questionId: "2023-1" }), toolResult("c1", "ap_frq", details)];
+			assert.equal(answeredFrqFrom(messages, "2023-1"), "none", JSON.stringify(details));
+			assert.equal(answeredFrqCountFrom(messages, "2023-1"), 0, JSON.stringify(details));
+		}
 	});
 
 	it("treats a dismissed question as none", () => {
@@ -364,33 +385,33 @@ describe("answeredFrqFrom and recordedFrqFrom", () => {
 			toolResult("c1", "ap_frq", { kind: "frq", dismissed: true }),
 		];
 		assert.equal(answeredFrqFrom(messages, "2023-1"), "none");
-		assert.equal(recordedFrqFrom(messages, "2023-1"), false);
+		assert.equal(answeredFrqCountFrom(messages, "2023-1"), 0);
 	});
 
-	it("reports recorded only after a successful ap_record_frq for that answer", () => {
-		const answer = [
-			assistantCall("c1", "ap_frq", { questionId: "2023-1" }),
-			toolResult("c1", "ap_frq", { kind: "frq", questionId: "2023-1", parts: [] }),
-		];
-		assert.equal(recordedFrqFrom(answer, "2023-1"), false);
-		const recorded = [
-			...answer,
-			assistantCall("c2", "ap_record_frq", { questionId: "2023-1", parts: [] }),
-			toolResult("c2", "ap_record_frq", { questionId: "2023-1" }),
-		];
-		assert.equal(recordedFrqFrom(recorded, "2023-1"), true);
-		const failed = [
-			...answer,
-			assistantCall("c2", "ap_record_frq", { questionId: "2023-1", parts: [] }),
-			toolResult("c2", "ap_record_frq", { tool: "ap_record_frq", problems: ["part \"b\" is missing"] }, true),
-		];
-		assert.equal(recordedFrqFrom(failed, "2023-1"), false);
-		const otherQuestion = [
-			...answer,
-			assistantCall("c2", "ap_record_frq", { questionId: "2023-2", parts: [] }),
-			toolResult("c2", "ap_record_frq", { questionId: "2023-2" }),
-		];
-		assert.equal(recordedFrqFrom(otherQuestion, "2023-1"), false);
+	it("counts every answered pose of the question", () => {
+		const messages = [...answer("c1"), ...answer("c2")];
+		assert.equal(answeredFrqCountFrom(messages, "2023-1"), 2);
+	});
+
+	it("keeps an earlier answered pose when a later re-pose is dismissed or errors", () => {
+		for (const result of [
+			{ details: { kind: "frq", dismissed: true }, isError: false },
+			{ details: { tool: "ap_frq", problems: ["refused"] }, isError: true },
+		]) {
+			const messages = [
+				...answer("c1"),
+				assistantCall("c2", "ap_frq", { questionId: "2023-1" }),
+				toolResult("c2", "ap_frq", result.details, result.isError),
+			];
+			assert.equal(answeredFrqFrom(messages, "2023-1"), "answered");
+			assert.equal(answeredFrqCountFrom(messages, "2023-1"), 1);
+		}
+	});
+
+	it("reports pending for a re-pose with no result yet", () => {
+		const messages = [...answer("c1"), assistantCall("c2", "ap_frq", { questionId: "2023-1" })];
+		assert.equal(answeredFrqFrom(messages, "2023-1"), "pending");
+		assert.equal(answeredFrqCountFrom(messages, "2023-1"), 1);
 	});
 });
 
@@ -677,15 +698,38 @@ describe("ap_record_frq", () => {
 		assert.equal(h.attempts.records.length, 0);
 	});
 
-	it("REFUSES a second record for the same answer", async () => {
-		const h = harness({ sitting: FRQ, answered: ANSWERED, recorded: () => true });
-		const result = await h.tools.ap_record_frq!.execute("call_g", {
+	it("records one answered pose exactly once — a second call back to back is refused", async () => {
+		const h = harness({ sitting: FRQ, answered: ANSWERED });
+		const grading = {
 			questionId: "2023-1",
-			parts: [],
-		} as never);
-		assert.equal(result.isError, true);
-		assert.deepEqual(problemsOf(result), ["the learner's answer to this question is already recorded"]);
-		assert.equal(h.attempts.records.length, 0);
+			parts: [
+				{ label: "a", earned: ["a1", "a2"] },
+				{ label: "b", earned: ["b1"] },
+			],
+		};
+		const first = await h.tools.ap_record_frq!.execute("call_g", grading as never);
+		assert.equal(first.isError, undefined);
+		assert.equal(h.attempts.records.length, 1);
+
+		const second = await h.tools.ap_record_frq!.execute("call_g", grading as never);
+		assert.equal(second.isError, true);
+		assert.deepEqual(problemsOf(second), ["the learner's answer to this question is already recorded"]);
+		assert.equal(h.attempts.records.length, 1, "the refused second call writes nothing");
+		assert.equal(h.attempts.current().realAttempts?.length, 1);
+	});
+
+	it("allows one recording per answered pose of a re-posed question", async () => {
+		const h = harness({ sitting: FRQ, answered: ANSWERED, answeredCount: () => 2 });
+		const grading = {
+			questionId: "2023-1",
+			parts: [
+				{ label: "a", earned: ["a1", "a2"] },
+				{ label: "b", earned: ["b1"] },
+			],
+		};
+		assert.equal((await h.tools.ap_record_frq!.execute("call_g1", grading as never)).isError, undefined);
+		assert.equal((await h.tools.ap_record_frq!.execute("call_g2", grading as never)).isError, undefined);
+		assert.equal(h.attempts.records.length, 2);
 	});
 
 	it("REFUSES an invalid grading with the shared attemptProblems messages", async () => {
@@ -845,6 +889,44 @@ describe("ap_record_frq", () => {
 		assert.equal(details.earned, 0);
 		assert.equal(details.total, 3);
 	});
+
+	it("fills every part itself when the learner did not know and parts are omitted", async () => {
+		const h = harness({ sitting: FRQ, answered: ANSWERED });
+		const result = await h.tools.ap_record_frq!.execute("call_g", {
+			questionId: "2023-1",
+			dontKnow: true,
+		} as never);
+		assert.equal(result.isError, undefined);
+		const recorded = h.attempts.records[0]!;
+		assert.equal(recorded.attempt.dontKnow, true);
+		assert.deepEqual(recorded.attempt.parts, [
+			{ label: "a", earned: [] },
+			{ label: "b", earned: [] },
+		]);
+		assert.deepEqual(recorded.topics, [
+			{ topicId: "t_limits", result: "dontKnow" },
+			{ topicId: "t_deriv", result: "dontKnow" },
+		]);
+		const details = result.details as { earned: number; total: number; parts: Array<{ outcome: string }> };
+		assert.equal(details.earned, 0);
+		assert.equal(details.total, 3);
+		assert.deepEqual(details.parts.map((part) => part.outcome), ["missed", "missed"]);
+	});
+
+	it("still validates given parts when the learner did not know", async () => {
+		const h = harness({ sitting: FRQ, answered: ANSWERED });
+		const result = await h.tools.ap_record_frq!.execute("call_g", {
+			questionId: "2023-1",
+			dontKnow: true,
+			parts: [{ label: "a", earned: ["a9"] }],
+		} as never);
+		assert.equal(result.isError, true);
+		assert.deepEqual(problemsOf(result), [
+			'point "a9" is not a rubric point of part "a"',
+			'part "b" is missing',
+		]);
+		assert.equal(h.attempts.records.length, 0);
+	});
 });
 
 // ── ap_retag_part ───────────────────────────────────────────────────────────
@@ -977,5 +1059,91 @@ describe("ap_progress — released questions", () => {
 		const h = harness({ sitting: MCQ, index: indexOf(questionOf()) });
 		const result = await h.tools.ap_progress!.execute("call_p", {} as never);
 		assert.doesNotMatch((result.content[0] as { text: string }).text, /Real questions:/);
+	});
+});
+
+// ── the scoring-guideline gate on the AP pdf tools ──────────────────────────
+
+describe("the scoring-guideline gate on the AP pdf tools", () => {
+	const REFUSAL = "The scoring guideline can be read only after the learner has answered a question it scores.";
+
+	type PdfToolName = "pdf_info" | "pdf_extract" | "pdf_search";
+	const PDF_TOOLS: PdfToolName[] = ["pdf_info", "pdf_extract", "pdf_search"];
+
+	function inputFor(tool: PdfToolName, file: string) {
+		return tool === "pdf_info"
+			? { path: file }
+			: tool === "pdf_extract"
+				? { path: file, pages: "1" }
+				: { path: file, query: "Evaluate" };
+	}
+
+	it("REFUSES all three tools on a scoring guideline during a sitting before an answer", async () => {
+		for (const name of PDF_TOOLS) {
+			const h = harness({ sitting: FRQ });
+			const result = await h.tools[name]!.execute("call_pdf", inputFor(name, "scoring-2023.pdf") as never);
+			assert.equal(result.isError, true, name);
+			assert.deepEqual(problemsOf(result), [REFUSAL], name);
+		}
+	});
+
+	it("allows all three after a question the guideline scores is answered", async () => {
+		for (const name of PDF_TOOLS) {
+			const h = harness({ sitting: FRQ, answered: () => "answered" });
+			const result = await h.tools[name]!.execute("call_pdf", inputFor(name, "scoring-2023.pdf") as never);
+			assert.equal(result.isError, undefined, name);
+			assert.doesNotMatch(JSON.stringify(result.content), /only after the learner/, name);
+		}
+	});
+
+	it("allows all three in a setup session", async () => {
+		for (const name of PDF_TOOLS) {
+			const h = harness();
+			const result = await h.tools[name]!.execute("call_pdf", inputFor(name, "scoring-2023.pdf") as never);
+			assert.equal(result.isError, undefined, name);
+			assert.doesNotMatch(JSON.stringify(result.content), /only after the learner/, name);
+		}
+	});
+
+	it("does not gate a released paper or the course description", async () => {
+		const course = courseOf({ documents: [CED, frqDoc(), scoringDoc()] });
+		for (const file of ["frq-2023.pdf", "ced.pdf"]) {
+			for (const name of PDF_TOOLS) {
+				const h = harness({ course, sitting: FRQ });
+				const result = await h.tools[name]!.execute("call_pdf", inputFor(name, file) as never);
+				assert.equal(result.isError, undefined, `${name} ${file}`);
+			}
+		}
+	});
+
+	it("composes with the 15-page cap on pdf_extract", async () => {
+		fs.writeFileSync(
+			path.join(PAPERS_DIR, "scoring-2024.pdf"),
+			tinyPdf(Array.from({ length: 16 }, (_, index) => ({ runs: [{ text: `Page ${index + 1}`, x: 36, y: 720 }] }))),
+		);
+		const scoring: ApDocument = {
+			id: "scoring-2024",
+			kind: "scoring",
+			label: "2024 Scoring",
+			year: 2024,
+			url: "",
+			file: "scoring-2024.pdf",
+			pages: 16,
+		};
+		const course = courseOf({ documents: [frqDoc(), scoringDoc(), scoring] });
+		const h = harness({
+			course,
+			sitting: FRQ,
+			answered: () => "answered",
+			index: indexOf(questionOf({ id: "2024-1", scoringId: "scoring-2024" })),
+		});
+		const result = await h.tools.pdf_extract!.execute("call_pdf", {
+			path: "scoring-2024.pdf",
+			pages: "all",
+		} as never);
+		assert.equal(result.isError, true);
+		assert.deepEqual(problemsOf(result), [
+			"Read at most 15 pages of the course description per call; ask for a specific page range.",
+		]);
 	});
 });
