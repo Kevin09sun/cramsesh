@@ -12,16 +12,38 @@
  * tests/ap-question-ui.test.tsx).
  */
 
-import React from "react";
+import React, { act } from "react";
 (globalThis as Record<string, unknown>).React = React;
 
 import assert from "node:assert/strict";
 import { after, describe, it } from "node:test";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
+import { parseHTML } from "linkedom";
 import { AnsweredCard } from "../components/answered-card.tsx";
 import { QuestionDock } from "../components/question-dock.tsx";
-import { FrqQuestionForm, frqFormDraft, type ApFrqQuestionView } from "../components/ap/frq-question.tsx";
+import {
+	FrqQuestion,
+	FrqQuestionBody,
+	FrqQuestionForm,
+	frqAnswerRequest,
+	frqFormDraft,
+	type ApFrqQuestionView,
+} from "../components/ap/frq-question.tsx";
 import type { QuestionAnswerData, QuestionFormDraft } from "../src/core/index.ts";
+
+// linkedom gives createRoot a document for the one test that mounts the
+// fetch container; the server-render tests never touch it (the chatgpt-ui
+// shim).
+const dom = parseHTML("<html><body></body></html>");
+Object.assign(globalThis, {
+	window: dom.window,
+	document: dom.document,
+	Element: dom.window.Element,
+	HTMLElement: dom.window.HTMLElement,
+	CustomEvent: dom.window.CustomEvent,
+	IS_REACT_ACT_ENVIRONMENT: true,
+});
 
 const question: ApFrqQuestionView = {
 	id: "2023-2",
@@ -95,6 +117,13 @@ describe("AP: the live ap_frq dock", () => {
 		assert.ok(!html.includes('data-testid="confidence-slider"'), "no confidence slider on a free-response question");
 	});
 
+	it("names each answer box with its part label and, when known, its topic", () => {
+		const html = renderForm();
+		assert.match(html, /aria-label="\(a\) 1\.1 Average rates of change"/);
+		assert.match(html, /aria-label="\(b\)"/);
+		assert.match(html, /aria-label="\(c-i\)"/);
+	});
+
 	it("loads the original page images in order, from the course's page route", () => {
 		const html = renderForm();
 		assert.match(html, /src="\/api\/ap\/ap_1\/pages\/frq-2023\.pdf\/5"/);
@@ -150,12 +179,92 @@ describe("AP: the live ap_frq dock", () => {
 		);
 	});
 
+	it("builds the answer request with every part in route order and the fetched question block", () => {
+		const req = frqAnswerRequest(question, {
+			parts: { "c-i": "third", a: "first" },
+			photos: ["C:\\work\\page.png"],
+			dontKnow: false,
+		});
+		assert.deepEqual(req.parts, [
+			{ label: "a", text: "first" },
+			{ label: "b", text: "" },
+			{ label: "c-i", text: "third" },
+		]);
+		assert.equal(req.frq?.questionId, question.id, "the block's id is the fetched question's id");
+		assert.deepEqual(req.frq, {
+			questionId: "2023-2",
+			title: "2023 FRQ 2",
+			file: "frq-2023.pdf",
+			pages: [5, 6],
+		});
+		assert.deepEqual(req.photos, ["C:\\work\\page.png"]);
+		assert.equal(req.dontKnow, false);
+	});
+
 	it("says the paper is absent, links to the course page and disables Submit", () => {
 		const html = renderForm({ question: { ...question, present: false } });
 		assert.ok(html.includes("This paper is not on this computer. Download it from the course page."));
 		assert.match(html, /href="\/ap\/ap_1"/);
 		assert.match(html, /<button[^>]*type="submit"[^>]*disabled=""/);
 		assert.ok(!html.includes("/pages/frq-2023.pdf/"), "no page image is requested for an absent paper");
+	});
+
+	it("carries the course id across the fetch boundary into the pages and the absent-paper link", () => {
+		const ready = renderToStaticMarkup(
+			<FrqQuestionBody
+				state={{ status: "ready", question }}
+				toolCallId="frq1"
+				apCourseId="ap_1"
+				details={details}
+				onSubmit={() => {}}
+			/>,
+		);
+		assert.match(ready, /src="\/api\/ap\/ap_1\/pages\/frq-2023\.pdf\/5"/);
+		assert.ok(!ready.includes("/api/ap//pages/"), "the page route never gets an empty course id");
+
+		const absent = renderToStaticMarkup(
+			<FrqQuestionBody
+				state={{ status: "ready", question: { ...question, present: false } }}
+				toolCallId="frq1"
+				apCourseId="ap_1"
+				details={details}
+				onSubmit={() => {}}
+			/>,
+		);
+		assert.match(absent, /href="\/ap\/ap_1"/);
+	});
+
+	it("mounts the fetch container so the loaded question keeps the course id", async () => {
+		const host = document.createElement("div");
+		document.body.append(host);
+		const root = createRoot(host);
+		const stubbed = globalThis.fetch;
+		globalThis.fetch = (async () =>
+			({ ok: true, json: async () => question }) as Response) as typeof fetch;
+		try {
+			await act(async () => {
+				root.render(
+					<FrqQuestion
+						questionId="2023-2"
+						apCourseId="ap_1"
+						toolCallId="frq1"
+						details={details}
+						onSubmit={() => {}}
+					/>,
+				);
+			});
+			assert.match(host.textContent ?? "", /2023 FRQ 2/, "the fetched question is posed");
+			assert.equal(
+				host.querySelector("img")?.getAttribute("src"),
+				"/api/ap/ap_1/pages/frq-2023.pdf/5",
+				"the course id reaches the page images",
+			);
+			assert.ok(!(host.innerHTML ?? "").includes("/api/ap//pages/"), "never an empty course id");
+		} finally {
+			globalThis.fetch = stubbed;
+			await act(async () => root.unmount());
+			host.remove();
+		}
 	});
 
 	it("is delegated to by the dock: loading state and AP · released", () => {
@@ -189,6 +298,7 @@ describe("AP: the live ap_frq dock", () => {
 		);
 		assert.ok(html.includes('data-testid="question-dock-bar"'), "the collapsed bar renders");
 		assert.match(html, /data-testid="question-dock-bar"[\s\S]*?AP · released/);
+		assert.match(html, /data-testid="question-dock-bar"[\s\S]*?Free-response question/);
 	});
 });
 

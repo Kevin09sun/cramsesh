@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { ConfidenceRail } from "@/components/confidence-rail";
+import { photoName } from "@/components/ap/photo-name";
 import { QuestionPages } from "@/components/ap/question-pages";
 import { GlyphMark } from "@/components/ui/glyph-mark";
 import { ThinkingBlock } from "@/components/thinking-block";
@@ -268,11 +269,6 @@ export function AnsweredCard({
 		</div>
 		</>
 	);
-}
-
-function photoName(path: string): string {
-	const pieces = path.split(/[\\/]/);
-	return pieces[pieces.length - 1] || path;
 }
 
 /**

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { XIcon } from "lucide-react";
 
+import { photoName } from "@/components/ap/photo-name";
 import { QuestionPages } from "@/components/ap/question-pages";
 import {
 	FilePickerBusy,
@@ -96,47 +97,48 @@ function readFrqDraft(draft?: QuestionFormDraft): FrqDraftState {
 	return { parts, photos, dontKnow: draft.selection.dontKnow === true };
 }
 
-function photoName(path: string): string {
-	const pieces = path.split(/[\\/]/);
-	return pieces[pieces.length - 1] || path;
+/**
+ * The answer request a submit builds, pure and testable: every part in the
+ * route's order (a blank part stays an empty string), the photos as the
+ * absolute paths the picker returned, and the released-question block taken
+ * from the fetched question — the model's call carries only the id, so the
+ * caller supplies the block the answer record replays the paper page from.
+ */
+export function frqAnswerRequest(
+	question: ApFrqQuestionView,
+	answers: { parts: Record<string, string>; photos: readonly string[]; dontKnow: boolean },
+): AnswerRequest {
+	return {
+		dontKnow: answers.dontKnow,
+		parts: question.parts.map((part) => ({ label: part.label, text: answers.parts[part.label] ?? "" })),
+		photos: [...answers.photos],
+		frq: {
+			questionId: question.id,
+			title: question.title,
+			file: question.file,
+			pages: [...question.pages],
+		},
+	};
 }
 
-/** Fetch the question projection, then pose the form. */
-export function FrqQuestion({
-	questionId,
-	apCourseId,
+/** The fetch state the body renders — exported so tests can pose a ready question. */
+export type FrqQuestionFetchState =
+	| { status: "loading" }
+	| { status: "error" }
+	| { status: "ready"; question: ApFrqQuestionView };
+
+/**
+ * The fetch state as UI, separate from the fetch. `FrqQuestion` owns the
+ * request; this piece owns what each state looks like, so a render test can
+ * pose `ready` without a browser. It forwards every form prop, including the
+ * course id the page images and the absent-paper link are built from.
+ */
+export function FrqQuestionBody({
+	state,
 	...form
 }: {
-	questionId: string;
-	apCourseId?: string;
+	state: FrqQuestionFetchState;
 } & Omit<FrqQuestionFormProps, "question">) {
-	const [state, setState] = useState<
-		{ status: "loading" } | { status: "error" } | { status: "ready"; question: ApFrqQuestionView }
-	>({ status: "loading" });
-
-	useEffect(() => {
-		if (!apCourseId) {
-			setState({ status: "error" });
-			return;
-		}
-		let cancelled = false;
-		setState({ status: "loading" });
-		fetch(`/api/ap/${encodeURIComponent(apCourseId)}/questions/${encodeURIComponent(questionId)}`)
-			.then(async (response) => {
-				if (!response.ok) throw new Error(`question request failed: ${response.status}`);
-				return (await response.json()) as ApFrqQuestionView;
-			})
-			.then((question) => {
-				if (!cancelled) setState({ status: "ready", question });
-			})
-			.catch(() => {
-				if (!cancelled) setState({ status: "error" });
-			});
-		return () => {
-			cancelled = true;
-		};
-	}, [apCourseId, questionId]);
-
 	if (state.status === "error") {
 		return (
 			<div data-testid="question-dock" className="px-4 pt-3">
@@ -161,6 +163,46 @@ export function FrqQuestion({
 		);
 	}
 	return <FrqQuestionForm {...form} question={state.question} />;
+}
+
+/** Fetch the question projection, then pose the form. */
+export function FrqQuestion({
+	questionId,
+	apCourseId,
+	...form
+}: {
+	questionId: string;
+	apCourseId?: string;
+} & Omit<FrqQuestionFormProps, "question">) {
+	const [state, setState] = useState<FrqQuestionFetchState>({ status: "loading" });
+
+	useEffect(() => {
+		if (!apCourseId) {
+			setState({ status: "error" });
+			return;
+		}
+		let cancelled = false;
+		setState({ status: "loading" });
+		fetch(`/api/ap/${encodeURIComponent(apCourseId)}/questions/${encodeURIComponent(questionId)}`)
+			.then(async (response) => {
+				if (!response.ok) throw new Error(`question request failed: ${response.status}`);
+				return (await response.json()) as ApFrqQuestionView;
+			})
+			.then((question) => {
+				if (!cancelled) setState({ status: "ready", question });
+			})
+			.catch(() => {
+				if (!cancelled) setState({ status: "error" });
+			});
+		return () => {
+			cancelled = true;
+		};
+	}, [apCourseId, questionId]);
+
+	// `apCourseId` was destructured for the fetch, so the rest spread no
+	// longer carries it: hand it to the body explicitly or the loaded form
+	// builds every page URL (and the absent-paper link) with an empty id.
+	return <FrqQuestionBody state={state} apCourseId={apCourseId} {...form} />;
 }
 
 export interface FrqQuestionFormProps {
@@ -211,6 +253,20 @@ export function FrqQuestionForm({
 		dontKnowRef.current = value;
 		setDontKnowState(value);
 	};
+	// Turning "I don't know" ON disables the part boxes. A live dictation run
+	// must finish — not vanish — before the guard starts ignoring speech, or
+	// its last finals would be lost.
+	const toggleDontKnow = () => {
+		if (dontKnowRef.current) {
+			setDontKnow(false);
+			return;
+		}
+		if (!isDictationActive()) {
+			setDontKnow(true);
+			return;
+		}
+		void finishDictation().then(() => setDontKnow(true));
+	};
 
 	// ONE dictation target per dock: the focused part box (the first by
 	// default). The ref mirror keeps a submit that resumes after
@@ -218,6 +274,9 @@ export function FrqQuestionForm({
 	useDictationTarget(
 		useCallback(
 			(text: string) => {
+				// Disabled boxes take no dictated text; a live run was finished
+				// before the toggle turned this on.
+				if (dontKnowRef.current) return;
 				const label = question.parts[focusedPart.current]?.label;
 				if (label === undefined) return;
 				textsRef.current = {
@@ -272,12 +331,14 @@ export function FrqQuestionForm({
 
 	const doSubmit = () => {
 		if (!question.present || compactionRunning) return;
-		const parts = question.parts.map((part) => ({
-			label: part.label,
-			text: textsRef.current[part.label] ?? "",
-		}));
 		const attached = [...photosRef.current];
-		if (!dontKnowRef.current && attached.length === 0 && !parts.some((part) => part.text.trim().length > 0)) return;
+		const req = frqAnswerRequest(question, {
+			parts: textsRef.current,
+			photos: attached,
+			dontKnow: dontKnowRef.current,
+		});
+		const hasText = (req.parts ?? []).some((part) => part.text.trim().length > 0);
+		if (!req.dontKnow && attached.length === 0 && !hasText) return;
 
 		const qd: QuestionData = {
 			id: toolCallId,
@@ -286,15 +347,6 @@ export function FrqQuestionForm({
 			mode: "text",
 			options: [],
 			createdAt: new Date().toISOString(),
-		};
-		const req: AnswerRequest = {
-			dontKnow: dontKnowRef.current,
-			parts,
-			photos: attached,
-			// The model passes only the id (stage 2 contract): the caller
-			// supplies the released-question block so the answer record can
-			// replay the paper page.
-			frq: { questionId: question.id, title: question.title, file: question.file, pages: [...question.pages] },
 		};
 		// Snapshot before the optimistic submission unmounts the form.
 		onSaveDraft?.(frqFormDraft({ parts: textsRef.current, photos: attached, dontKnow: dontKnowRef.current }));
@@ -357,6 +409,7 @@ export function FrqQuestionForm({
 											}
 										}}
 										allowFilePaths={false}
+										aria-label={part.topicText ? `(${part.label}) ${part.topicText}` : `(${part.label})`}
 										aria-disabled={dontKnow}
 										tabIndex={dontKnow ? -1 : undefined}
 										placeholder="Type your answer…"
@@ -438,7 +491,7 @@ export function FrqQuestionForm({
 				<div className="flex flex-col gap-2 p-1">
 					<button
 						type="button"
-						onClick={() => setDontKnow(!dontKnowRef.current)}
+						onClick={() => toggleDontKnow()}
 						aria-pressed={dontKnow}
 						className={cn(
 							"flex items-start gap-3 rounded-lg border border-dashed px-3 py-2 text-left text-sm outline-none transition-colors",

@@ -179,7 +179,13 @@ export function QuestionDock({
 			{!expanded && (
 				<QuestionDockBar
 					toolName={canonical}
-					question={"question" in parsed ? parsed.question : ""}
+					question={
+						toolName === "ap_frq"
+							? "Free-response question"
+							: "question" in parsed
+								? parsed.question
+								: ""
+					}
 					onExpand={onExpand}
 					variant={reveal ? "reveal" : "collapsed"}
 					toolLabel={toolLabel}
