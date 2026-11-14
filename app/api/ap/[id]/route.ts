@@ -6,11 +6,14 @@
  * extended with its LOCAL presence: `present` is true only when the paper is
  * on this computer, and only then does an absolute `path` ride along. The
  * bytes are never served here — the course page points the reader at the
- * path. An unknown, invalid or unreadable id is a 404. Reads stay unguarded
- * like every other read route.
+ * path. The synced question index adds its summary: the total number of
+ * indexed questions, and for each released paper the questions it
+ * contributed. An unknown, invalid or unreadable id is a 404. Reads stay
+ * unguarded like every other read route.
  */
 
 import { apPaperPath, apPaperPresent, stores } from "@/src/server";
+import type { ApQuestionIndex } from "@/src/core";
 
 export const dynamic = "force-dynamic";
 
@@ -24,6 +27,15 @@ function paperState(courseId: string, file: string): { present: boolean; path?: 
 	}
 }
 
+/** How many indexed questions name each released paper. */
+function questionsByPaper(index: ApQuestionIndex | null): Map<string, number> {
+	const counts = new Map<string, number>();
+	for (const question of index?.questions ?? []) {
+		counts.set(question.paperId, (counts.get(question.paperId) ?? 0) + 1);
+	}
+	return counts;
+}
+
 export async function GET(
 	_request: Request,
 	ctx: { params: Promise<{ id: string }> },
@@ -32,11 +44,15 @@ export async function GET(
 	const record = stores.apCourseStore.get(id);
 	if (!record) return Response.json({ error: "Unknown AP course" }, { status: 404 });
 
+	const index = stores.apIndexStore.get(id);
+	const counts = questionsByPaper(index);
 	return Response.json({
 		...record,
+		indexedQuestions: index?.questions.length ?? 0,
 		documents: record.documents.map((document) => ({
 			...document,
 			...paperState(id, document.file),
+			...(document.kind === "frq" ? { questions: counts.get(document.id) ?? 0 } : {}),
 		})),
 	});
 }

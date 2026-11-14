@@ -10,7 +10,7 @@ import { SidebarToggle } from "@/components/sidebar";
 import { SessionStarter } from "@/components/start-session";
 import { PlanEditor } from "@/components/test-prep/plan-editor";
 import { Button } from "@/components/ui/button";
-import { AP_ADDED_TOPIC_SOURCE, fillAddedTopicSources, quoteFilePath, readiness, readinessPercent } from "@/src/core";
+import { AP_ADDED_TOPIC_SOURCE, apPaperPair, fillAddedTopicSources, quoteFilePath, readiness, readinessPercent } from "@/src/core";
 import type { ApCourseRecord, ApDocument, ApSittingScope, PlanDraftSection, PointStatus } from "@/src/core";
 
 /**
@@ -32,6 +32,13 @@ import type { ApCourseRecord, ApDocument, ApSittingScope, PlanDraftSection, Poin
  * (`learnPrompt`): the course description's absolute local path is the only
  * thing about the paper that enters the session, and only when the paper is
  * on this computer. A missing description is said out loud in the prompt.
+ *
+ * The documents block also reports the synced question index: each released
+ * paper says how many questions it contributed, and a confirmed course offers
+ * "Find released papers", which opens an ordinary AP session whose title IS
+ * the find prompt. A non-zero index enables the free-response and mixed
+ * sittings even when the papers themselves are missing on this computer — the
+ * tutor tells the learner to download them.
  */
 
 const STATUS_LABEL: Record<PointStatus, string> = {
@@ -85,17 +92,57 @@ function errorText(reason: unknown, fallback: string): string {
 	return reason instanceof Error && reason.message !== "" ? reason.message : fallback;
 }
 
-/** One course document with its local presence, as the server page hands it. */
-export type CourseDocument = ApDocument & { present: boolean };
+/** One course document with its local presence and, for a released paper, the
+ *  number of indexed questions that name it, as the server page hands it. */
+export type CourseDocument = ApDocument & { present: boolean; questions?: number };
+
+/** A released paper row's count, in the words the course page uses. */
+function indexedLabel(questions: number | undefined): string {
+	const count = questions ?? 0;
+	return count === 0 ? "not indexed yet" : `${count} question${count === 1 ? "" : "s"} indexed`;
+}
+
+/**
+ * The documents block's light grouping: the course description first, then
+ * released papers and scoring guidelines by year descending and set, each
+ * paper before its scoring guideline. Equal keys keep the manifest order.
+ */
+function groupedDocuments(documents: CourseDocument[]): CourseDocument[] {
+	const order = (document: CourseDocument): { year: number; set: number; kind: number } => {
+		const paper =
+			document.kind === "scoring"
+				? documents.find(
+						(candidate) =>
+							candidate.kind === "frq" && apPaperPair(candidate)?.scoringId === document.id,
+					)
+				: document;
+		return {
+			year: document.year ?? 0,
+			set: paper === undefined ? 0 : (apPaperPair(paper)?.set ?? 0),
+			kind: document.kind === "ced" ? 0 : document.kind === "frq" ? 1 : 2,
+		};
+	};
+	return [...documents].sort((a, b) => {
+		if ((a.kind === "ced") !== (b.kind === "ced")) return a.kind === "ced" ? -1 : 1;
+		const left = order(a);
+		const right = order(b);
+		if (left.year !== right.year) return right.year - left.year;
+		if (left.set !== right.set) return left.set - right.set;
+		return left.kind - right.kind;
+	});
+}
 
 export function CourseView({
 	course: initialCourse,
 	documents: initialDocuments,
+	indexedQuestions,
 	cedPath,
 	navigate,
 }: {
 	course: ApCourseRecord;
 	documents: CourseDocument[];
+	/** How many released questions the course's synced index holds. */
+	indexedQuestions: number;
 	/** The confirmed course description's absolute path, when it is present. */
 	cedPath?: string;
 	/** Where to go after starting a session; production supplies the router. */
@@ -107,6 +154,7 @@ export function CourseView({
 	const [saving, setSaving] = useState(false);
 	const [downloading, setDownloading] = useState(false);
 	const [starting, setStarting] = useState(false);
+	const [finding, setFinding] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [starter] = useState(() => new SessionStarter());
 	const go = navigate ?? ((target: string) => window.location.assign(target));
@@ -190,6 +238,19 @@ export function CourseView({
 			go(await starter.start({ title }, fetch));
 		} catch {
 			setStarting(false);
+			setError(OPENING_PROMPT_FAILURE);
+		}
+	}
+
+	async function findPapers(): Promise<void> {
+		if (finding) return;
+		setFinding(true);
+		setError(null);
+		try {
+			const title = `Find the released free-response papers for ${course.title}.`;
+			go(await starter.start({ title, kind: "ap", apCourseId: course.id }, fetch));
+		} catch {
+			setFinding(false);
 			setError(OPENING_PROMPT_FAILURE);
 		}
 	}
@@ -305,6 +366,7 @@ export function CourseView({
 										<StartSitting
 											course={course}
 											scope={unitScope}
+											indexedQuestions={indexedQuestions}
 											testId={`practise-unit-${section.id}`}
 											navigate={go}
 										/>
@@ -357,6 +419,7 @@ export function CourseView({
 														<StartSitting
 															course={course}
 															scope={{ type: "topic", topicId: point.id }}
+															indexedQuestions={indexedQuestions}
 															testId={`practise-topic-${point.id}`}
 															navigate={go}
 														/>
@@ -377,6 +440,7 @@ export function CourseView({
 					<StartSitting
 						course={course}
 						scope={{ type: "weak" }}
+						indexedQuestions={indexedQuestions}
 						testId="practise-weak"
 						label="Practise weak topics"
 						navigate={go}
@@ -390,27 +454,55 @@ export function CourseView({
 						Official documents
 					</div>
 					<ul className="space-y-2">
-						{documents.map((document) => (
-							<li key={document.id} className="flex flex-wrap items-center justify-between gap-2">
+						{groupedDocuments(documents).map((document) => (
+							<li
+								key={document.id}
+								data-testid={`document-${document.id}`}
+								className="flex flex-wrap items-center justify-between gap-2"
+							>
 								<span className="min-w-0 text-sm">{document.label}</span>
-								{document.present ? null : (
-									<div className="flex shrink-0 items-center gap-2">
-										<span className="text-xs text-muted-foreground">Missing on this computer</span>
-										<Button
-											type="button"
-											variant="outline"
-											size="sm"
-											data-testid={`download-${document.id}`}
-											disabled={downloading}
-											onClick={() => void download()}
-										>
-											Download
-										</Button>
-									</div>
-								)}
+								<div className="flex shrink-0 items-center gap-2">
+									{document.kind === "frq" && (
+										<span className="text-xs text-muted-foreground">
+											{indexedLabel(document.questions)}
+										</span>
+									)}
+									{document.present ? null : (
+										<>
+											<span className="text-xs text-muted-foreground">Missing on this computer</span>
+											<Button
+												type="button"
+												variant="outline"
+												size="sm"
+												data-testid={`download-${document.id}`}
+												disabled={downloading}
+												onClick={() => void download()}
+											>
+												Download
+											</Button>
+										</>
+									)}
+								</div>
 							</li>
 						))}
 					</ul>
+					<p className="mt-3 text-sm text-muted-foreground">
+						Released questions indexed: {indexedQuestions}
+					</p>
+					{course.planConfirmed && (
+						<div className="mt-2">
+							<Button
+								type="button"
+								variant="outline"
+								size="sm"
+								data-testid="find-released-papers"
+								disabled={finding}
+								onClick={() => void findPapers()}
+							>
+								Find released papers
+							</Button>
+						</div>
+					)}
 				</div>
 			)}
 		</div>
@@ -422,10 +514,12 @@ export function CourseView({
 export function CoursePage({
 	course,
 	documents,
+	indexedQuestions,
 	cedPath,
 }: {
 	course: ApCourseRecord;
 	documents: CourseDocument[];
+	indexedQuestions: number;
 	cedPath?: string;
 }) {
 	const router = useRouter();
@@ -445,6 +539,7 @@ export function CoursePage({
 					<CourseView
 						course={course}
 						documents={documents}
+						indexedQuestions={indexedQuestions}
 						{...(cedPath === undefined ? {} : { cedPath })}
 						navigate={(target) => router.push(target)}
 					/>

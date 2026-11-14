@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 
 import { CoursePage, type CourseDocument } from "@/components/ap/course-view";
-import type { ApDocument } from "@/src/core";
+import type { ApDocument, ApQuestionIndex } from "@/src/core";
 import { apPaperPath, apPaperPresent, stores } from "@/src/server";
 
 /**
@@ -13,18 +13,34 @@ import { apPaperPath, apPaperPresent, stores } from "@/src/server";
  * confirm the units, download a missing paper, start a sitting). The course
  * description's absolute path is handed over only when it is actually on
  * this computer — that path is the one thing about a paper the Learn prompt
- * carries. An unknown id is a 404, not an empty page.
+ * carries. The synced question index adds its summary: the total number of
+ * indexed questions and, per released paper, the questions it contributed.
+ * An unknown id is a 404, not an empty page.
  */
 
 export const dynamic = "force-dynamic";
 
 /** A malformed manifest entry reads as absent rather than failing the page. */
-function documentState(courseId: string, document: ApDocument): CourseDocument {
+function documentState(
+	courseId: string,
+	document: ApDocument,
+	questions: Map<string, number>,
+): CourseDocument {
+	const indexed = document.kind === "frq" ? { questions: questions.get(document.id) ?? 0 } : {};
 	try {
-		return { ...document, present: apPaperPresent(courseId, document.file) };
+		return { ...document, present: apPaperPresent(courseId, document.file), ...indexed };
 	} catch {
-		return { ...document, present: false };
+		return { ...document, present: false, ...indexed };
 	}
+}
+
+/** How many indexed questions name each released paper. */
+function questionsByPaper(index: ApQuestionIndex | null): Map<string, number> {
+	const counts = new Map<string, number>();
+	for (const question of index?.questions ?? []) {
+		counts.set(question.paperId, (counts.get(question.paperId) ?? 0) + 1);
+	}
+	return counts;
 }
 
 function descriptionPath(courseId: string, documents: CourseDocument[]): string | undefined {
@@ -46,12 +62,16 @@ export default async function ApCoursePage({
 	const course = stores.apCourseStore.get(id);
 	if (!course) notFound();
 
-	const documents = course.documents.map((document) => documentState(id, document));
+	const index = stores.apIndexStore.get(id);
+	const documents = course.documents.map((document) =>
+		documentState(id, document, questionsByPaper(index)),
+	);
 	const cedPath = descriptionPath(id, documents);
 	return (
 		<CoursePage
 			course={course}
 			documents={documents}
+			indexedQuestions={index?.questions.length ?? 0}
 			{...(cedPath === undefined ? {} : { cedPath })}
 		/>
 	);
