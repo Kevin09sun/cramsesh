@@ -29,7 +29,7 @@
 
 import { Value } from "typebox/value";
 import type { TSchema } from "typebox";
-import { quizDisplayInputSchema, askInputSchema, askOptionProblems, quizInputProblems, explainInputProblems, explainDisplayInputSchema, apMcqInputObject, apMcqInputProblems, type AskToolInput, type QuizToolInput, type ExplainToolInput, type ApMcqToolInput } from "./question-core.ts";
+import { quizDisplayInputSchema, askInputSchema, askOptionProblems, quizInputProblems, explainInputProblems, explainDisplayInputSchema, apMcqInputObject, apMcqInputProblems, apFrqInputObject, type AskToolInput, type QuizToolInput, type ExplainToolInput, type ApMcqToolInput, type ApFrqToolInput } from "./question-core.ts";
 import { healEncodedArguments } from "./argument-heal.ts";
 import { probeDoneInputSchema, type ProbeDoneInput } from "./contracts/probe.ts";
 
@@ -127,14 +127,24 @@ export function parseApMcqInput(input: unknown): ApMcqToolInput | undefined {
 	return cleaned;
 }
 
+/**
+ * AP free-response parse for DISPLAY: only the question id (and optional
+ * visible details) — the question, its parts and its rubric come from the
+ * course index, never from the model's input.
+ */
+export function parseApFrqInput(input: unknown): ApFrqToolInput | undefined {
+	return boundaryParse<ApFrqToolInput>(apFrqInputObject, healEncodedArguments(input, apFrqInputObject));
+}
+
 /** One display-validity decision for dock authority and recovery. Does not
  * mutate the recorded input or invent missing authoring fields. */
-export function parseQuestionInput(tool: string, input: unknown): QuizToolInput | AskToolInput | ExplainToolInput | ApMcqToolInput | undefined {
+export function parseQuestionInput(tool: string, input: unknown): QuizToolInput | AskToolInput | ExplainToolInput | ApMcqToolInput | ApFrqToolInput | undefined {
 	switch (tool) {
 		case "quiz": case "probe": return parseQuizInput(input);
 		case "explain": case "recall": case "check_point": return parseExplainInput(input);
 		case "ask_user_question": return parseAskInput(input);
 		case "ap_mcq": return parseApMcqInput(input);
+		case "ap_frq": return parseApFrqInput(input);
 		default: return undefined;
 	}
 }

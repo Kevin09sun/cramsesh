@@ -16,6 +16,7 @@ import {
 	buildAnswer,
 	compactAnswerForModel,
 	normalizeOptions,
+	type ApMcqToolInput,
 	type QuestionData,
 } from "../src/core/question-core.ts";
 import { QUESTION_TOOLS, toolQuestionKind } from "../src/core/pending.ts";
@@ -92,7 +93,7 @@ describe("apMcqInputProblems (the authoring contract)", () => {
 		const malformed = structuredClone(good);
 		malformed.options.pop();
 		assert.equal(parseApMcqInput(malformed), undefined);
-		assert.equal(parseQuestionInput("ap_mcq", good)?.question, good.question);
+		assert.equal((parseQuestionInput("ap_mcq", good) as ApMcqToolInput | undefined)?.question, good.question);
 	});
 });
 

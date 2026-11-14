@@ -22,6 +22,7 @@ import {
 	answerForPresentation,
 	buildAnswer,
 	toolQuestionKind,
+	type ExplainToolInput,
 	type QuestionAnswerData,
 	type QuestionData,
 } from "../src/core/index.ts";
@@ -71,7 +72,7 @@ describe("test prep: check_point is explain-shaped", () => {
 	});
 
 	it("parses the recorded call input for the dock (pointId is not a display field)", () => {
-		const parsed = parseQuestionInput("check_point", checkPointInput);
+		const parsed = parseQuestionInput("check_point", checkPointInput) as ExplainToolInput | undefined;
 		assert.ok(parsed, "a check_point call is not malformed");
 		assert.equal(parsed.question, checkPointInput.question);
 		assert.ok("correctAnswer" in parsed, "explain-shaped, not ask-shaped");

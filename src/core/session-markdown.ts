@@ -85,6 +85,31 @@ function toolResultBody(result: ToolResultMessage, ctx?: MarkdownContext): { hea
 		  }>
 		| undefined;
 
+	// AP free response: the export shows the released question's title, the
+	// learner's answer to each part and a plain "Photo attached" per photo —
+	// never a photo path, a verdict or the rubric (the tutor grades after).
+	if (result.toolName === "ap_frq") {
+		const answer = result.details as Partial<QuestionAnswerData> | undefined;
+		const body: string[] = [];
+		const title =
+			typeof answer?.frq?.title === "string" && answer.frq.title
+				? answer.frq.title
+				: typeof answer?.questionText === "string" && answer.questionText
+					? answer.questionText
+					: "(no question title)";
+		body.push(`**${title}**`);
+		if (answer?.dismissed === true) body.push("The learner skipped this question.");
+		else if (answer?.dontKnow === true) body.push("The learner did not know.");
+		else {
+			for (const part of Array.isArray(answer?.parts) ? answer.parts : []) {
+				body.push(`**(${part.label})** ${part.text.trim() ? part.text : "—"}`);
+			}
+		}
+		const photos = Array.isArray(answer?.photos) ? answer.photos : [];
+		for (let i = 0; i < photos.length; i++) body.push("Photo attached");
+		return { heading: "AP free-response", body };
+	}
+
 	// AP multiple choice: the export shows the question, the options, the
 	// learner's pick and reasoning — never a correctness mark, the correct
 	// option or the option notes (the tutor's reply is the verdict).

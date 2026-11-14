@@ -58,20 +58,24 @@ export const QUESTION_TOOLS = [
 	"recall",
 	"check_point",
 	"ap_mcq",
+	"ap_frq",
 ] as const;
 
 /** The tool→kind map (the dock's own fold, named once — the dismissal
  *  path and the dock must never disagree on what a tool is). The probe
  *  names fold onto their teach kinds, test prep's check_point is an
- *  explain-shaped free-text question, and AP's ap_mcq is a quiz-shaped
+ *  explain-shaped free-text question, AP's ap_mcq is a quiz-shaped
  *  multiple-choice question (the verdict is withheld in the core
- *  presentation seams, not by the kind). The dock is kind-driven. */
-export function toolQuestionKind(tool: string): "quiz" | "ask" | "explain" {
-	return tool === "quiz" || tool === "probe" || tool === "ap_mcq"
-		? "quiz"
-		: tool === "explain" || tool === "recall" || tool === "check_point"
-			? "explain"
-			: "ask";
+ *  presentation seams, not by the kind), and AP's ap_frq is the
+ *  multi-part free-response kind of its own. The dock is kind-driven. */
+export function toolQuestionKind(tool: string): "quiz" | "ask" | "explain" | "frq" {
+	return tool === "ap_frq"
+		? "frq"
+		: tool === "quiz" || tool === "probe" || tool === "ap_mcq"
+			? "quiz"
+			: tool === "explain" || tool === "recall" || tool === "check_point"
+				? "explain"
+				: "ask";
 }
 
 /** Tools fulfilled by background sub-agent jobs (W2/W6). */
