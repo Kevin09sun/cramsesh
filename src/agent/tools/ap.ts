@@ -39,7 +39,7 @@ import { readTool } from "./read.ts";
 import { lsTool } from "./ls.ts";
 import { findTool } from "./find.ts";
 import { grepTool } from "./grep.ts";
-import { jobTools, type JobToolContext } from "./jobs.ts";
+import { dispatchJob, jobTools, type JobToolContext } from "./jobs.ts";
 import { tutorWebTools } from "./web.ts";
 
 /** The course-storage port this toolset closes over — the four course-record
@@ -546,6 +546,51 @@ function apRecordResultTool(ctx: ApToolContext): AgentTool<typeof apRecordResult
 	};
 }
 
+// ─── ap_index_papers ────────────────────────────────────────────────────────
+
+const AP_INDEX_SITTING_REFUSAL =
+	"Papers are indexed only in a setup or papers session, not during a sitting.";
+const AP_INDEX_UNCONFIRMED_REFUSAL = "confirm the unit and topic list first — questions are tagged against it";
+const AP_INDEX_ACK =
+	"This call is fire-and-forget: continue your turn and do not wait, poll, or mention waiting. " +
+	"Each saved released paper is read once with its scoring guideline; the indexing result arrives later as a " +
+	"new message. Tell the learner the papers are being indexed.";
+
+/**
+ * Start the background indexing job (AP prep stage 2): every saved released
+ * `frq` paper with its `scoring` guideline is read once into the synced
+ * question index. No parameters — the job reads the course record. The same
+ * async protocol as the pdf job: create the record, fire the runner, return
+ * the ack.
+ */
+function apIndexPapersTool(ctx: ApToolContext, jobs: JobToolContext): AgentTool<typeof emptyInputObject> {
+	return {
+		name: "ap_index_papers",
+		label: "ap_index_papers",
+		description:
+			"Index the course's saved released free-response papers: one background job reads every saved `frq` " +
+			"paper with its `scoring` guideline once and records each question's pages, lettered parts, topic tags " +
+			"and rubric points in the synced question index. Call it once after saving papers; existing indexed " +
+			"papers are skipped, so calling it again only indexes what is new. Refused in a sitting and until the " +
+			"unit and topic list is confirmed. The call is ASYNC and fire-and-forget — it resolves immediately; " +
+			"the indexing result arrives later as a new message. Tell the learner indexing has started.",
+		parameters: emptyInputObject,
+		prepareArguments: (args: unknown) => healEncodedArguments(args, emptyInputObject) as never,
+		executionMode: "sequential",
+		execute: async (toolCallId) => {
+			if (ctx.sitting) return invalidInputResult("ap_index_papers", [AP_INDEX_SITTING_REFUSAL]);
+			const course = ctx.courses.get(ctx.courseId);
+			if (!course) return invalidInputResult("ap_index_papers", [`course "${ctx.courseId}" was not found`]);
+			if (!course.planConfirmed) {
+				return invalidInputResult("ap_index_papers", [AP_INDEX_UNCONFIRMED_REFUSAL]);
+			}
+			return textResult(
+				dispatchJob(jobs, "ap_index", toolCallId, AP_INDEX_ACK, { courseId: ctx.courseId }),
+			);
+		},
+	};
+}
+
 // ─── the page-capped pdf_extract ────────────────────────────────────────────
 
 /**
@@ -606,6 +651,7 @@ export function apTools(ctx: ApToolContext, enabled?: EnabledTools): Record<stri
 		ap_progress: apProgressTool(ctx),
 		ap_mcq: apMcqTool(ctx),
 		ap_record_result: apRecordResultTool(ctx),
+		...(ctx.jobs ? { ap_index_papers: apIndexPapersTool(ctx, ctx.jobs) } : {}),
 		read: readTool,
 		ls: lsTool,
 		find: findTool,

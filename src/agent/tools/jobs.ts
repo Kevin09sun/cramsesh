@@ -1,7 +1,7 @@
 import { Type, type Static } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { serverExecute } from "../tool-execute.ts";
-import type { JobRecord } from "../../core/contracts.ts";
+import type { ApIndexToolInput, JobRecord } from "../../core/contracts.ts";
 import type { JobStore } from "../../core/ports.ts";
 import { checkLearnerImage } from "./learner-image.ts";
 import { resolveSourcePath } from "./fs-shared.ts";
@@ -24,7 +24,7 @@ export interface JobToolContext {
 	/** Fire the background runner for a fresh job — fire-and-forget. The
 	 *  input rides along because the spawn happens MID-STREAM, before
 	 *  onFinish persists the tool part — a transcript scan would race it. */
-	spawn: (job: JobRecord, input: ResearchInput | DemoInput | VisualInput | PdfInput) => void;
+	spawn: (job: JobRecord, input: ResearchInput | DemoInput | VisualInput | PdfInput | ApIndexToolInput) => void;
 	/** Search-provider availability, retained for existing composition seams.
 	 *  Research dispatch does not depend on it: web_fetch is keyless and
 	 *  web_search reports a missing provider as a recoverable tool result. */
@@ -80,12 +80,12 @@ export const pdfInputSchema = Type.Object({
  * The per-call dispatch: create the job (idempotent by toolCallId), fire the
  * runner, and return the ack. Shared by all three tools — only kind differs.
  */
-function dispatch(
+export function dispatchJob(
 	ctx: JobToolContext,
 	kind: JobRecord["kind"],
 	toolCallId: string,
 	ack: string,
-	input: ResearchInput | DemoInput | VisualInput | PdfInput,
+	input: ResearchInput | DemoInput | VisualInput | PdfInput | ApIndexToolInput,
 ): string {
 	const existing = ctx.jobStore.findJobByToolCallId(ctx.chatId, toolCallId);
 	const job = existing ?? ctx.jobStore.createJob({ kind, chatId: ctx.chatId, toolCallId, input });
@@ -147,7 +147,7 @@ export function jobTools(ctx: JobToolContext): Record<string, AgentTool<any>> {
 			description: RESEARCH_DESCRIPTION,
 			parameters: researchInputSchema,
 			execute: serverExecute("research", researchInputSchema, (input, { toolCallId }) =>
-				dispatch(ctx, "research", toolCallId, RESEARCH_ACK, input),
+				dispatchJob(ctx, "research", toolCallId, RESEARCH_ACK, input),
 			),
 		},
 		demo: {
@@ -155,7 +155,7 @@ export function jobTools(ctx: JobToolContext): Record<string, AgentTool<any>> {
 			label: "demo",
 			description: DEMO_DESCRIPTION,
 			parameters: demoInputSchema,
-			execute: serverExecute("demo", demoInputSchema, (input, { toolCallId }) => dispatch(ctx, "demo", toolCallId, DEMO_ACK, input)),
+			execute: serverExecute("demo", demoInputSchema, (input, { toolCallId }) => dispatchJob(ctx, "demo", toolCallId, DEMO_ACK, input)),
 		},
 		visual: {
 			name: "visual",
@@ -167,7 +167,7 @@ export function jobTools(ctx: JobToolContext): Record<string, AgentTool<any>> {
 			execute: serverExecute("visual", visualInputSchema, async (input, { toolCallId, signal }) => {
 				if (!ctx.jobStore.findJobByToolCallId(ctx.chatId, toolCallId) && input.image !== undefined) await checkLearnerImage(input.image);
 				signal?.throwIfAborted();
-				return dispatch(ctx, "visual", toolCallId, VISUAL_ACK, input);
+				return dispatchJob(ctx, "visual", toolCallId, VISUAL_ACK, input);
 			}),
 		},
 		pdf: {
@@ -179,7 +179,7 @@ export function jobTools(ctx: JobToolContext): Record<string, AgentTool<any>> {
 				// Admission uses the current boundary; the queued reader checks
 				// again at job start. Preserve raw args/history and replay IDs.
 				if (!ctx.jobStore.findJobByToolCallId(ctx.chatId, toolCallId)) resolveSourcePath(input.path);
-				return dispatch(ctx, "pdf", toolCallId, PDF_ACK, input);
+				return dispatchJob(ctx, "pdf", toolCallId, PDF_ACK, input);
 			}),
 		},
 	};

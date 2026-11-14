@@ -189,6 +189,7 @@ const ACTIVITY_LABELS: Record<string, string> = {
 	ap_save_document: "Saving the course description…",
 	propose_units: "Proposing units and topics…",
 	ap_progress: "Checking progress…",
+	ap_index_papers: "Indexing released papers…",
 };
 
 /** The activity label for ONE running tool (owner, streaming round

@@ -36,7 +36,7 @@ import { fileAccessPolicy } from "./file-access.ts";
 import { collectToolCallIds } from "./pi/call-ids.ts";
 import { providerEventNote } from "../agent/provider-events.ts";
 import { effectiveSettings, stores } from "./stores.ts";
-import { apPapers } from "./ap-papers.ts";
+import { apPaperPath, apPaperPresent, apPapers } from "./ap-papers.ts";
 import { searchAvailable, searchProvider } from "./search.ts";
 import { providerKeyPresent } from "./keys.ts";
 import { CLAUDE_CODE_PROVIDER } from "../core/contracts/claude-code.ts";
@@ -119,6 +119,24 @@ const jobRunner = createJobRunner({
 	// null = honestly unavailable; the research job is registered with or
 	// without a search key.
 	searchProvider,
+	// AP paper indexing (AP prep stage 2): the course record, the synced
+	// question index and the local papers folder, behind one port. The agent
+	// layer imports no store or server module.
+	apIndex: {
+		course: (courseId) => stores.apCourseStore.get(courseId),
+		index: (courseId) => stores.apIndexStore.get(courseId),
+		putPaper: (courseId, paperId, questions) => {
+			stores.apIndexStore.putPaper(courseId, paperId, questions);
+		},
+		paperPath: (courseId, file) => {
+			try {
+				return apPaperPresent(courseId, file) ? apPaperPath(courseId, file) : null;
+			} catch {
+				// A malformed saved file name reads as "not on this computer".
+				return null;
+			}
+		},
+	},
 });
 /** The app's ONE extraction pipeline instance — both front doors share it:
  *  quiz-triggered session runs (turn-service) and notes imports

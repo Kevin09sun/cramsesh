@@ -1,6 +1,7 @@
 import type { ComponentType } from "react";
 import type { ArtifactPartProps } from "@/src/core";
 import { DemoCard } from "@/components/artifacts/demo-card";
+import { ApIndexJobCard } from "@/components/artifacts/dispatch-card";
 import { JobCard, PdfJobCard } from "@/components/artifacts/job-card";
 import { VisualCard } from "@/components/artifacts/visual-card";
 import { ImageCard } from "@/components/artifacts/image-card";
@@ -74,6 +75,7 @@ export const artifactRenderers: Record<string, ComponentType<ArtifactPartProps>>
 	ap_progress: ToolCallCard,
 	ap_record_result: ToolCallCard,
 	ap_save_document: ToolCallCard,
+	ap_index_papers: ApIndexJobCard,
 	pdf_info: ToolCallCard,
 	pdf_extract: ToolCallCard,
 	pdf_search: ToolCallCard,

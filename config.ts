@@ -60,6 +60,7 @@ export type ModelRole =
 	| "demoBuilder"
 	| "visualMaker"
 	| "pdfReader"
+	| "apIndexer"
 	| "extractor"
 	| "auditor";
 

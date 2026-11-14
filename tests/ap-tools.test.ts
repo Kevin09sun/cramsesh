@@ -20,6 +20,8 @@ import { createFauxCore } from "@earendil-works/pi-ai";
 import { applyResult, mergePlan } from "../src/core/test-prep.ts";
 import type { AnswerResult, PlanDraftSection } from "../src/core/test-prep.ts";
 import type { ApCourseRecord, ApDocument, ApSitting } from "../src/core/ap.ts";
+import type { JobRecord } from "../src/core/contracts.ts";
+import type { JobStore } from "../src/core/ports.ts";
 import { QUESTION_TOOLS, toolQuestionKind } from "../src/core/pending.ts";
 import { createApAgent } from "../src/agent/teacher-agent.ts";
 import { apTools, capPdfExtract, AP_PDF_EXTRACT_MAX_PAGES, type ApCourseStorePort, type ApPapersPort, type ApToolContext } from "../src/agent/tools/ap.ts";
@@ -271,17 +273,19 @@ describe("apTools registry", () => {
 		}
 	});
 
-	it("wires research and the direct web tools when their seams are passed", () => {
+	it("wires research, paper indexing and the direct web tools when their seams are passed", () => {
 		const { papers } = fakePapers();
 		const tools = apTools({ ...ctxOf(fakeCourses(courseOf()).courses, papers), jobs: JOBS, search: () => null });
 		assert.ok(tools.research, "research present with a jobs context");
+		assert.ok(tools.ap_index_papers, "paper indexing present with a jobs context");
 		assert.ok(tools.web_search && tools.web_fetch, "web tools present with a search seam");
 	});
 
-	it("no jobs or search seam → neither research nor web tools", () => {
+	it("no jobs or search seam → neither research, paper indexing nor web tools", () => {
 		const { papers } = fakePapers();
 		const tools = apTools(ctxOf(fakeCourses(courseOf()).courses, papers));
 		assert.equal(tools.research, undefined);
+		assert.equal(tools.ap_index_papers, undefined);
 		assert.equal(tools.web_search, undefined);
 		assert.equal(tools.web_fetch, undefined);
 	});
@@ -958,6 +962,90 @@ describe("ap_record_result", () => {
 		const text = (result.content[0] as { text: string }).text;
 		assert.match(text, /solid/);
 		assert.match(text, /readiness/i);
+	});
+});
+
+// ── ap_index_papers ─────────────────────────────────────────────────────────
+
+interface SpawnedIndexJob {
+	kind: string;
+	input: unknown;
+	toolCallId: string;
+}
+
+/** A jobs context that records dispatches instead of spawning runners. */
+function fakeJobContext(): { jobs: NonNullable<ApToolContext["jobs"]>; spawned: SpawnedIndexJob[] } {
+	const spawned: SpawnedIndexJob[] = [];
+	let n = 0;
+	const jobStore = {
+		findJobByToolCallId: () => null,
+		createJob: (init: {
+			kind: JobRecord["kind"];
+			chatId: string;
+			toolCallId: string;
+			input?: unknown;
+		}) => ({
+			id: `job_${++n}`,
+			status: "running",
+			activity: "starting",
+			createdAt: "2026-11-14T00:00:00.000Z",
+			updatedAt: "2026-11-14T00:00:00.000Z",
+			...init,
+		}),
+	} as unknown as JobStore;
+	return {
+		jobs: {
+			chatId: "chat_now",
+			jobStore,
+			spawn: (job, input) => spawned.push({ kind: job.kind, input, toolCallId: job.toolCallId }),
+		},
+		spawned,
+	};
+}
+
+describe("ap_index_papers", () => {
+	it("REFUSES inside a sitting with its own message and spawns nothing", async () => {
+		const fake = fakeCourses(courseOf());
+		const papers = fakePapers();
+		const { jobs, spawned } = fakeJobContext();
+		const tool = apTools({ ...ctxOf(fake.courses, papers.papers, WEAK), jobs }).ap_index_papers!;
+		const result = await tool.execute("call_idx", {} as never);
+		assert.equal(result.isError, true);
+		assert.equal(
+			(result.details as { problems: string[] }).problems[0],
+			"Papers are indexed only in a setup or papers session, not during a sitting.",
+		);
+		assert.equal(spawned.length, 0, "a sitting refusal never dispatches a job");
+	});
+
+	it("REFUSES until the unit and topic list is confirmed", async () => {
+		const fake = fakeCourses(courseOf({ planConfirmed: false }));
+		const papers = fakePapers();
+		const { jobs, spawned } = fakeJobContext();
+		const tool = apTools({ ...ctxOf(fake.courses, papers.papers), jobs }).ap_index_papers!;
+		const result = await tool.execute("call_idx", {} as never);
+		assert.equal(result.isError, true);
+		assert.equal(
+			(result.details as { problems: string[] }).problems[0],
+			"confirm the unit and topic list first — questions are tagged against it",
+		);
+		assert.equal(spawned.length, 0, "an unconfirmed plan never dispatches a job");
+	});
+
+	it("dispatches one ap_index job with the course id and acks fire-and-forget", async () => {
+		const fake = fakeCourses(courseOf());
+		const papers = fakePapers();
+		const { jobs, spawned } = fakeJobContext();
+		const tool = apTools({ ...ctxOf(fake.courses, papers.papers), jobs }).ap_index_papers!;
+		const result = await tool.execute("call_idx", {} as never);
+
+		assert.equal(result.isError, undefined);
+		assert.deepEqual(spawned, [
+			{ kind: "ap_index", input: { courseId: "ap_course_1" }, toolCallId: "call_idx" },
+		]);
+		const text = (result.content[0] as { text: string }).text;
+		assert.match(text, /^Dispatched \(job job_1\)\./);
+		assert.match(text, /fire-and-forget/);
 	});
 });
 
