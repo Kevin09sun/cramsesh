@@ -10,6 +10,7 @@
  */
 
 import { nextQueue, type PlanDraftSection, type TestPoint, type TestSection } from "./test-prep.ts";
+import type { ApRealAttempt } from "./ap-frq.ts";
 
 // ─── records ────────────────────────────────────────────────────────────────
 
@@ -45,6 +46,9 @@ export interface ApCourseRecord {
 	planConfirmed: boolean;
 	sections: TestSection[]; // units; each point is one official topic
 	documents: ApDocument[];
+	/** Free-response attempts recorded against released questions (stage 2).
+	 *  Absent on a stage 1 record; the index itself lives beside the course. */
+	realAttempts?: ApRealAttempt[];
 	version: 1;
 }
 

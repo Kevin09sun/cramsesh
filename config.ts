@@ -29,6 +29,9 @@ export const PATHS = {
 	tests: path.join(DATA_ROOT, "tests"),
 	/** AP course records (one JSON file per course: units + topics + documents). */
 	ap: path.join(DATA_ROOT, "ap"),
+	/** AP question indexes (one synced JSON file per course: released
+	 *  free-response questions, their pages, topic tags and rubric points). */
+	apIndex: path.join(DATA_ROOT, "ap-index"),
 	/** Downloaded AP papers — local only, never synced with the course record. */
 	apPapers: path.join(DATA_ROOT, "ap-papers"),
 	graph: path.join(DATA_ROOT, "graph"),

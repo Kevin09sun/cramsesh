@@ -25,6 +25,7 @@ const { readiness } = await import("../src/core/test-prep.ts");
 const { subscribe } = await import("../src/core/events.ts");
 
 type PlanDraftSection = import("../src/core/test-prep.ts").PlanDraftSection;
+type ApRealAttempt = import("../src/core/ap-frq.ts").ApRealAttempt;
 
 function draft(): PlanDraftSection[] {
 	return [
@@ -261,6 +262,154 @@ describe("AP course store (AP prep stage 1, 2026-11-13)", () => {
 
 		// A missing course returns false.
 		assert.equal(apCourseStore.forgetChat("ap_never_existed", "chat_A"), false);
+	});
+
+	it("recordRealAttempt applies every topic in one write and stores the attempt", () => {
+		let announces = 0;
+		const off = subscribe((event) => {
+			if (event.type === "ap-changed") announces++;
+		});
+
+		const course = apCourseStore.create("Real attempt");
+		const saved = apCourseStore.savePlan(course.id, draft(), true);
+		const [topicOne, topicTwo] = saved.sections[0]!.points;
+		const attempt: ApRealAttempt = {
+			questionId: "2023-2",
+			chatId: "chat_real",
+			at: "2026-11-14T10:00:00.000Z",
+			parts: [{ label: "a", earned: ["a1"] }],
+		};
+
+		const next = apCourseStore.recordRealAttempt(course.id, attempt, [
+			{ topicId: topicOne!.id, result: "correct" },
+			{ topicId: topicTwo!.id, result: "wrong" },
+		]);
+		off();
+
+		assert.equal(next.sections[0]!.points[0]!.status, "solid");
+		assert.equal(next.sections[0]!.points[1]!.status, "gap");
+		assert.deepEqual(next.realAttempts, [attempt], "the attempt rides on the record");
+		assert.equal(announces, 3, "recordRealAttempt writes once and announces once");
+
+		const stored = apCourseStore.get(course.id)!;
+		assert.deepEqual(stored.realAttempts, [attempt]);
+		assert.deepEqual(
+			stored.sections[0]!.points[0]!.history.map((entry) => [entry.chatId, entry.at, entry.result]),
+			[["chat_real", attempt.at, "correct"]],
+			"the topic result carries the attempt's chat and time",
+		);
+	});
+
+	it("recordRealAttempt throws 'plan not confirmed' before the unknown-topic guard", () => {
+		const course = apCourseStore.create("Real attempt unconfirmed");
+		const saved = apCourseStore.savePlan(course.id, draft(), false);
+		const topicId = saved.sections[0]!.points[0]!.id;
+		const attempt: ApRealAttempt = {
+			questionId: "2023-2",
+			chatId: "chat_1",
+			at: "2026-11-14T10:00:00.000Z",
+			parts: [{ label: "a", earned: [] }],
+		};
+
+		assert.throws(
+			() => apCourseStore.recordRealAttempt(course.id, attempt, [{ topicId, result: "correct" }]),
+			{ message: "plan not confirmed" },
+		);
+		assert.throws(
+			() =>
+				apCourseStore.recordRealAttempt(course.id, attempt, [
+					{ topicId: "topic_never_existed", result: "correct" },
+				]),
+			{ message: "plan not confirmed" },
+		);
+		assert.equal(apCourseStore.get(course.id)!.realAttempts, undefined, "nothing is recorded");
+	});
+
+	it("recordRealAttempt with an unknown topic records nothing", () => {
+		const course = apCourseStore.create("Real attempt unknown topic");
+		const saved = apCourseStore.savePlan(course.id, draft(), true);
+		const topicId = saved.sections[0]!.points[0]!.id;
+		const attempt: ApRealAttempt = {
+			questionId: "2023-2",
+			chatId: "chat_1",
+			at: "2026-11-14T10:00:00.000Z",
+			parts: [{ label: "a", earned: [] }],
+		};
+		const file = path.join(TMP_DATA, "ap", `${course.id}.json`);
+		const before = fs.readFileSync(file);
+
+		assert.throws(
+			() =>
+				apCourseStore.recordRealAttempt(course.id, attempt, [
+					{ topicId, result: "correct" },
+					{ topicId: "topic_never_existed", result: "correct" },
+				]),
+			{ message: "unknown topic" },
+		);
+
+		assert.deepEqual(fs.readFileSync(file), before, "the all-or-nothing write leaves the file untouched");
+		const stored = apCourseStore.get(course.id)!;
+		assert.equal(stored.sections[0]!.points[0]!.status, "unchecked", "the known topic was not applied");
+		assert.equal(stored.realAttempts, undefined, "the attempt was not stored");
+	});
+
+	it("a record with or without realAttempts loads; a malformed entry rejects the record", () => {
+		const course = apCourseStore.create("Attempt shape");
+		assert.equal(
+			apCourseStore.get(course.id)!.realAttempts,
+			undefined,
+			"a stage 1 record without realAttempts still loads",
+		);
+
+		const file = path.join(TMP_DATA, "ap", `${course.id}.json`);
+		const raw = JSON.parse(fs.readFileSync(file, "utf-8"));
+		raw.realAttempts = [
+			{
+				questionId: "2023-2",
+				chatId: "chat_1",
+				at: "2026-11-14T10:00:00.000Z",
+				dontKnow: true,
+				parts: [{ label: "a", earned: [] }],
+			},
+		];
+		const goodBytes = JSON.stringify(raw);
+		fs.writeFileSync(file, goodBytes);
+		assert.notEqual(apCourseStore.get(course.id), null, "a well-formed attempt entry loads");
+
+		const badBytes = JSON.stringify({
+			...raw,
+			realAttempts: [{ questionId: 42, chatId: "chat_1", at: "2026-11-14T10:00:00.000Z", parts: [] }],
+		});
+		fs.writeFileSync(file, badBytes);
+		assert.equal(apCourseStore.get(course.id), null, "a malformed attempt entry rejects the record");
+		assert.equal(fs.readFileSync(file, "utf-8"), badBytes, "the rejected record is left untouched");
+	});
+
+	it("forgetChat drops the chat's real attempts and replays the topics", () => {
+		const course = apCourseStore.create("Forget real attempt");
+		const saved = apCourseStore.savePlan(course.id, draft(), true);
+		const topicId = saved.sections[0]!.points[0]!.id;
+		const first: ApRealAttempt = {
+			questionId: "2023-2",
+			chatId: "chat_A",
+			at: "2026-11-14T10:00:00.000Z",
+			parts: [{ label: "a", earned: ["a1"] }],
+		};
+		const second: ApRealAttempt = {
+			questionId: "2023-3",
+			chatId: "chat_B",
+			at: "2026-11-14T10:01:00.000Z",
+			parts: [{ label: "a", earned: [] }],
+		};
+
+		apCourseStore.recordRealAttempt(course.id, first, [{ topicId, result: "correct" }]);
+		apCourseStore.recordRealAttempt(course.id, second, [{ topicId, result: "wrong" }]);
+		assert.equal(apCourseStore.get(course.id)!.sections[0]!.points[0]!.status, "gap");
+
+		assert.equal(apCourseStore.forgetChat(course.id, "chat_B"), true);
+		const after = apCourseStore.get(course.id)!;
+		assert.deepEqual(after.realAttempts, [first], "only the forgotten chat's attempt is dropped");
+		assert.equal(after.sections[0]!.points[0]!.status, "solid", "the remaining attempt replays to solid");
 	});
 
 	it("emits ap-changed on create, savePlan, recordResult, putDocument and a changing forgetChat", () => {

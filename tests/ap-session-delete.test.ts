@@ -21,6 +21,8 @@ const { chatStore } = await import("../src/store/chats.ts");
 const { apCourseStore } = await import("../src/store/ap-courses.ts");
 const { deleteChatSession, deleteIdleChatRecord } = await import("../src/server/chats.ts");
 
+type ApRealAttempt = import("../src/core/ap-frq.ts").ApRealAttempt;
+
 after(() => {
 	fs.rmSync(TMP_DATA, { recursive: true, force: true });
 	delete process.env.LH_DATA_DIR;
@@ -62,6 +64,37 @@ describe("AP session deletion forgets the session's answers (AP prep stage 1, 20
 		const point = onlyPoint(courseId);
 		assert.equal(point.status, "solid", "the first chat's correct answer alone makes it solid");
 		assert.deepEqual(point.history.map((attempt) => attempt.chatId), [first], "the second chat's attempt is forgotten");
+	});
+
+	it("deleting a free-response session drops its attempt and replays the topics", async () => {
+		const { courseId, topicId } = confirmedCourse("Real attempt forgotten");
+		const first = apChat("First real sitting", courseId);
+		const second = apChat("Second real sitting", courseId);
+		const firstAttempt: ApRealAttempt = {
+			questionId: "2023-2",
+			chatId: first,
+			at: "2026-11-14T10:00:00.000Z",
+			parts: [{ label: "a", earned: ["a1"] }],
+		};
+		const secondAttempt: ApRealAttempt = {
+			questionId: "2023-3",
+			chatId: second,
+			at: "2026-11-14T10:01:00.000Z",
+			parts: [{ label: "a", earned: [] }],
+		};
+
+		apCourseStore.recordRealAttempt(courseId, firstAttempt, [{ topicId, result: "correct" }]);
+		apCourseStore.recordRealAttempt(courseId, secondAttempt, [{ topicId, result: "wrong" }]);
+		assert.equal(onlyPoint(courseId).status, "gap", "the second chat's wrong grading is the live verdict");
+
+		const outcome = await deleteChatSession(second, "preserve-graph");
+		assert.equal(outcome.ok, true);
+		assert.equal(chatStore.getChat(second), null, "the chat record is gone");
+
+		const record = apCourseStore.get(courseId)!;
+		assert.deepEqual(record.realAttempts, [firstAttempt], "the deleted session's attempt is gone");
+		assert.equal(onlyPoint(courseId).status, "solid", "the first chat's grading alone replays to solid");
+		assert.deepEqual(onlyPoint(courseId).history.map((attempt) => attempt.chatId), [first]);
 	});
 
 	it("deleting a chat with no attempts leaves the course file's bytes unchanged", () => {

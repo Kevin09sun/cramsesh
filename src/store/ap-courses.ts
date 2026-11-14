@@ -18,9 +18,11 @@ import { emit } from "../core/events.ts";
 import { applyResult, forgetChatInPoint, mergePlan, readiness } from "../core/test-prep.ts";
 import type { AnswerResult, PlanDraftSection } from "../core/test-prep.ts";
 import type { ApCourseRecord, ApDocument } from "../core/ap.ts";
+import type { ApRealAttempt } from "../core/ap-frq.ts";
 import { writeFileAtomicSync } from "./atomic-write.ts";
 
-const COURSE_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
+/** Shared with the question index store: ids are filename-safe. */
+export const COURSE_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 const POINT_STATUSES: ReadonlySet<string> = new Set(["unchecked", "solid", "gap", "fixed-recheck"]);
 const DOCUMENT_KINDS: ReadonlySet<string> = new Set(["ced", "frq", "scoring"]);
 
@@ -36,6 +38,31 @@ function newId(): string {
 
 function writeCourse(record: ApCourseRecord): void {
 	writeFileAtomicSync(courseFile(record.id), JSON.stringify(record, null, "\t"));
+}
+
+/** One recorded free-response attempt: the question asked, the session and
+ *  time that asked it, and the rubric points earned per part. */
+function isRealAttempt(value: unknown): value is ApRealAttempt {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+	const attempt = value as Record<string, unknown>;
+	if (
+		typeof attempt.questionId !== "string" ||
+		typeof attempt.chatId !== "string" ||
+		typeof attempt.at !== "string" ||
+		(attempt.dontKnow !== undefined && typeof attempt.dontKnow !== "boolean") ||
+		!Array.isArray(attempt.parts)
+	) {
+		return false;
+	}
+	return attempt.parts.every((part) => {
+		if (typeof part !== "object" || part === null || Array.isArray(part)) return false;
+		const entry = part as Record<string, unknown>;
+		return (
+			typeof entry.label === "string" &&
+			Array.isArray(entry.earned) &&
+			entry.earned.every((id) => typeof id === "string")
+		);
+	});
 }
 
 /** The record shape a file must satisfy before the store trusts it. A
@@ -72,6 +99,13 @@ function isApCourseRecord(value: unknown): value is ApCourseRecord {
 		);
 	});
 	if (!documentsOkay) return false;
+
+	// Stage 1 records have no realAttempts; a stage 2 record may. When present
+	// every entry must carry the fields the score card and the used-question
+	// rule project — a malformed entry makes the file foreign, not partial.
+	if (record.realAttempts !== undefined) {
+		if (!Array.isArray(record.realAttempts) || !record.realAttempts.every(isRealAttempt)) return false;
+	}
 
 	return record.sections.every((section) => {
 		if (typeof section !== "object" || section === null || Array.isArray(section)) return false;
@@ -217,6 +251,44 @@ function recordResult(id: string, topicId: string, result: AnswerResult, chatId:
 	return next;
 }
 
+/** Record one graded released free-response attempt. Every topic is checked
+ *  before anything is written — an unknown id refuses the whole attempt
+ *  (all-or-nothing) and leaves the file untouched. The attempt's own chat and
+ *  time stamp each topic result, and the attempt is kept for the score card
+ *  and the question's used/unused state. One write, one announcement. */
+function recordRealAttempt(
+	id: string,
+	attempt: ApRealAttempt,
+	topics: { topicId: string; result: AnswerResult }[],
+): ApCourseRecord {
+	const record = loadOrThrow(id);
+	if (!record.planConfirmed) throw new Error("plan not confirmed");
+
+	const known = new Set(record.sections.flatMap((section) => section.points.map((point) => point.id)));
+	for (const topic of topics) {
+		if (!known.has(topic.topicId)) throw new Error("unknown topic");
+	}
+	const results = new Map(topics.map((topic) => [topic.topicId, topic.result]));
+
+	const sections = record.sections.map((section) => ({
+		...section,
+		points: section.points.map((point) => {
+			const result = results.get(point.id);
+			return result === undefined ? point : applyResult(point, result, attempt.chatId, attempt.at);
+		}),
+	}));
+
+	const next: ApCourseRecord = {
+		...record,
+		sections,
+		realAttempts: [...(record.realAttempts ?? []), attempt],
+		updatedAt: attempt.at,
+	};
+	writeCourse(next);
+	emit("ap-changed", {});
+	return next;
+}
+
 /** Add an official document to the manifest, or replace the entry with the
  *  same id (a re-download updates its label, year or page count). */
 function putDocument(id: string, doc: ApDocument): ApCourseRecord {
@@ -232,9 +304,10 @@ function putDocument(id: string, doc: ApDocument): ApCourseRecord {
 	return next;
 }
 
-/** Erase one chat's answers from every topic and replay what remains. Writes
- *  only when some topic actually carried an attempt from the chat. A missing
- *  course returns false. */
+/** Erase one chat's answers from every topic — and the chat's recorded
+ *  free-response attempts — and replay what remains. Writes only when
+ *  something actually carried the chat's mark. A missing course returns
+ *  false. */
 function forgetChat(id: string, chatId: string): boolean {
 	const record = get(id);
 	if (!record) return false;
@@ -248,9 +321,23 @@ function forgetChat(id: string, chatId: string): boolean {
 			return next;
 		}),
 	}));
+
+	// Free-response attempts belong to the session that recorded them: drop
+	// the deleted chat's attempts so the question is unused again.
+	let realAttempts: ApRealAttempt[] | undefined;
+	const storedAttempts = record.realAttempts;
+	if (storedAttempts !== undefined) {
+		realAttempts = storedAttempts.filter((attempt) => attempt.chatId !== chatId);
+		if (realAttempts.length !== storedAttempts.length) changed = true;
+	}
 	if (!changed) return false;
 
-	const next: ApCourseRecord = { ...record, sections, updatedAt: new Date().toISOString() };
+	const next: ApCourseRecord = {
+		...record,
+		sections,
+		...(realAttempts === undefined ? {} : { realAttempts }),
+		updatedAt: new Date().toISOString(),
+	};
 	writeCourse(next);
 	emit("ap-changed", {});
 	return true;
@@ -262,6 +349,7 @@ export const apCourseStore = {
 	list,
 	savePlan,
 	recordResult,
+	recordRealAttempt,
 	putDocument,
 	forgetChat,
 };
