@@ -376,3 +376,27 @@ is built. The rules they must carry:
   `components/test-prep/readiness-view.tsx:62-68`).
 - Graph extraction runs for every kind except practice
   (`src/server/chat-handler.ts` ~651).
+
+## Stage 2 amendments (2026-11-14)
+
+### Owner decisions for this stage (2026-11-14)
+
+1. **Answer form:** all parts shown together, one box per part, one Submit.
+2. **Photos:** the tutor sees an attached photo while grading; the image is not kept in the session record. Only its written read-back is saved.
+3. **Index sync:** the question index (question numbers, pages, topic tags, rubric point text) syncs with the learning data. PDFs and page images stay on one computer. (This amends the design's "Storage and sync", which kept the index local.)
+4. **Adding papers:** a `Find released papers` button on the course page; new courses also do it in the setup chat after the list is confirmed.
+5. **Score card:** after grading, a card shows each part's points earned out of available, its topic, and `earned` or `missed`.
+
+### Decided by Claude (owner can override at plan approval)
+
+- **Files and ids.** A released paper is stored as `frq-<year>.pdf` (or `frq-<year>-set<n>.pdf` when a year has several sets) and its scoring guideline as `scoring-<year>.pdf` / `scoring-<year>-set<n>.pdf`; the document id is the file name without `.pdf`. A question's id is `<year>-<number>` or `<year>-s<n>-<number>` (e.g. `2023-2`). The index lives at `data/ap-index/<courseId>.json`.
+- **Indexing model.** The indexing job runs on the **Cheap** model slot (a new role `apIndexer`, like the knowledge-graph extractor). It reads text only. Topic tags and rubric points are therefore only as good as that model; the tag is shown with each question and the tutor can correct it (design). Moving the role to another slot is a one-line change.
+- **The rubric is withheld by the server, not by trust.** `ap_frq` takes only a question id. The tutor fetches the question text and rubric with `ap_rubric`, which is refused until the learner has answered that question in this session.
+- **Images never persist in an AP session.** Rather than trusting the tutor to use one tool, every image a tool returns in an AP session is replaced by a text note when the turn is saved. The tutor keeps the image for the rest of that turn.
+- **One "I don't know" for the whole question.** A part left blank earns no points. A question answered "I don't know" records `dontKnow` for every listed topic it tests.
+- **Two parts, one topic.** A topic is `correct` only when every rubric point on every part tagged to it was earned (design: "one result per topic touched").
+- **Parts outside the sitting's scope** are asked, graded and recorded (design). A retry after a miss is a multiple-choice question and is asked only for missed topics inside the sitting's scope.
+- **No released question for the scope.** In a free-response sitting the tutor says so once and asks multiple-choice.
+- **Correcting a tag** (`ap_retag_part`) changes future gradings only; it does not rewrite an attempt already recorded.
+- **Page images** are rendered at 150 dpi on first view and cached under `data/ap-papers/<courseId>/pages/`.
+- **Answer text for a part** is typed or dictated; dictation goes to the part box that has focus (the first box by default).
