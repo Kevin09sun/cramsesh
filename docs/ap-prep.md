@@ -91,7 +91,7 @@ A free-response question is either a real released College Board question from t
 
 A written question's card is labelled **AP · generated** and shows its title, its stem and one answer box per part; it has no original page. The tutor writes the complete solution and the full rubric before the question is shown, and commits them: neither is displayed.
 
-Below the page or the stem there is one answer box per part. Each box is labelled with the part's letter, with the topic the part is tagged with in smaller text beside it. Type or dictate each answer; dictation goes to the box that last had focus, the first box by default. A part you leave blank earns no points.
+Below the page or the stem there is one answer box per part. Each box is labelled with the part's letter. A released question also shows the topic the part is tagged with in smaller text beside the letter; a written question shows the part's prompt above its box. Type or dictate each answer; dictation goes to the box that last had focus, the first box by default. A part you leave blank earns no points.
 
 **Attach photo** adds a photo of your written work, up to six; each can be removed before you submit. The tutor sees a photo while it grades and says what it read from the page before grading. The image is not kept in the session: the answer record lists each attached photo by file name as `Photo attached: <name>`, and the tutor's written read-back is what stays with the transcript.
 
