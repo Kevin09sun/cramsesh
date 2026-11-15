@@ -16,7 +16,7 @@ import {
 } from "./tools.ts";
 import { practiceTools, type PracticeToolContext } from "./tools/practice.ts";
 import { testPrepTools, type TestPrepToolContext } from "./tools/test-prep.ts";
-import { apTools, apViewPhotoTool, createApViewPhotoTool, type ApToolContext } from "./tools/ap.ts";
+import { apTools, apViewPhotoTool, createApViewPhotoTool, isApViewFigureTool, type ApToolContext } from "./tools/ap.ts";
 import { healToolRecord, withArgumentHeal } from "./tools/heal.ts";
 import { sendToUserApplies, sendToUserTool } from "./tools/send-to-user.ts";
 import { makeNarrationGuard, narrationGuardApplies, SEND_TO_USER_DELIVERY_RULE } from "./narration-guard.ts";
@@ -216,7 +216,11 @@ function baseAgentOptions(kind: AgentKind, opts: AgentBuildOptions, tools: Agent
 					? { ...tool, execute: createReadTool(engine.model).execute as AgentTool<any>["execute"] }
 					: tool.name === "ap_view_photo" && tool.execute === apViewPhotoTool.execute
 						? { ...tool, execute: createApViewPhotoTool(engine.model).execute as AgentTool<any>["execute"] }
-						: tool),
+						// ap_view_figure is per registry (it owns this turn's viewed
+						// set), so its own rebind seam stands in for execute identity.
+						: isApViewFigureTool(tool)
+							? tool.bindModel(engine.model)
+							: tool),
 				...(sendToUserApplies(kind, engine.model, opts.tools !== undefined)
 					? [withArgumentHeal(sendToUserTool)]
 					: []),

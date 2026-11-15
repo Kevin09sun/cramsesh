@@ -20,6 +20,8 @@ export * from "./stores.ts";
 export * from "./ap-papers.ts";
 // Page images are rendered once into the same local tree's pages/ folder.
 export * from "./ap-pages.ts";
+// A finished drawing job's SVG, served read-only as a figure PNG.
+export * from "./ap-figures.ts";
 export { readRenderSettings, writeRenderSettings } from "../store/render-settings.ts";
 // The settings record + prompt overrides (settings-storage wave, 2026-09-19).
 // The *Record aliases keep the app/api/settings routes explicit about which

@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { questionPartDisposition } from "../components/chat.tsx";
 
-const QUESTION_TOOLS = ["quiz", "probe", "ask_user_question", "explain", "recall", "check_point", "ap_mcq", "ap_frq"];
+const QUESTION_TOOLS = ["quiz", "probe", "ask_user_question", "explain", "recall", "check_point", "ap_mcq", "ap_frq", "ap_frq_gen"];
 
 describe("questionPartDisposition", () => {
 	it("suppresses ap_mcq while streaming and while its input is available", () => {
@@ -31,6 +31,15 @@ describe("questionPartDisposition", () => {
 
 	it("renders an answered ap_frq part", () => {
 		assert.equal(questionPartDisposition("tool-ap_frq", "output-available"), "answered");
+	});
+
+	it("suppresses ap_frq_gen while streaming and while its input is available", () => {
+		assert.equal(questionPartDisposition("tool-ap_frq_gen", "input-streaming"), "suppress");
+		assert.equal(questionPartDisposition("tool-ap_frq_gen", "input-available"), "suppress");
+	});
+
+	it("renders an answered ap_frq_gen part", () => {
+		assert.equal(questionPartDisposition("tool-ap_frq_gen", "output-available"), "answered");
 	});
 
 	it("keeps every existing question tool's routing", () => {

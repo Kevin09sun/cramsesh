@@ -119,14 +119,17 @@ describe("FrqScoreCard", () => {
 describe("the remaining AP tool wiring", () => {
 	it("the registry maps the score card, the index dispatch card and the retag trace card", () => {
 		assert.equal(artifactRenderers.ap_record_frq, FrqScoreCard);
+		assert.equal(artifactRenderers.ap_record_gen, FrqScoreCard);
 		assert.equal(artifactRenderers.ap_index_papers, ApIndexJobCard);
 		assert.equal(artifactRenderers.ap_retag_part, ToolCallCard);
 	});
 
-	it("omits ap_frq, ap_rubric and ap_view_photo so none prints its raw input or output", () => {
+	it("omits ap_frq, ap_frq_gen, ap_rubric, ap_view_photo and ap_view_figure so none prints its raw input or output", () => {
 		assert.equal(artifactRenderers.ap_frq, undefined);
+		assert.equal(artifactRenderers.ap_frq_gen, undefined);
 		assert.equal(artifactRenderers.ap_rubric, undefined);
 		assert.equal(artifactRenderers.ap_view_photo, undefined);
+		assert.equal(artifactRenderers.ap_view_figure, undefined);
 	});
 
 	it("the tool-call card headlines the retagged question id", () => {
@@ -149,7 +152,9 @@ describe("the remaining AP tool wiring", () => {
 	it("names each new AP tool's live activity", () => {
 		assert.equal(toolActivityLabel("ap_rubric"), "Reading the scoring guideline…");
 		assert.equal(toolActivityLabel("ap_view_photo"), "Looking at your photo…");
+		assert.equal(toolActivityLabel("ap_view_figure"), "Checking the figure…");
 		assert.equal(toolActivityLabel("ap_record_frq"), "Recording the score…");
+		assert.equal(toolActivityLabel("ap_record_gen"), "Recording the score…");
 	});
 });
 

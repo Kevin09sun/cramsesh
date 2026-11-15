@@ -298,21 +298,6 @@ test("Practise opens the kind chooser and creates the AP sitting in the chosen k
 	assert.match(chooserText, /Multiple-choice/);
 	assert.match(chooserText, /Free-response/);
 	assert.match(chooserText, /Mixed/);
-	assert.equal(
-		(chooserText.match(/needs released papers/g) ?? []).length,
-		2,
-		"with no indexed questions free-response and mixed each carry the note",
-	);
-	assert.equal(
-		document.querySelector<HTMLButtonElement>('[data-testid="sitting-frq"]')?.disabled,
-		true,
-		"a free-response sitting cannot start before papers are indexed",
-	);
-	assert.equal(
-		document.querySelector<HTMLButtonElement>('[data-testid="sitting-mixed"]')?.disabled,
-		true,
-		"a mixed sitting cannot start before papers are indexed",
-	);
 
 	await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="sitting-mcq"]')!.click());
 
@@ -326,6 +311,54 @@ test("Practise opens the kind chooser and creates the AP sitting in the chosen k
 		apSitting: sitting,
 	});
 	assert.deepEqual(navigated, ["/chat/chat_new"]);
+});
+
+test("with no indexed questions Free-response and Mixed both start a sitting and no note is shown", async () => {
+	const seen: Array<{ url: string; method: string; body: unknown }> = [];
+	const navigated: string[] = [];
+	let created = "chat_frq";
+	globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+		const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+		const body = init?.body === undefined ? undefined : JSON.parse(String(init.body));
+		seen.push({ url, method: init?.method ?? "GET", body });
+		if (url === "/api/chats" && init?.method === "POST") return Response.json({ id: created });
+		throw new Error(`unexpected request ${url}`);
+	}) as typeof fetch;
+
+	await mountCourse({ indexedQuestions: 0, navigate: (target) => navigated.push(target) });
+	await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="practise-topic-topic_1"]')!.click());
+
+	assert.doesNotMatch(document.body.textContent ?? "", /needs released papers/, "a free-response sitting needs no released papers");
+	assert.equal(document.querySelector<HTMLButtonElement>('[data-testid="sitting-frq"]')?.disabled, false);
+	assert.equal(document.querySelector<HTMLButtonElement>('[data-testid="sitting-mixed"]')?.disabled, false);
+
+	await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="sitting-frq"]')!.click());
+
+	const frqSitting = { scope: { type: "topic", topicId: "topic_1" }, kind: "frq" } as const;
+	assert.deepEqual(seen.find((request) => request.url === "/api/chats")!.body, {
+		title: sittingLabel(apRecord(), frqSitting),
+		kind: "ap",
+		apCourseId: "ap_1",
+		apSitting: frqSitting,
+	});
+	assert.deepEqual(navigated, ["/chat/chat_frq"]);
+
+	await unmount();
+	seen.length = 0;
+	navigated.length = 0;
+	created = "chat_mixed";
+	await mountCourse({ indexedQuestions: 0, navigate: (target) => navigated.push(target) });
+	await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="practise-topic-topic_1"]')!.click());
+	await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="sitting-mixed"]')!.click());
+
+	const mixedSitting = { scope: { type: "topic", topicId: "topic_1" }, kind: "mixed" } as const;
+	assert.deepEqual(seen.find((request) => request.url === "/api/chats")!.body, {
+		title: sittingLabel(apRecord(), mixedSitting),
+		kind: "ap",
+		apCourseId: "ap_1",
+		apSitting: mixedSitting,
+	});
+	assert.deepEqual(navigated, ["/chat/chat_mixed"]);
 });
 
 test("Learn creates a Teach session whose title is the learn prompt", async () => {

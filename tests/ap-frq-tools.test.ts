@@ -32,6 +32,7 @@ import {
 	answeredFrqFrom,
 	createApViewPhotoTool,
 	gateScoringGuideline,
+	skippedFrqFrom,
 	type ApAttemptsPort,
 	type ApCourseStorePort,
 	type ApIndexPort,
@@ -309,6 +310,13 @@ function harness(options: HarnessOptions = {}) {
 		attempts: stores.attempts,
 		answeredFrq: answered,
 		answeredFrqCount: answeredCount,
+		skippedFrq: () => false,
+		// Stage 3 seam: no generated questions in this suite.
+		generatedFrqs: [],
+		// Stage 3 seams: no drawings and nothing looked at (the figure suite
+		// exercises them; this suite only needs the registry to build).
+		figures: { state: () => "unknown", png: async () => Buffer.alloc(0) },
+		viewedFigures: new Set<string>(),
 		...(options.sitting === undefined ? {} : { sitting: options.sitting }),
 	};
 	return {
@@ -415,6 +423,45 @@ describe("answeredFrqFrom and answeredFrqCountFrom", () => {
 		const messages = [...answer("c1"), assistantCall("c2", "ap_frq", { questionId: "2023-1" })];
 		assert.equal(answeredFrqFrom(messages, "2023-1"), "pending");
 		assert.equal(answeredFrqCountFrom(messages, "2023-1"), 1);
+	});
+});
+
+describe("skippedFrqFrom", () => {
+	it("reports a non-error dismissed ap_frq result for the question", () => {
+		const messages = [
+			assistantCall("c1", "ap_frq", { questionId: "2023-1" }),
+			toolResult("c1", "ap_frq", { kind: "frq", dismissed: true }),
+		];
+		assert.equal(skippedFrqFrom(messages, "2023-1"), true);
+		assert.equal(skippedFrqFrom(messages, "2023-2"), false, "another question was not skipped");
+	});
+
+	it("keeps an earlier skip when the question is posed again", () => {
+		const messages = [
+			assistantCall("c1", "ap_frq", { questionId: "2023-1" }),
+			toolResult("c1", "ap_frq", { kind: "frq", dismissed: true }),
+			assistantCall("c2", "ap_frq", { questionId: "2023-1" }),
+		];
+		assert.equal(skippedFrqFrom(messages, "2023-1"), true);
+	});
+
+	it("does not report an answer, a pending pose, an error or another tool's dismissal", () => {
+		const cases: LhMessage[][] = [
+			[
+				assistantCall("c1", "ap_frq", { questionId: "2023-1" }),
+				toolResult("c1", "ap_frq", { kind: "frq", questionId: "2023-1", parts: [] }),
+			],
+			[assistantCall("c1", "ap_frq", { questionId: "2023-1" })],
+			[
+				assistantCall("c1", "ap_frq", { questionId: "2023-1" }),
+				toolResult("c1", "ap_frq", { kind: "frq", dismissed: true }, true),
+			],
+			[
+				assistantCall("c1", "ap_frq_gen", { questionId: "2023-1" }),
+				toolResult("c1", "ap_frq_gen", { kind: "frq", dismissed: true }),
+			],
+		];
+		for (const messages of cases) assert.equal(skippedFrqFrom(messages, "2023-1"), false);
 	});
 });
 

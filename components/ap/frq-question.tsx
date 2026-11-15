@@ -1,10 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { XIcon } from "lucide-react";
 
 import { photoName } from "@/components/ap/photo-name";
+import { QuestionFigure } from "@/components/ap/question-figure";
 import { QuestionPages } from "@/components/ap/question-pages";
 import {
 	FilePickerBusy,
@@ -19,9 +20,11 @@ import { Button } from "@/components/ui/button";
 import { ToolContentResponse } from "@/components/ai-elements/message";
 import { cn } from "@/lib/utils";
 import {
+	apGenQuestionId,
 	buildAnswer,
 	DEFAULT_CONFIDENCE_INDEX,
 	type AnswerRequest,
+	type ApFrqGenDisplay,
 	type QuestionAnswerData,
 	type QuestionData,
 	type QuestionFormDraft,
@@ -121,6 +124,27 @@ export function frqAnswerRequest(
 	};
 }
 
+/** The answer request a generated question's submit builds (AP prep stage 3):
+ *  every part in display order (a blank part stays an empty string), the
+ *  photos as absolute paths, and the question block the answer record
+ *  replays. A generated question has no paper, so the block carries only the
+ *  derived id and the title. */
+export function frqGenAnswerRequest(
+	question: ApFrqGenDisplay,
+	toolCallId: string,
+	answers: { parts: Record<string, string>; photos: readonly string[]; dontKnow: boolean },
+): AnswerRequest {
+	return {
+		dontKnow: answers.dontKnow,
+		parts: question.parts.map((part) => ({ label: part.label, text: answers.parts[part.label] ?? "" })),
+		photos: [...answers.photos],
+		frq: {
+			questionId: apGenQuestionId(toolCallId),
+			title: question.title,
+		},
+	};
+}
+
 /** The fetch state the body renders — exported so tests can pose a ready question. */
 export type FrqQuestionFetchState =
 	| { status: "loading" }
@@ -205,11 +229,10 @@ export function FrqQuestion({
 	return <FrqQuestionBody state={state} apCourseId={apCourseId} {...form} />;
 }
 
-export interface FrqQuestionFormProps {
+/** The props every free-response form shares: the answer sheet itself, its
+ *  submit and the draft/dictation seams. */
+interface FrqSheetFormProps {
 	toolCallId: string;
-	apCourseId?: string;
-	question: ApFrqQuestionView;
-	details?: string;
 	onSubmit: (answer: QuestionAnswerData) => void;
 	initialDraft?: QuestionFormDraft;
 	onSaveDraft?: (draft: QuestionFormDraft) => void;
@@ -218,19 +241,59 @@ export interface FrqQuestionFormProps {
 	compactionRunning?: boolean;
 }
 
-/** The form body — exported so the render tests can pose a loaded question. */
-export function FrqQuestionForm({
+export interface FrqQuestionFormProps extends FrqSheetFormProps {
+	apCourseId?: string;
+	question: ApFrqQuestionView;
+	details?: string;
+}
+
+/** One answer box's heading: the label and, beside it, a released part's
+ *  topic tag. A generated part's prompt is its own line above the box. */
+interface FrqSheetPart {
+	label: string;
+	tag?: string;
+	prompt?: string;
+}
+
+/** Everything the sheet needs to pose one multi-part free-response question.
+ *  Both question sources (the released paper and the tutor's own) differ only
+ *  in their intro, their part headings and the request a submit builds. */
+interface FrqSheetProps extends FrqSheetFormProps {
+	header: string;
+	title: string;
+	details?: string;
+	parts: FrqSheetPart[];
+	/** The question body between the details and the answer boxes: the
+	 *  released paper's pages, or a generated question's figure and stem. */
+	intro?: ReactNode;
+	/** False for a released question whose paper is not on this computer:
+	 *  the intro, answer boxes and photo attach are replaced by `absent`. */
+	present: boolean;
+	absent?: ReactNode;
+	buildRequest: (answers: { parts: Record<string, string>; photos: string[]; dontKnow: boolean }) => AnswerRequest;
+	toolName: "ap_frq" | "ap_frq_gen";
+}
+
+/** The shared answer sheet: one box per part, an optional photo of the
+ *  written work and one Submit. */
+function FrqSheet({
 	toolCallId,
-	apCourseId,
-	question,
+	header,
+	title,
 	details,
+	parts,
+	intro,
+	present,
+	absent,
+	buildRequest,
+	toolName,
 	onSubmit,
 	initialDraft,
 	onSaveDraft,
 	onEscape,
 	dictationClaim = true,
 	compactionRunning = false,
-}: FrqQuestionFormProps) {
+}: FrqSheetProps) {
 	const [texts, setTexts] = useState<Record<string, string>>(() => readFrqDraft(initialDraft).parts);
 	const [photos, setPhotos] = useState<string[]>(() => readFrqDraft(initialDraft).photos);
 	const [dontKnow, setDontKnowState] = useState(() => readFrqDraft(initialDraft).dontKnow === true);
@@ -277,7 +340,7 @@ export function FrqQuestionForm({
 				// Disabled boxes take no dictated text; a live run was finished
 				// before the toggle turned this on.
 				if (dontKnowRef.current) return;
-				const label = question.parts[focusedPart.current]?.label;
+				const label = parts[focusedPart.current]?.label;
 				if (label === undefined) return;
 				textsRef.current = {
 					...textsRef.current,
@@ -285,15 +348,15 @@ export function FrqQuestionForm({
 				};
 				setTexts(textsRef.current);
 			},
-			[question.parts],
+			[parts],
 		),
 		dictationClaim,
 	);
 
 	const canSubmit =
-		question.present &&
+		present &&
 		!compactionRunning &&
-		(dontKnow || photos.length > 0 || question.parts.some((part) => (texts[part.label] ?? "").trim().length > 0));
+		(dontKnow || photos.length > 0 || parts.some((part) => (texts[part.label] ?? "").trim().length > 0));
 
 	const attachPhoto = async () => {
 		if (dontKnowRef.current || photosRef.current.length >= MAX_PHOTOS || choosing.current) return;
@@ -330,9 +393,9 @@ export function FrqQuestionForm({
 	};
 
 	const doSubmit = () => {
-		if (!question.present || compactionRunning) return;
+		if (!present || compactionRunning) return;
 		const attached = [...photosRef.current];
-		const req = frqAnswerRequest(question, {
+		const req = buildRequest({
 			parts: textsRef.current,
 			photos: attached,
 			dontKnow: dontKnowRef.current,
@@ -343,14 +406,14 @@ export function FrqQuestionForm({
 		const qd: QuestionData = {
 			id: toolCallId,
 			kind: "frq",
-			question: question.title,
+			question: title,
 			mode: "text",
 			options: [],
 			createdAt: new Date().toISOString(),
 		};
 		// Snapshot before the optimistic submission unmounts the form.
 		onSaveDraft?.(frqFormDraft({ parts: textsRef.current, photos: attached, dontKnow: dontKnowRef.current }));
-		onSubmit(buildAnswer(qd, req, "ap_frq"));
+		onSubmit(buildAnswer(qd, req, toolName));
 	};
 
 	return (
@@ -361,33 +424,32 @@ export function FrqQuestionForm({
 				className="max-h-[var(--dock-max-h,55dvh)] overflow-y-auto px-4 pt-3"
 			>
 				<div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-					AP · released
+					{header}
 				</div>
-				<div className="mb-3 font-medium">{question.title}</div>
+				<div className="mb-3 font-medium">{title}</div>
 				{details && (
 					<div className="mb-3 text-sm text-muted-foreground">
 						<ToolContentResponse>{details}</ToolContentResponse>
 					</div>
 				)}
 
-				{question.present ? (
+				{present ? (
 					<>
-						<QuestionPages
-							courseId={apCourseId ?? ""}
-							file={question.file}
-							pages={question.pages}
-							title={question.title}
-							className="mb-3 flex flex-col gap-2"
-						/>
+						{intro}
 
-						{question.parts.map((part, index) => (
+						{parts.map((part, index) => (
 							<div key={part.label} className="mb-3">
 								<div className="mb-1 flex items-baseline gap-2">
 									<span className="text-sm font-medium">({part.label})</span>
-									{part.topicText && (
-										<span className="text-xs text-muted-foreground">{part.topicText}</span>
+									{part.tag && (
+										<span className="text-xs text-muted-foreground">{part.tag}</span>
 									)}
 								</div>
+								{part.prompt && (
+									<div className="mb-1 text-sm">
+										<ToolContentResponse>{part.prompt}</ToolContentResponse>
+									</div>
+								)}
 								<div
 									className={cn(
 										"rounded-[10px] border border-border/70 bg-background/60 transition-colors focus-within:border-primary/50",
@@ -409,7 +471,11 @@ export function FrqQuestionForm({
 											}
 										}}
 										allowFilePaths={false}
-										aria-label={part.topicText ? `(${part.label}) ${part.topicText}` : `(${part.label})`}
+										aria-label={
+											part.tag || part.prompt
+												? `(${part.label}) ${part.tag ?? part.prompt}`
+												: `(${part.label})`
+										}
 										aria-disabled={dontKnow}
 										tabIndex={dontKnow ? -1 : undefined}
 										placeholder="Type your answer…"
@@ -469,15 +535,7 @@ export function FrqQuestionForm({
 						</div>
 					</>
 				) : (
-					<div className="mb-3 rounded-lg border border-dashed bg-muted/40 p-3 text-sm">
-						This paper is not on this computer. Download it from the course page.{" "}
-						<Link
-							href={`/ap/${apCourseId ?? ""}`}
-							className="font-medium text-primary underline underline-offset-4"
-						>
-							Course page
-						</Link>
-					</div>
+					absent
 				)}
 			</div>
 
@@ -520,5 +578,81 @@ export function FrqQuestionForm({
 				</div>
 			</form>
 		</div>
+	);
+}
+
+/** The form body — exported so the render tests can pose a loaded question. */
+export function FrqQuestionForm({ apCourseId, question, details, ...form }: FrqQuestionFormProps) {
+	return (
+		<FrqSheet
+			header="AP · released"
+			title={question.title}
+			details={details}
+			parts={question.parts.map((part) => ({ label: part.label, tag: part.topicText }))}
+			intro={
+				<QuestionPages
+					courseId={apCourseId ?? ""}
+					file={question.file}
+					pages={question.pages}
+					title={question.title}
+					className="mb-3 flex flex-col gap-2"
+				/>
+			}
+			present={question.present}
+			absent={
+				<div className="mb-3 rounded-lg border border-dashed bg-muted/40 p-3 text-sm">
+					This paper is not on this computer. Download it from the course page.{" "}
+					<Link
+						href={`/ap/${apCourseId ?? ""}`}
+						className="font-medium text-primary underline underline-offset-4"
+					>
+						Course page
+					</Link>
+				</div>
+			}
+			buildRequest={(answers) => frqAnswerRequest(question, answers)}
+			toolName="ap_frq"
+			{...form}
+		/>
+	);
+}
+
+export interface FrqGenQuestionFormProps extends FrqSheetFormProps {
+	/** The dock passes the chat id so the question's figure loads through the
+	 *  chat's figure route; without it no figure is shown. */
+	chatId?: string;
+	question: ApFrqGenDisplay;
+}
+
+/**
+ * A generated free-response question (AP prep stage 3): the tutor's own
+ * title, details, figure and stem, then one answer box per part. Everything
+ * shown comes from `apFrqGenDisplay` of the call input — the committed
+ * answers and rubric points never reach this component. No fetch: unlike a
+ * released paper, there is no projection to load.
+ */
+export function FrqGenQuestionForm({ chatId, question, toolCallId, ...form }: FrqGenQuestionFormProps) {
+	return (
+		<FrqSheet
+			header="AP · generated"
+			title={question.title}
+			details={question.details}
+			parts={question.parts.map((part) => ({ label: part.label, prompt: part.prompt }))}
+			intro={
+				<>
+					{question.figure !== undefined && chatId !== undefined && (
+						<QuestionFigure chatId={chatId} figure={question.figure} className="mb-3" />
+					)}
+					<div className="mb-3">
+						<ToolContentResponse>{question.stem}</ToolContentResponse>
+					</div>
+				</>
+			}
+			present
+			buildRequest={(answers) => frqGenAnswerRequest(question, toolCallId, answers)}
+			toolName="ap_frq_gen"
+			toolCallId={toolCallId}
+			{...form}
+		/>
 	);
 }

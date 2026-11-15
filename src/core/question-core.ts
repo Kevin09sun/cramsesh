@@ -18,6 +18,7 @@
  */
 
 import { Type, type Static } from "typebox";
+import { AP_PART_LABEL_PATTERN } from "./ap-frq.ts";
 import { stripModelValueDebris } from "./value-debris.ts";
 
 // ─── shared types ───────────────────────────────────────────────────────────
@@ -408,6 +409,14 @@ export const apMcqInputObject = Type.Object({
 				"carries the diagnosis (the short explanation) with the fresh question.",
 		}),
 	),
+	figure: Type.Optional(
+		Type.String({
+			description:
+				"Optional: the id of a finished figure this tutor drew in this session and has looked at with " +
+				"ap_view_figure; it is shown with the question. A figure from another session, an unfinished or " +
+				"failed drawing, and one not looked at are refused.",
+		}),
+	),
 });
 
 export type ApMcqToolInput = Static<typeof apMcqInputObject>;
@@ -450,6 +459,7 @@ export function apMcqInputProblems(input: unknown): string[] {
 		options?: unknown;
 		correctAnswer?: unknown;
 		optionNotes?: unknown;
+		figure?: unknown;
 	};
 
 	if (typeof value.question !== "string" || value.question.trim().length === 0) {
@@ -488,6 +498,159 @@ export function apMcqInputProblems(input: unknown): string[] {
 	if (notes.some((note) => typeof note !== "string" || note.trim().length === 0)) {
 		problems.push("option notes must not be blank");
 	}
+	if (typeof value.figure === "string" && value.figure.trim().length === 0) {
+		problems.push("figure must not be blank");
+	}
+	return problems;
+}
+
+// ─── the generated AP free-response question (AP prep stage 3) ─────────────
+//
+// A free-response question the tutor writes itself: the stem, the parts, each
+// part's committed answer and its committed rubric points all ride the call.
+// Those commitments are the grading standard and NEVER reach a screen — the
+// display projection strips them, and ap-frq's generatedScoringQuestion
+// adapts the rubric for the same per-point scoring released questions use.
+
+export const apFrqGenInputObject = Type.Object({
+	title: Type.String({
+		description: 'REQUIRED — a short label for the question, e.g. "Rates of change in a cooling model".',
+	}),
+	stem: Type.String({
+		description: "REQUIRED — the shared setup the learner reads before answering the parts.",
+	}),
+	parts: Type.Array(
+		Type.Object({
+			label: Type.String({
+				description:
+					'The part\'s label: one lower-case letter, a sub-part hyphenated (e.g. "a", "c-i"). ' +
+					"Labels must be distinct within the question.",
+			}),
+			prompt: Type.String({
+				description: "What the learner is asked in this part — shown with the question.",
+			}),
+			topicId: Type.String({
+				description:
+					"REQUIRED — the one listed course topic this part tests, exactly as it appears in the course plan.",
+			}),
+			answer: Type.String({
+				description:
+					"REQUIRED. The committed model answer for this part — NEVER shown to the learner. " +
+					"Grade the learner's answer strictly against it.",
+			}),
+			points: Type.Array(
+				Type.String({
+					description:
+						"One rubric point — a single thing the learner must do to earn it. NEVER shown to the learner.",
+				}),
+				{
+					minItems: 1,
+					description:
+						"REQUIRED — the committed rubric points for this part (at least one). NEVER shown to the learner.",
+				},
+			),
+		}),
+		{
+			minItems: 1,
+			maxItems: 6,
+			description: "REQUIRED — one to six parts, answered together in one sitting.",
+		},
+	),
+	figure: Type.Optional(
+		Type.String({
+			description:
+				"Optional: the id of a finished figure this tutor drew in this session and has looked at with " +
+				"ap_view_figure; it is shown with the question. A figure from another session, an unfinished or " +
+				"failed drawing, and one not looked at are refused.",
+		}),
+	),
+	details: Type.Optional(
+		Type.String({
+			description:
+				"Optional extra context shown under the question. This is the VISIBLE channel: use it for any " +
+				"short text the learner should see with the question.",
+		}),
+	),
+});
+
+export type ApFrqGenToolInput = Static<typeof apFrqGenInputObject>;
+
+/** What a screen may show of a generated question: no answer, no points. */
+export interface ApFrqGenDisplay {
+	title: string;
+	stem: string;
+	parts: { label: string; prompt: string }[];
+	figure?: string;
+	details?: string;
+}
+
+export function apFrqGenDisplay(input: ApFrqGenToolInput): ApFrqGenDisplay {
+	return {
+		title: input.title,
+		stem: input.stem,
+		// Normalised exactly as generatedScoringQuestion normalises it: the
+		// learner's answer comes back keyed by the label the form displays, so
+		// a raw " A " here would never match the rubric's "a".
+		parts: input.parts.map((part) => ({
+			label: part.label.trim().toLowerCase(),
+			prompt: part.prompt,
+		})),
+		...(input.figure === undefined ? {} : { figure: input.figure }),
+		...(input.details === undefined ? {} : { details: input.details }),
+	};
+}
+
+/**
+ * The generated-question authoring contract. Empty result = a question whose
+ * committed rubric can be graded and whose visible projection can be posed.
+ * Every problem is reported, in the brief's order (title, stem, part count,
+ * labels, then each part's prompt, answer and points, then blank points), and
+ * a part is named by its normalised label.
+ */
+export function apFrqGenInputProblems(input: ApFrqGenToolInput): string[] {
+	const problems: string[] = [];
+
+	if (typeof input.title !== "string" || input.title.trim().length === 0) {
+		problems.push("title must not be blank");
+	}
+	if (typeof input.stem !== "string" || input.stem.trim().length === 0) {
+		problems.push("stem must not be blank");
+	}
+
+	const parts = Array.isArray(input.parts) ? input.parts : [];
+	if (parts.length < 1 || parts.length > 6) {
+		problems.push("between one and six parts are required");
+	}
+
+	const labels = parts.map((part) =>
+		typeof part.label === "string" ? part.label.trim().toLowerCase() : "",
+	);
+	if (labels.some((label) => !AP_PART_LABEL_PATTERN.test(label)) || new Set(labels).size !== labels.length) {
+		problems.push("part labels must be one lower-case letter, sub-parts hyphenated, and distinct");
+	}
+
+	for (const [index, part] of parts.entries()) {
+		if (typeof part.prompt !== "string" || part.prompt.trim().length === 0) {
+			problems.push(`part "${labels[index]}" needs a prompt`);
+		}
+	}
+	for (const [index, part] of parts.entries()) {
+		if (typeof part.answer !== "string" || part.answer.trim().length === 0) {
+			problems.push(`part "${labels[index]}" needs a committed answer`);
+		}
+	}
+	for (const [index, part] of parts.entries()) {
+		if (!Array.isArray(part.points) || part.points.length < 1) {
+			problems.push(`part "${labels[index]}" needs at least one rubric point`);
+		}
+	}
+	const blankPoint = parts.some(
+		(part) =>
+			Array.isArray(part.points) &&
+			part.points.some((point) => typeof point !== "string" || point.trim().length === 0),
+	);
+	if (blankPoint) problems.push("rubric points must not be blank");
+
 	return problems;
 }
 
@@ -593,8 +756,9 @@ export interface QuestionAnswerData {
 	 *  Kept exactly as given; the photo bytes never enter the record. */
 	photos?: string[];
 	/** frq only (rendering): the answered card replays the released paper
-	 *  page — title and file are public, none of it is secret. */
-	frq?: { questionId: string; title: string; file: string; pages: number[] };
+	 *  page — title and file are public, none of it is secret. A generated
+	 *  question (`ap_frq_gen`) has no paper, so file and pages are absent. */
+	frq?: { questionId: string; title: string; file?: string; pages?: number[] };
 	/** The learner's reasoning on the QUESTION (renamed from `note`, owner
 	 *  2026-10-03 — "that's what it is"). */
 	thinking?: string;
@@ -639,8 +803,9 @@ export interface AnswerRequest {
 	photos?: string[];
 	/** frq only: the released-question block the model never authored (it
 	 *  passes only `questionId`) — the caller supplies it from the index so
-	 *  the answer record can replay the paper page. */
-	frq?: { questionId: string; title: string; file: string; pages: number[] };
+	 *  the answer record can replay the paper page. A generated question has
+	 *  no paper, so file and pages are absent. */
+	frq?: { questionId: string; title: string; file?: string; pages?: number[] };
 }
 
 /** The confidence slider's snap stops (owner, 2026-10-01): raw probability
@@ -910,7 +1075,12 @@ export function buildAnswer(qd: QuestionData, req: AnswerRequest, tool?: string)
 		// Blank parts are kept as empty strings — the learner saw the part.
 		if (req.parts) base.parts = req.parts.map((part) => ({ label: part.label, text: part.text.trim() }));
 		if (req.photos) base.photos = [...req.photos];
-		if (req.frq) base.frq = { ...req.frq, pages: [...req.frq.pages] };
+		if (req.frq) {
+			base.frq = {
+				...req.frq,
+				...(req.frq.pages === undefined ? {} : { pages: [...req.frq.pages] }),
+			};
+		}
 	}
 	return base;
 }

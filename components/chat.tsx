@@ -1639,7 +1639,7 @@ export function Chat({
 													// transcript; answered ones render as records.
 													if (questionDisposition === "answered") {
 														return (
-															<AnsweredCard key={pi} answer={part.output as QuestionAnswerData} input={part.input} apCourseId={apCourseId} />
+															<AnsweredCard key={pi} answer={part.output as QuestionAnswerData} input={part.input} apCourseId={apCourseId} chatId={chatId} />
 														);
 													}
 													return null;
@@ -2472,10 +2472,11 @@ function DockOverlay({
 						>
 							{pending ? (
 								<QuestionDock
-									toolName={pending.tool as "quiz" | "probe" | "ask_user_question" | "explain" | "recall" | "check_point" | "ap_mcq" | "ap_frq"}
+									toolName={pending.tool as "quiz" | "probe" | "ask_user_question" | "explain" | "recall" | "check_point" | "ap_mcq" | "ap_frq" | "ap_frq_gen"}
 									toolCallId={pending.toolCallId}
 									input={pending.input as never}
 									apCourseId={apCourseId}
+									chatId={chatId}
 									expanded={expanded}
 									reveal={revealPending}
 									phase={phase}

@@ -29,7 +29,7 @@
 
 import { Value } from "typebox/value";
 import type { TSchema } from "typebox";
-import { quizDisplayInputSchema, askInputSchema, askOptionProblems, quizInputProblems, explainInputProblems, explainDisplayInputSchema, apMcqInputObject, apMcqInputProblems, apFrqInputObject, type AskToolInput, type QuizToolInput, type ExplainToolInput, type ApMcqToolInput, type ApFrqToolInput } from "./question-core.ts";
+import { quizDisplayInputSchema, askInputSchema, askOptionProblems, quizInputProblems, explainInputProblems, explainDisplayInputSchema, apMcqInputObject, apMcqInputProblems, apFrqInputObject, apFrqGenInputObject, apFrqGenInputProblems, type AskToolInput, type QuizToolInput, type ExplainToolInput, type ApMcqToolInput, type ApFrqToolInput, type ApFrqGenToolInput } from "./question-core.ts";
 import { healEncodedArguments } from "./argument-heal.ts";
 import { probeDoneInputSchema, type ProbeDoneInput } from "./contracts/probe.ts";
 
@@ -136,15 +136,32 @@ export function parseApFrqInput(input: unknown): ApFrqToolInput | undefined {
 	return boundaryParse<ApFrqToolInput>(apFrqInputObject, healEncodedArguments(input, apFrqInputObject));
 }
 
+/**
+ * AP generated free-response parse for DISPLAY (stage 3): the tutor's own
+ * title, stem and parts, plus the authoring problems (labels, each part's
+ * prompt/answer/points, blank points). The committed answer and points stay
+ * on the call — no screen renders this parse's raw input.
+ */
+export function parseApFrqGenInput(input: unknown): ApFrqGenToolInput | undefined {
+	const cleaned = boundaryParse<ApFrqGenToolInput>(
+		apFrqGenInputObject,
+		healEncodedArguments(input, apFrqGenInputObject),
+	);
+	if (!cleaned) return undefined;
+	if (apFrqGenInputProblems(cleaned).length > 0) return undefined;
+	return cleaned;
+}
+
 /** One display-validity decision for dock authority and recovery. Does not
  * mutate the recorded input or invent missing authoring fields. */
-export function parseQuestionInput(tool: string, input: unknown): QuizToolInput | AskToolInput | ExplainToolInput | ApMcqToolInput | ApFrqToolInput | undefined {
+export function parseQuestionInput(tool: string, input: unknown): QuizToolInput | AskToolInput | ExplainToolInput | ApMcqToolInput | ApFrqToolInput | ApFrqGenToolInput | undefined {
 	switch (tool) {
 		case "quiz": case "probe": return parseQuizInput(input);
 		case "explain": case "recall": case "check_point": return parseExplainInput(input);
 		case "ask_user_question": return parseAskInput(input);
 		case "ap_mcq": return parseApMcqInput(input);
 		case "ap_frq": return parseApFrqInput(input);
+		case "ap_frq_gen": return parseApFrqGenInput(input);
 		default: return undefined;
 	}
 }

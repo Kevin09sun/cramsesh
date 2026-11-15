@@ -205,6 +205,13 @@ function ctxOf(
 		attempts: { record: (courseId) => courses.get(courseId)! },
 		answeredFrq: () => "none",
 		answeredFrqCount: () => 0,
+		skippedFrq: () => false,
+		// Stage 3 seam: no generated questions in this suite.
+		generatedFrqs: [],
+		// Stage 3 seams: no drawing states and nothing looked at yet. The
+		// figure suite (ap-figure-tools.test.ts) exercises them.
+		figures: { state: () => "unknown", png: async () => Buffer.alloc(0) },
+		viewedFigures: new Set<string>(),
 		...(sitting ? { sitting } : {}),
 	};
 }
@@ -298,9 +305,12 @@ describe("apTools registry", () => {
 			"ap_progress",
 			"ap_mcq",
 			"ap_frq",
+			"ap_frq_gen",
 			"ap_rubric",
 			"ap_view_photo",
+			"ap_view_figure",
 			"ap_record_frq",
+			"ap_record_gen",
 			"ap_retag_part",
 			"ap_record_result",
 			"read",
@@ -308,24 +318,29 @@ describe("apTools registry", () => {
 			"find",
 			"grep",
 		]);
-		// No acquire/render tool of its own, no pdf job, no demo/visual.
-		for (const forbidden of ["web_fetch_pdf", "pdf", "visual", "demo"]) {
+		// No acquire/render tool of its own and no pdf job; `demo` is never
+		// registered. `visual` is absent here because this registry has no
+		// jobs context, not because AP never carries it.
+		for (const forbidden of ["web_fetch_pdf", "pdf", "demo"]) {
 			assert.equal(tools[forbidden], undefined, `${forbidden} must never be registered`);
 		}
+		assert.equal(tools.visual, undefined, "no jobs context → no drawing tool");
 	});
 
-	it("wires research, paper indexing and the direct web tools when their seams are passed", () => {
+	it("wires research, the drawing tool, paper indexing and the direct web tools when their seams are passed", () => {
 		const { papers } = fakePapers();
 		const tools = apTools({ ...ctxOf(fakeCourses(courseOf()).courses, papers), jobs: JOBS, search: () => null });
 		assert.ok(tools.research, "research present with a jobs context");
+		assert.ok(tools.visual, "the drawing tool present with a jobs context");
 		assert.ok(tools.ap_index_papers, "paper indexing present with a jobs context");
 		assert.ok(tools.web_search && tools.web_fetch, "web tools present with a search seam");
 	});
 
-	it("no jobs or search seam → neither research, paper indexing nor web tools", () => {
+	it("no jobs or search seam → neither research, drawing, paper indexing nor web tools", () => {
 		const { papers } = fakePapers();
 		const tools = apTools(ctxOf(fakeCourses(courseOf()).courses, papers));
 		assert.equal(tools.research, undefined);
+		assert.equal(tools.visual, undefined);
 		assert.equal(tools.ap_index_papers, undefined);
 		assert.equal(tools.web_search, undefined);
 		assert.equal(tools.web_fetch, undefined);

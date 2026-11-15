@@ -59,6 +59,7 @@ export const QUESTION_TOOLS = [
 	"check_point",
 	"ap_mcq",
 	"ap_frq",
+	"ap_frq_gen",
 ] as const;
 
 /** The tool→kind map (the dock's own fold, named once — the dismissal
@@ -66,10 +67,10 @@ export const QUESTION_TOOLS = [
  *  names fold onto their teach kinds, test prep's check_point is an
  *  explain-shaped free-text question, AP's ap_mcq is a quiz-shaped
  *  multiple-choice question (the verdict is withheld in the core
- *  presentation seams, not by the kind), and AP's ap_frq is the
- *  multi-part free-response kind of its own. The dock is kind-driven. */
+ *  presentation seams, not by the kind), and AP's ap_frq / ap_frq_gen are
+ *  the multi-part free-response kind of its own. The dock is kind-driven. */
 export function toolQuestionKind(tool: string): "quiz" | "ask" | "explain" | "frq" {
-	return tool === "ap_frq"
+	return tool === "ap_frq" || tool === "ap_frq_gen"
 		? "frq"
 		: tool === "quiz" || tool === "probe" || tool === "ap_mcq"
 			? "quiz"
@@ -200,6 +201,9 @@ const ACTIVITY_LABELS: Record<string, string> = {
 	ap_rubric: "Reading the scoring guideline…",
 	ap_view_photo: "Looking at your photo…",
 	ap_record_frq: "Recording the score…",
+	// AP prep stage 3 (2026-11-15): a generated question's grading loop.
+	ap_view_figure: "Checking the figure…",
+	ap_record_gen: "Recording the score…",
 };
 
 /** The activity label for ONE running tool (owner, streaming round
