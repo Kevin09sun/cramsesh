@@ -9,6 +9,7 @@ import {
 	type TeachingAgent,
 } from "../agent/teacher-agent.ts";
 import { piEngineForSpec, type PiEngine } from "../agent/models.ts";
+import { answeredFrqCountFrom, answeredFrqFrom } from "../agent/tools/ap.ts";
 import { connectionBackgroundAllowed as subscriptionBackgroundAllowed, connectionScopeCurrent, isSubscriptionProvider } from "../agent/subscription-connections.ts";
 import { nativeSubscriptionError } from "../agent/subscription-stream.ts";
 import { chatGPTStreamError } from "../agent/chatgpt-stream.ts";
@@ -36,7 +37,7 @@ import { fileAccessPolicy } from "./file-access.ts";
 import { collectToolCallIds } from "./pi/call-ids.ts";
 import { providerEventNote } from "../agent/provider-events.ts";
 import { effectiveSettings, stores } from "./stores.ts";
-import { apPapers } from "./ap-papers.ts";
+import { apPaperPath, apPaperPresent, apPapers } from "./ap-papers.ts";
 import { searchAvailable, searchProvider } from "./search.ts";
 import { providerKeyPresent } from "./keys.ts";
 import { CLAUDE_CODE_PROVIDER } from "../core/contracts/claude-code.ts";
@@ -119,6 +120,24 @@ const jobRunner = createJobRunner({
 	// null = honestly unavailable; the research job is registered with or
 	// without a search key.
 	searchProvider,
+	// AP paper indexing (AP prep stage 2): the course record, the synced
+	// question index and the local papers folder, behind one port. The agent
+	// layer imports no store or server module.
+	apIndex: {
+		course: (courseId) => stores.apCourseStore.get(courseId),
+		index: (courseId) => stores.apIndexStore.get(courseId),
+		putPaper: (courseId, paperId, questions) => {
+			stores.apIndexStore.putPaper(courseId, paperId, questions);
+		},
+		paperPath: (courseId, file) => {
+			try {
+				return apPaperPresent(courseId, file) ? apPaperPath(courseId, file) : null;
+			} catch {
+				// A malformed saved file name reads as "not on this computer".
+				return null;
+			}
+		},
+	},
 });
 /** The app's ONE extraction pipeline instance — both front doors share it:
  *  quiz-triggered session runs (turn-service) and notes imports
@@ -508,6 +527,23 @@ export async function handleChatInput(
 						sitting: apSitting,
 						courses: stores.apCourseStore,
 						papers: apPapers,
+						// The synced released-question index and the graded
+						// free-response attempts (stage 2).
+						index: {
+							get: (courseId) => stores.apIndexStore.get(courseId),
+							forgetPaper: (courseId, paperId) => stores.apIndexStore.forgetPaper(courseId, paperId),
+							retagPart: (courseId, questionId, label, topicId) => {
+								stores.apIndexStore.retagPart(courseId, questionId, label, topicId);
+							},
+						},
+						attempts: {
+							record: (courseId, attempt, topics) =>
+								stores.apCourseStore.recordRealAttempt(courseId, attempt, topics),
+						},
+						// Derived from THIS turn's message list — the write-ahead
+						// record plus the answer that re-enters this turn.
+						answeredFrq: (questionId) => answeredFrqFrom(agentMessages, questionId),
+						answeredFrqCount: (questionId) => answeredFrqCountFrom(agentMessages, questionId),
 						// The rarely-needed set, wired exactly like test prep's: the
 						// research + pdf jobs.
 						jobs: {

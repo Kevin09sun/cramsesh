@@ -412,6 +412,32 @@ export const apMcqInputObject = Type.Object({
 
 export type ApMcqToolInput = Static<typeof apMcqInputObject>;
 
+// ─── the AP free-response question (AP prep stage 2) ───────────────────────
+//
+// A released free-response question, named by id: the question, its pages,
+// its parts and its rubric all come from the course's question index, so the
+// model's input carries nothing the learner must not see. The learner answers
+// part by part (optionally attaching photos of written work); the tutor grades
+// against the released rubric afterwards. The app shows no verdict of its own.
+
+export const apFrqInputObject = Type.Object({
+	questionId: Type.String({
+		description:
+			"REQUIRED — the id of the released free-response question to ask, exactly as listed by ap_progress. " +
+			"The question, its pages and its parts come from the course's question index. ONE question per turn: " +
+			"pose it, then end your turn.",
+	}),
+	details: Type.Optional(
+		Type.String({
+			description:
+				"Optional extra context shown under the question. This is the VISIBLE channel: use it for any " +
+				"short text the learner should see with the question.",
+		}),
+	),
+});
+
+export type ApFrqToolInput = Static<typeof apFrqInputObject>;
+
 /**
  * The AP authoring contract. Empty result = a question the dock can arm and
  * the tutor can grade. Messages are the model-facing retry text: exact,
@@ -513,7 +539,7 @@ export interface OptionAnswer {
 	index: number; // 1-based display index
 }
 
-export type QuestionKind = "quiz" | "ask" | "explain";
+export type QuestionKind = "quiz" | "ask" | "explain" | "frq";
 export type SelectMode = "single-select" | "multi-select";
 export type QuestionMode = SelectMode | "text";
 
@@ -560,6 +586,15 @@ export interface QuestionAnswerData {
 	answers: OptionAnswer[];
 	other?: string; // ask: "Other" free text
 	text?: string; // ask/explain: text-mode answer
+	/** frq only: the learner's answer to each part, in the question's order.
+	 *  A blank part is kept as `text: ""` — the part WAS shown and left. */
+	parts?: { label: string; text: string }[];
+	/** frq only: absolute paths of photos of the learner's written work.
+	 *  Kept exactly as given; the photo bytes never enter the record. */
+	photos?: string[];
+	/** frq only (rendering): the answered card replays the released paper
+	 *  page — title and file are public, none of it is secret. */
+	frq?: { questionId: string; title: string; file: string; pages: number[] };
 	/** The learner's reasoning on the QUESTION (renamed from `note`, owner
 	 *  2026-10-03 — "that's what it is"). */
 	thinking?: string;
@@ -599,6 +634,13 @@ export interface AnswerRequest {
 	thinking?: string; // the reasoning-on-the-question channel (was `note`)
 	readingThinking?: string; // the thinking-while-reading channel (check answers)
 	confidence?: number; // quiz only: 0-100 raw probability — 50 is a real coin flip, always sent (owner, 2026-10-01)
+	/** frq only: the learner's per-part answers and photo paths. */
+	parts?: { label: string; text: string }[];
+	photos?: string[];
+	/** frq only: the released-question block the model never authored (it
+	 *  passes only `questionId`) — the caller supplies it from the index so
+	 *  the answer record can replay the paper page. */
+	frq?: { questionId: string; title: string; file: string; pages: number[] };
 }
 
 /** The confidence slider's snap stops (owner, 2026-10-01): raw probability
@@ -862,6 +904,14 @@ export function buildAnswer(qd: QuestionData, req: AnswerRequest, tool?: string)
 		// modelSolution and never enters the answer record.
 		if (tool !== "check_point") base.committed = qd.committedAnswer;
 	}
+	if (qd.kind === "frq") {
+		// The tutor grades later against the released rubric; the app shows
+		// no verdict, so there is no correct/confidence/committed here.
+		// Blank parts are kept as empty strings — the learner saw the part.
+		if (req.parts) base.parts = req.parts.map((part) => ({ label: part.label, text: part.text.trim() }));
+		if (req.photos) base.photos = [...req.photos];
+		if (req.frq) base.frq = { ...req.frq, pages: [...req.frq.pages] };
+	}
 	return base;
 }
 
@@ -895,6 +945,15 @@ export function compactAnswerForModel(ad: QuestionAnswerData): Record<string, un
 	if (ad.dismissed) return { kind: ad.kind, dismissed: true };
 	const out: Record<string, unknown> = { kind: ad.kind };
 	if (ad.dontKnow) out.dontKnow = true;
+	// Free-response: the learner's part answers and photo paths are the whole
+	// payload; questionId lets the model call ap_rubric. The question itself
+	// and its rubric are never restated (the call args already name the id).
+	if (ad.kind === "frq") {
+		if (ad.frq) out.questionId = ad.frq.questionId;
+		out.parts = (ad.parts ?? []).map((part) => ({ label: part.label, text: part.text }));
+		if (ad.photos && ad.photos.length > 0) out.photos = ad.photos;
+		return out;
+	}
 	// Array.isArray: the seam is called with `unknown` answers (test
 	// fixtures, foreign records) — degrade to omission, never crash.
 	if (Array.isArray(ad.answers) && ad.answers.length > 0)

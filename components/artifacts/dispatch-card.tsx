@@ -4,7 +4,7 @@ import { useContext } from "react";
 import { CheckIcon, SettingsIcon, XIcon } from "lucide-react";
 import { JobsContext } from "@/components/jobs-context";
 import { ChatActionsContext } from "@/components/chat";
-import { isModelsRefusal, isProviderKeyRefusal, type JobKind, type JobRecord } from "@/src/core";
+import { isModelsRefusal, isProviderKeyRefusal, type ArtifactPartProps, type JobKind, type JobRecord } from "@/src/core";
 import { BrailleSpinner } from "@/components/braille-spinner";
 
 /**
@@ -24,7 +24,18 @@ const KIND_LABEL: Record<JobKind, string> = {
 	demo: "Demo agent",
 	visual: "Figure agent",
 	pdf: "PDF reader",
+	ap_index: "Indexing released papers",
 };
+
+/**
+ * The AP indexing dispatch box (AP prep stage 2) — the same async-protocol
+ * idiom as JobCard/PdfJobCard: the ack output drives a DispatchCard; the
+ * indexing result itself rides the steer message.
+ */
+export function ApIndexJobCard({ part }: ArtifactPartProps) {
+	if (part.state !== "output-available") return null;
+	return <DispatchCard toolCallId={part.toolCallId} kind="ap_index" />;
+}
 
 export function DispatchCard({ toolCallId, kind }: { toolCallId: string; kind: JobKind }) {
 	const jobs = useContext(JobsContext);

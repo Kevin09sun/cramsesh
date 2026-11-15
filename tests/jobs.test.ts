@@ -81,6 +81,7 @@ const { createJobRunner, pdfModelOverride, researchModelOverride } = await impor
 const { providerKeyMissing } = await import("../src/core/settings.ts");
 const { PATHS } = await import("../config.ts");
 const { projectView: projectNative } = await import("../src/core/view.ts");
+const { toLlmMessages } = await import("../src/core/native-messages.ts");
 const { subscribe } = await import("../src/core/events.ts");
 
 const JOBS_DIR = path.join(PATHS.data, "jobs");
@@ -1428,6 +1429,92 @@ describe("persistTurn (native history, Wave B)", () => {
 		const record = chatStore.getChat(chat.id)!;
 		assert.equal(record.messages.length, 2);
 		assert.equal((record.messages[1] as { isError: boolean }).isError, true);
+	});
+
+	it("an AP turn replaces every viewed image with ONE note, leaving the live message intact", () => {
+		const chat = chatStore.createChat("Test: AP images not kept", "ap", undefined, { courseId: "ap_images" });
+		trackChat(chat.id);
+		const imageParts = [
+			{ type: "image" as const, data: "AAAA", mimeType: "image/jpeg" },
+			{ type: "image" as const, data: "BBBB", mimeType: "image/png" },
+		];
+		const toolResult = {
+			id: "",
+			role: "toolResult",
+			toolCallId: "photo_1",
+			toolName: "ap_view_photo",
+			content: [{ type: "text", text: "The learner's photo." }, ...imageParts],
+			details: { file: "page-1.png" },
+			isError: false,
+			timestamp: 1,
+		} as never;
+
+		const stamped = persistTurn(chatStore, chat.id, 0, [toolResult], false);
+
+		const record = chatStore.getChat(chat.id)!;
+		const saved = record.messages[0]!;
+		assert.deepEqual((saved as { content: unknown }).content, [
+			{ type: "text", text: "The learner's photo." },
+			{ type: "text", text: "[Image viewed during this turn; not kept in the session.]" },
+		], "text kept, two images collapsed to one note");
+		assert.deepEqual((saved as { details: unknown }).details, { file: "page-1.png" }, "details untouched");
+		assert.ok(!JSON.stringify(record).includes("AAAA"), "no image bytes reach the record");
+		assert.ok(!JSON.stringify(record).includes("BBBB"), "no image bytes reach the record");
+		assert.ok(stamped[0] !== toolResult, "the record gets a new message object");
+		assert.deepEqual((toolResult as { content: unknown }).content, [
+			{ type: "text", text: "The learner's photo." },
+			imageParts[0],
+			imageParts[1],
+		], "the live turn's message keeps its images");
+	});
+
+	it("a Teach turn saves the same images exactly as today", () => {
+		const chat = chatStore.createChat("Test: teach keeps images");
+		trackChat(chat.id);
+		const content = [
+			{ type: "text", text: "The learner's photo." },
+			{ type: "image" as const, data: "AAAA", mimeType: "image/jpeg" },
+			{ type: "image" as const, data: "BBBB", mimeType: "image/png" },
+		];
+		const toolResult = {
+			id: "",
+			role: "toolResult",
+			toolCallId: "photo_1",
+			toolName: "ap_view_photo",
+			content,
+			details: { file: "page-1.png" },
+			isError: false,
+			timestamp: 1,
+		} as never;
+
+		persistTurn(chatStore, chat.id, 0, [toolResult], false);
+
+		const saved = chatStore.getChat(chat.id)!.messages[0]!;
+		assert.deepEqual((saved as { content: unknown }).content, content, "non-AP records are saved exactly as today");
+	});
+
+	it("a saved AP record projects to the model with no image part", () => {
+		const chat = chatStore.createChat("Test: AP record projects clean", "ap", undefined, { courseId: "ap_images" });
+		trackChat(chat.id);
+		persistTurn(chatStore, chat.id, 0, [{
+			id: "",
+			role: "toolResult",
+			toolCallId: "photo_1",
+			toolName: "ap_view_photo",
+			content: [
+				{ type: "text", text: "The learner's photo." },
+				{ type: "image" as const, data: "AAAA", mimeType: "image/jpeg" },
+			],
+			details: null,
+			isError: false,
+			timestamp: 1,
+		} as never], false);
+
+		const wire = toLlmMessages(chatStore.getChat(chat.id)!.messages);
+		assert.ok(
+			!wire.some((m) => Array.isArray(m.content) && m.content.some((part) => part.type === "image")),
+			"toLlmMessages of the saved AP record contains no image part",
+		);
 	});
 });
 

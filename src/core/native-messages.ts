@@ -70,6 +70,14 @@ export const CHECK_POINT_ANSWER_FRAME =
 export const AP_MCQ_ANSWER_FRAME =
 	"The learner answered the ap_mcq question you posed. This tool result IS the learner's pick and, when present, their reasoning — grade it now against your committed correctAnswer and optionNotes, then call ap_record_result.";
 
+/** The contract sentence for an AP free-response answer (stage 2): the
+ *  result IS the learner's per-part answer plus, when present, photo
+ *  paths. The question's rubric is fetched only now, with ap_rubric; the
+ *  photos are looked at with ap_view_photo; every rubric point is graded
+ *  and recorded. Scoped to its own tool like the other frames. */
+export const AP_FRQ_ANSWER_FRAME =
+	"The learner answered the ap_frq question you posed. This tool result IS the learner's answer to each part and, when present, the paths of photos of their written work — call ap_rubric for this question, look at each photo with ap_view_photo, grade every rubric point, then call ap_record_frq.";
+
 // ─── The record's message type ───────────────────────────────────────────────
 
 /**
@@ -230,15 +238,17 @@ export function newAnswerResult(
 	answer: unknown,
 ): LhMessage & ToolResultMessage {
 	const compact = JSON.stringify(compactAnswerForModel(answer as QuestionAnswerData));
-	// check_point and ap_mcq only (controller rulings, 2026-11-11 / stage 1):
-	// state that this result IS the learner's answer. Dismissals are not
-	// answers and keep the bare compact record.
+	// check_point, ap_mcq and ap_frq only (controller rulings, 2026-11-11 /
+	// stage 1 / stage 2): state that this result IS the learner's answer.
+	// Dismissals are not answers and keep the bare compact record.
 	const frame =
 		toolName === "check_point"
 			? CHECK_POINT_ANSWER_FRAME
 			: toolName === "ap_mcq"
 				? AP_MCQ_ANSWER_FRAME
-				: undefined;
+				: toolName === "ap_frq"
+					? AP_FRQ_ANSWER_FRAME
+					: undefined;
 	const framed = frame !== undefined && !(answer as QuestionAnswerData | null)?.dismissed;
 	return {
 		id: newMessageId(),
@@ -887,7 +897,7 @@ export function nativeInputCause(message: AgentMessage, history: readonly AgentM
 		}
 		if (!(QUESTION_TOOLS as readonly string[]).includes(message.toolName) || message.isError || message.details == null || (message.details as { dismissed?: boolean }).dismissed) return "neutral";
 		const details = message.details as Partial<QuestionAnswerData>;
-		if (!["quiz", "ask", "explain"].includes(details.kind ?? "") || typeof details.questionText !== "string" || typeof details.dontKnow !== "boolean" || !Array.isArray(details.answers) || typeof details.answeredAt !== "string") return "unrecognizable";
+		if (!["quiz", "ask", "explain", "frq"].includes(details.kind ?? "") || typeof details.questionText !== "string" || typeof details.dontKnow !== "boolean" || !Array.isArray(details.answers) || typeof details.answeredAt !== "string") return "unrecognizable";
 		const calls = history.flatMap((m) => m.role === "assistant" ? m.content.filter((b) => b.type === "toolCall" && b.id === message.toolCallId) : []);
 		return calls.length === 1 && calls[0]?.type === "toolCall" && calls[0].name === message.toolName ? "learner" : "unrecognizable";
 	}

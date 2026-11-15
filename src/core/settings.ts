@@ -328,6 +328,10 @@ export const ROLE_SLOT: Readonly<Record<ModelRole, ModelSlotName>> = {
 	auditor: "cheap",
 	visualMaker: "vision",
 	pdfReader: "vision",
+	// AP paper indexing (AP prep stage 2): text-only extraction on Cheap.
+	// Deliberately NOT a BACKGROUND_MODEL_ROLES member: the role has no
+	// settings override UI (the plan fixes it to the Cheap slot).
+	apIndexer: "cheap",
 };
 
 /** General settings — app-level behavior. Version DISPLAY and plans login

@@ -63,6 +63,8 @@ await write("keyfiles/custom-keys.json.tmp-not-a-uuid", "ordinary file\n");
 await write(`unrelated/custom-keys.json.tmp-${uuid}`, "ordinary file\n");
 await write("unrelated/.ssh/notes.md", "ordinary outside-home directory\n");
 for (const name of [".env", ".env.example", ".env.template", ".ENV.production"]) await write(`elsewhere/${name}`);
+await write("keyfiles/data/ap-index/ap_course_1.json", "AP_INDEX_SECRET_RUBRIC a1: states the substitution\n");
+await write("keyfiles/data/ap-papers/course-description.txt", "AP_PAPERS_READABLE course description\n");
 
 const { isSensitivePath, resolveSourcePath, sensitiveHomeLocations, walkFiles } = await import("../src/agent/tools/fs-shared.ts");
 const { readTool, createReadTool } = await import("../src/agent/tools/read.ts");
@@ -378,5 +380,29 @@ describe("source access: path spelling", () => {
 			assert.equal(isSensitivePath(path.join(winHome, "notes", ".env:stream"), winHome, winAuth), true);
 			assert.equal(isSensitivePath(path.join(winHome, ".sship", "key"), winHome, winAuth), false);
 		}
+	});
+});
+describe("source access: the AP question index is app-private", () => {
+	const indexFolder = path.join(data, "ap-index");
+	const indexFile = path.join(indexFolder, "ap_course_1.json");
+	const papersFile = path.join(data, "ap-papers", "course-description.txt");
+
+	it("refuses read, grep and find at the index folder or a file in it", async () => {
+		await assert.rejects(readTool.execute!("s", { path: indexFile }), denied);
+		await assert.rejects(grepTool.execute!("s", { path: indexFile, pattern: "AP_INDEX_SECRET_RUBRIC" }), denied);
+		for (const tool of [grepTool, findTool]) {
+			await assert.rejects(tool.execute!("s", { path: indexFolder, pattern: "*.json" }), denied);
+		}
+	});
+
+	it("does not return index contents from a walk rooted above it", async () => {
+		const grepText = await text(grepTool, { path: data, pattern: "AP_INDEX_SECRET_RUBRIC" });
+		assert.doesNotMatch(grepText, /AP_INDEX_SECRET_RUBRIC/);
+		const findText = await text(findTool, { path: data, pattern: "ap_course_1.json" });
+		assert.doesNotMatch(findText, /ap_course_1\.json/);
+	});
+
+	it("still reads the AP papers folder", async () => {
+		assert.match(await text(readTool, { path: papersFile }), /AP_PAPERS_READABLE course description/);
 	});
 });

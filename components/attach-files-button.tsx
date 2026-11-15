@@ -7,16 +7,16 @@ import { directoryReferencePath, quoteFilePath } from "@/src/core";
 import { Hint } from "@/components/ui/hint";
 import { INSERT_FILE_PATHS_EVENT } from "@/components/path-input";
 
-const PICKER_UNAVAILABLE_NOTICE = "The file picker is not available on this system. You can paste a full path instead.";
-const PICKER_BUSY_NOTICE = "A file picker is already open. It may be behind this window.";
+export const PICKER_UNAVAILABLE_NOTICE = "The file picker is not available on this system. You can paste a full path instead.";
+export const PICKER_BUSY_NOTICE = "A file picker is already open. It may be behind this window.";
 
 /** Distinguishes a 409 from other failures, so the notice can explain where
  *  the picker went. */
-class FilePickerBusy extends Error {}
+export class FilePickerBusy extends Error {}
 
 /** The browser case: a browser File has no local path, so the server (on this
  *  same machine) shows the native dialog. null = this OS has no dialog. */
-async function requestNativePaths(mode: "files" | "folder"): Promise<string[] | null> {
+export async function requestNativePaths(mode: "files" | "folder"): Promise<string[] | null> {
 	const response = await fetch("/api/path-picker", {
 		method: "POST",
 		headers: { "Content-Type": "application/json", "x-learnharness-path-picker": "1" },

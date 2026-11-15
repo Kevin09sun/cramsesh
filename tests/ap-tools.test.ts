@@ -20,9 +20,11 @@ import { createFauxCore } from "@earendil-works/pi-ai";
 import { applyResult, mergePlan } from "../src/core/test-prep.ts";
 import type { AnswerResult, PlanDraftSection } from "../src/core/test-prep.ts";
 import type { ApCourseRecord, ApDocument, ApSitting } from "../src/core/ap.ts";
+import type { JobRecord } from "../src/core/contracts.ts";
+import type { JobStore } from "../src/core/ports.ts";
 import { QUESTION_TOOLS, toolQuestionKind } from "../src/core/pending.ts";
 import { createApAgent } from "../src/agent/teacher-agent.ts";
-import { apTools, capPdfExtract, AP_PDF_EXTRACT_MAX_PAGES, type ApCourseStorePort, type ApPapersPort, type ApToolContext } from "../src/agent/tools/ap.ts";
+import { apTools, capPdfExtract, AP_PDF_EXTRACT_MAX_PAGES, type ApCourseStorePort, type ApIndexPort, type ApPapersPort, type ApToolContext } from "../src/agent/tools/ap.ts";
 import { tinyPdf } from "./helpers/tiny-pdf.ts";
 
 // ── fixtures ─────────────────────────────────────────────────────────────────
@@ -190,8 +192,44 @@ function ctxOf(
 	courses: ApCourseStorePort,
 	papers: ApPapersPort,
 	sitting?: ApSitting,
+	index?: ApIndexPort,
 ): ApToolContext {
-	return { chatId: "chat_now", courseId: "ap_course_1", courses, papers, ...(sitting ? { sitting } : {}) };
+	return {
+		chatId: "chat_now",
+		courseId: "ap_course_1",
+		courses,
+		papers,
+		// Stage 2 seams: an empty index, no recorded attempts and no answers.
+		// The free-response suite (ap-frq-tools.test.ts) exercises them.
+		index: index ?? { get: () => null, retagPart: () => {}, forgetPaper: () => false },
+		attempts: { record: (courseId) => courses.get(courseId)! },
+		answeredFrq: () => "none",
+		answeredFrqCount: () => 0,
+		...(sitting ? { sitting } : {}),
+	};
+}
+
+interface FakeIndexCalls {
+	forgetPaper: Array<{ courseId: string; paperId: string }>;
+}
+
+/** A standalone index port for ap_save_document's re-save tests: it records
+ *  every forgetPaper call and returns the configured outcome. */
+function fakeIndexPort(options: { removed?: boolean; error?: string } = {}): {
+	port: ApIndexPort;
+	calls: FakeIndexCalls;
+} {
+	const calls: FakeIndexCalls = { forgetPaper: [] };
+	const port: ApIndexPort = {
+		get: () => null,
+		retagPart: () => {},
+		forgetPaper: (courseId, paperId) => {
+			if (options.error) throw new Error(options.error);
+			calls.forgetPaper.push({ courseId, paperId });
+			return options.removed ?? false;
+		},
+	};
+	return { port, calls };
 }
 
 /** A scripted pi engine — the agent factories need one injected (BYOK). */
@@ -259,6 +297,11 @@ describe("apTools registry", () => {
 			"propose_units",
 			"ap_progress",
 			"ap_mcq",
+			"ap_frq",
+			"ap_rubric",
+			"ap_view_photo",
+			"ap_record_frq",
+			"ap_retag_part",
 			"ap_record_result",
 			"read",
 			"ls",
@@ -271,17 +314,19 @@ describe("apTools registry", () => {
 		}
 	});
 
-	it("wires research and the direct web tools when their seams are passed", () => {
+	it("wires research, paper indexing and the direct web tools when their seams are passed", () => {
 		const { papers } = fakePapers();
 		const tools = apTools({ ...ctxOf(fakeCourses(courseOf()).courses, papers), jobs: JOBS, search: () => null });
 		assert.ok(tools.research, "research present with a jobs context");
+		assert.ok(tools.ap_index_papers, "paper indexing present with a jobs context");
 		assert.ok(tools.web_search && tools.web_fetch, "web tools present with a search seam");
 	});
 
-	it("no jobs or search seam → neither research nor web tools", () => {
+	it("no jobs or search seam → neither research, paper indexing nor web tools", () => {
 		const { papers } = fakePapers();
 		const tools = apTools(ctxOf(fakeCourses(courseOf()).courses, papers));
 		assert.equal(tools.research, undefined);
+		assert.equal(tools.ap_index_papers, undefined);
 		assert.equal(tools.web_search, undefined);
 		assert.equal(tools.web_fetch, undefined);
 	});
@@ -388,14 +433,174 @@ describe("ap_save_document", () => {
 		assert.equal(fake.calls.putDocument.length, 0, "a refused download stores nothing");
 	});
 
-	it("REFUSES kinds stage 1 does not carry yet", async () => {
+	it("downloads a released paper to frq-<year>.pdf and records the document", async () => {
 		const fake = fakeCourses(courseOf());
 		const papers = fakePapers();
 		const tool = apTools(ctxOf(fake.courses, papers.papers)).ap_save_document!;
-		const result = await tool.execute("call_save", { kind: "frq", label: "FRQ", url: "https://apcentral.collegeboard.org/frq.pdf" } as never);
-		assert.equal(result.isError, true);
-		assert.match((result.details as { problems: string[] }).problems[0]!, /later version/i);
+		const result = await tool.execute("call_save", {
+			kind: "frq",
+			label: "2023 FRQ",
+			year: 2023,
+			url: "https://apcentral.collegeboard.org/frq-2023.pdf",
+		} as never);
+
+		assert.equal(result.isError, undefined);
+		assert.deepEqual(papers.calls.download, [
+			{ courseId: "ap_course_1", url: "https://apcentral.collegeboard.org/frq-2023.pdf", file: "frq-2023.pdf" },
+		]);
+		assert.equal(fake.calls.putDocument.length, 1);
+		const stored = fake.calls.putDocument[0]!;
+		assert.equal(stored.doc.id, "frq-2023");
+		assert.equal(stored.doc.kind, "frq");
+		assert.equal(stored.doc.year, 2023);
+		assert.equal(stored.doc.file, "frq-2023.pdf");
+		assert.equal(stored.doc.pages, 2, "the page count comes from the stored PDF");
+		assert.equal(
+			(result.content[0] as { text: string }).text,
+			"Saved 2023 FRQ as frq-2023.pdf (2 pages).",
+		);
+	});
+
+	it("appends a set number to a released paper's file name and id", async () => {
+		const fake = fakeCourses(courseOf());
+		const papers = fakePapers();
+		const tool = apTools(ctxOf(fake.courses, papers.papers)).ap_save_document!;
+		const result = await tool.execute("call_save", {
+			kind: "frq",
+			label: "2023 Set 2 FRQ",
+			year: 2023,
+			set: 2,
+			path: "C:/learner/frq.pdf",
+		} as never);
+
+		assert.equal(result.isError, undefined);
+		assert.deepEqual(papers.calls.importFile, [
+			{ courseId: "ap_course_1", sourcePath: "C:/learner/frq.pdf", file: "frq-2023-set2.pdf" },
+		]);
+		assert.equal(fake.calls.putDocument[0]!.doc.id, "frq-2023-set2");
+		assert.equal(fake.calls.putDocument[0]!.doc.file, "frq-2023-set2.pdf");
+		assert.equal(fake.calls.putDocument[0]!.doc.year, 2023);
+	});
+
+	it("downloads a scoring guideline to scoring-<year>.pdf", async () => {
+		const fake = fakeCourses(courseOf());
+		const papers = fakePapers();
+		const tool = apTools(ctxOf(fake.courses, papers.papers)).ap_save_document!;
+		const result = await tool.execute("call_save", {
+			kind: "scoring",
+			label: "2023 Scoring Guidelines",
+			year: 2023,
+			url: "https://apcentral.collegeboard.org/scoring-2023.pdf",
+		} as never);
+
+		assert.equal(result.isError, undefined);
+		assert.deepEqual(papers.calls.download, [
+			{
+				courseId: "ap_course_1",
+				url: "https://apcentral.collegeboard.org/scoring-2023.pdf",
+				file: "scoring-2023.pdf",
+			},
+		]);
+		const stored = fake.calls.putDocument[0]!;
+		assert.equal(stored.doc.id, "scoring-2023");
+		assert.equal(stored.doc.kind, "scoring");
+		assert.equal(stored.doc.year, 2023);
+		assert.equal(stored.doc.file, "scoring-2023.pdf");
+		assert.equal(
+			(result.content[0] as { text: string }).text,
+			"Saved 2023 Scoring Guidelines as scoring-2023.pdf (2 pages).",
+		);
+	});
+
+	it("REFUSES a released paper or scoring guideline without a year, touching no port", async () => {
+		const fake = fakeCourses(courseOf());
+		const papers = fakePapers();
+		const tool = apTools(ctxOf(fake.courses, papers.papers)).ap_save_document!;
+		for (const kind of ["frq", "scoring"] as const) {
+			const result = await tool.execute("call_save", {
+				kind,
+				label: "Released",
+				url: "https://apcentral.collegeboard.org/paper.pdf",
+			} as never);
+			assert.equal(result.isError, true);
+			assert.equal(
+				(result.details as { problems: string[] }).problems[0],
+				"year is required for a released paper or scoring guideline",
+			);
+		}
 		assert.equal(papers.calls.download.length, 0);
+		assert.equal(papers.calls.importFile.length, 0);
+		assert.equal(fake.calls.putDocument.length, 0);
+	});
+
+	it("REFUSES a year outside 1990–2100 and a set outside 1–9", async () => {
+		const fake = fakeCourses(courseOf());
+		const papers = fakePapers();
+		const tool = apTools(ctxOf(fake.courses, papers.papers)).ap_save_document!;
+		const cases: Array<{ input: Record<string, unknown>; problem: string }> = [
+			{
+				input: { kind: "frq", label: "FRQ", year: 1989, url: "https://apcentral.collegeboard.org/frq.pdf" },
+				problem: "year is required for a released paper or scoring guideline",
+			},
+			{
+				input: { kind: "frq", label: "FRQ", year: 2101, url: "https://apcentral.collegeboard.org/frq.pdf" },
+				problem: "year is required for a released paper or scoring guideline",
+			},
+			{
+				input: { kind: "frq", label: "FRQ", year: 2023, set: 0, url: "https://apcentral.collegeboard.org/frq.pdf" },
+				problem: "set must be a whole number from 1 to 9",
+			},
+			{
+				input: { kind: "scoring", label: "Scoring", year: 2023, set: 10, url: "https://apcentral.collegeboard.org/scoring.pdf" },
+				problem: "set must be a whole number from 1 to 9",
+			},
+		];
+		for (const { input, problem } of cases) {
+			const result = await tool.execute("call_save", input as never);
+			assert.equal(result.isError, true);
+			assert.equal((result.details as { problems: string[] }).problems[0], problem);
+		}
+		assert.equal(papers.calls.download.length, 0);
+		assert.equal(fake.calls.putDocument.length, 0);
+	});
+
+	it("saving the same year and set again replaces the document, not duplicates", async () => {
+		const fake = fakeCourses(courseOf());
+		const papers = fakePapers();
+		const tool = apTools(ctxOf(fake.courses, papers.papers)).ap_save_document!;
+		for (const label of ["2023 FRQ", "2023 FRQ (corrected)"]) {
+			const result = await tool.execute("call_save", {
+				kind: "frq",
+				label,
+				year: 2023,
+				url: "https://apcentral.collegeboard.org/frq-2023.pdf",
+			} as never);
+			assert.equal(result.isError, undefined);
+		}
+
+		assert.equal(fake.calls.putDocument.length, 2, "the second save is a write, not a refusal");
+		const documents = fake.current().documents;
+		assert.equal(documents.length, 1, "the same id replaces the document");
+		assert.equal(documents[0]!.id, "frq-2023");
+		assert.equal(documents[0]!.label, "2023 FRQ (corrected)");
+	});
+
+	it("REFUSES an unknown document kind", async () => {
+		const fake = fakeCourses(courseOf());
+		const papers = fakePapers();
+		const tool = apTools(ctxOf(fake.courses, papers.papers)).ap_save_document!;
+		const result = await tool.execute("call_save", {
+			kind: "syllabus",
+			label: "Syllabus",
+			url: "https://apcentral.collegeboard.org/syllabus.pdf",
+		} as never);
+		assert.equal(result.isError, true);
+		assert.equal(
+			(result.details as { problems: string[] }).problems[0],
+			'kind "syllabus" is not a document kind — use "ced", "frq" or "scoring"',
+		);
+		assert.equal(papers.calls.download.length, 0);
+		assert.equal(fake.calls.putDocument.length, 0);
 	});
 
 	it("REFUSES inside a practice sitting without touching a port or the record", async () => {
@@ -416,6 +621,134 @@ describe("ap_save_document", () => {
 		assert.equal(papers.calls.download.length, 0);
 		assert.equal(papers.calls.importFile.length, 0);
 		assert.equal(fake.calls.putDocument.length, 0);
+	});
+
+	it("REFUSES a released paper inside a sitting with its own message", async () => {
+		const fake = fakeCourses(courseOf());
+		const papers = fakePapers();
+		const tool = apTools(ctxOf(fake.courses, papers.papers, WEAK)).ap_save_document!;
+		for (const kind of ["frq", "scoring"] as const) {
+			const result = await tool.execute("call_save", {
+				kind,
+				label: "Released",
+				year: 2023,
+				url: "https://apcentral.collegeboard.org/paper.pdf",
+			} as never);
+			assert.equal(result.isError, true);
+			assert.equal(
+				(result.details as { problems: string[] }).problems[0],
+				"Released papers are saved only in a setup or papers session, not during a sitting.",
+			);
+		}
+		assert.equal(papers.calls.download.length, 0);
+		assert.equal(papers.calls.importFile.length, 0);
+		assert.equal(fake.calls.putDocument.length, 0);
+	});
+});
+
+// ── ap_save_document clears the paper's old index ───────────────────────────
+
+describe("ap_save_document — re-saving clears the paper's index", () => {
+	it("forgets the re-saved frq paper and says its index entries were removed", async () => {
+		const fake = fakeCourses(courseOf());
+		const papers = fakePapers();
+		const index = fakeIndexPort({ removed: true });
+		const tool = apTools(ctxOf(fake.courses, papers.papers, undefined, index.port)).ap_save_document!;
+		const result = await tool.execute("call_save", {
+			kind: "frq",
+			label: "2023 FRQ",
+			year: 2023,
+			url: "https://apcentral.collegeboard.org/frq-2023.pdf",
+		} as never);
+
+		assert.equal(result.isError, undefined);
+		assert.deepEqual(index.calls.forgetPaper, [{ courseId: "ap_course_1", paperId: "frq-2023" }]);
+		assert.equal(
+			(result.content[0] as { text: string }).text,
+			"Saved 2023 FRQ as frq-2023.pdf (2 pages). Its earlier index entries were removed; run ap_index_papers to index it again.",
+		);
+	});
+
+	it("forgets the paired paper when a scoring guideline is re-saved, including a set", async () => {
+		const cases: Array<{ set?: number; paperId: string }> = [
+			{ paperId: "frq-2023" },
+			{ set: 2, paperId: "frq-2023-set2" },
+		];
+		for (const { set, paperId } of cases) {
+			const fake = fakeCourses(courseOf());
+			const papers = fakePapers();
+			const index = fakeIndexPort({ removed: true });
+			const tool = apTools(ctxOf(fake.courses, papers.papers, undefined, index.port)).ap_save_document!;
+			const result = await tool.execute("call_save", {
+				kind: "scoring",
+				label: "2023 Scoring",
+				year: 2023,
+				...(set === undefined ? {} : { set }),
+				url: "https://apcentral.collegeboard.org/scoring-2023.pdf",
+			} as never);
+
+			assert.equal(result.isError, undefined);
+			assert.deepEqual(index.calls.forgetPaper, [{ courseId: "ap_course_1", paperId }]);
+		}
+	});
+
+	it("never forgets on a ced save or a failed save", async () => {
+		const fake = fakeCourses(courseOf());
+		const index = fakeIndexPort({ removed: true });
+		const cedTool = apTools(ctxOf(fake.courses, fakePapers().papers, undefined, index.port)).ap_save_document!;
+		await cedTool.execute("call_save", {
+			kind: "ced",
+			label: "Course and Exam Description",
+			url: "https://apcentral.collegeboard.org/ced.pdf",
+		} as never);
+		assert.equal(index.calls.forgetPaper.length, 0, "the course description has no paper index");
+
+		const failing = fakePapers({ downloadError: "Only College Board addresses are accepted" });
+		const failedTool = apTools(ctxOf(fake.courses, failing.papers, undefined, index.port)).ap_save_document!;
+		const failed = await failedTool.execute("call_save", {
+			kind: "frq",
+			label: "2023 FRQ",
+			year: 2023,
+			url: "https://example.com/frq-2023.pdf",
+		} as never);
+		assert.equal(failed.isError, true);
+		assert.equal(index.calls.forgetPaper.length, 0, "a failed save forgets nothing");
+	});
+
+	it("keeps today's text when nothing was removed", async () => {
+		const fake = fakeCourses(courseOf());
+		const papers = fakePapers();
+		const index = fakeIndexPort({ removed: false });
+		const tool = apTools(ctxOf(fake.courses, papers.papers, undefined, index.port)).ap_save_document!;
+		const result = await tool.execute("call_save", {
+			kind: "frq",
+			label: "2023 FRQ",
+			year: 2023,
+			url: "https://apcentral.collegeboard.org/frq-2023.pdf",
+		} as never);
+
+		assert.equal(result.isError, undefined);
+		assert.deepEqual(index.calls.forgetPaper, [{ courseId: "ap_course_1", paperId: "frq-2023" }]);
+		assert.equal((result.content[0] as { text: string }).text, "Saved 2023 FRQ as frq-2023.pdf (2 pages).");
+	});
+
+	it("still reports the save when clearing the index fails", async () => {
+		const fake = fakeCourses(courseOf());
+		const papers = fakePapers();
+		const index = fakeIndexPort({ error: "invalid question index" });
+		const tool = apTools(ctxOf(fake.courses, papers.papers, undefined, index.port)).ap_save_document!;
+		const result = await tool.execute("call_save", {
+			kind: "frq",
+			label: "2023 FRQ",
+			year: 2023,
+			url: "https://apcentral.collegeboard.org/frq-2023.pdf",
+		} as never);
+
+		assert.equal(result.isError, undefined, "a failed index clear never fails the save");
+		assert.equal(
+			(result.content[0] as { text: string }).text,
+			"Saved 2023 FRQ as frq-2023.pdf (2 pages). The index for this paper could not be cleared; run ap_index_papers and check the result.",
+		);
 	});
 });
 
@@ -606,7 +939,7 @@ describe("ap_progress", () => {
 		const tool = apTools(ctxOf(fake.courses, papers.papers)).ap_progress!;
 		const result = await tool.execute("call_p", {} as never);
 		const text = (result.content[0] as { text: string }).text;
-		assert.match(text, /ced\.pdf · Course and Exam Description · MISSING on this computer/);
+		assert.match(text, /ced\.pdf · ced · Course and Exam Description · MISSING on this computer/);
 	});
 
 	it("lists a present document by page count", async () => {
@@ -615,7 +948,7 @@ describe("ap_progress", () => {
 		const tool = apTools(ctxOf(fake.courses, papers.papers)).ap_progress!;
 		const result = await tool.execute("call_p", {} as never);
 		const text = (result.content[0] as { text: string }).text;
-		assert.match(text, /ced\.pdf · Course and Exam Description · 3 pages/);
+		assert.match(text, /ced\.pdf · ced · Course and Exam Description · 3 pages/);
 	});
 
 	it("reports a sitting whose scope no longer exists", async () => {
@@ -776,6 +1109,90 @@ describe("ap_record_result", () => {
 		const text = (result.content[0] as { text: string }).text;
 		assert.match(text, /solid/);
 		assert.match(text, /readiness/i);
+	});
+});
+
+// ── ap_index_papers ─────────────────────────────────────────────────────────
+
+interface SpawnedIndexJob {
+	kind: string;
+	input: unknown;
+	toolCallId: string;
+}
+
+/** A jobs context that records dispatches instead of spawning runners. */
+function fakeJobContext(): { jobs: NonNullable<ApToolContext["jobs"]>; spawned: SpawnedIndexJob[] } {
+	const spawned: SpawnedIndexJob[] = [];
+	let n = 0;
+	const jobStore = {
+		findJobByToolCallId: () => null,
+		createJob: (init: {
+			kind: JobRecord["kind"];
+			chatId: string;
+			toolCallId: string;
+			input?: unknown;
+		}) => ({
+			id: `job_${++n}`,
+			status: "running",
+			activity: "starting",
+			createdAt: "2026-11-14T00:00:00.000Z",
+			updatedAt: "2026-11-14T00:00:00.000Z",
+			...init,
+		}),
+	} as unknown as JobStore;
+	return {
+		jobs: {
+			chatId: "chat_now",
+			jobStore,
+			spawn: (job, input) => spawned.push({ kind: job.kind, input, toolCallId: job.toolCallId }),
+		},
+		spawned,
+	};
+}
+
+describe("ap_index_papers", () => {
+	it("REFUSES inside a sitting with its own message and spawns nothing", async () => {
+		const fake = fakeCourses(courseOf());
+		const papers = fakePapers();
+		const { jobs, spawned } = fakeJobContext();
+		const tool = apTools({ ...ctxOf(fake.courses, papers.papers, WEAK), jobs }).ap_index_papers!;
+		const result = await tool.execute("call_idx", {} as never);
+		assert.equal(result.isError, true);
+		assert.equal(
+			(result.details as { problems: string[] }).problems[0],
+			"Papers are indexed only in a setup or papers session, not during a sitting.",
+		);
+		assert.equal(spawned.length, 0, "a sitting refusal never dispatches a job");
+	});
+
+	it("REFUSES until the unit and topic list is confirmed", async () => {
+		const fake = fakeCourses(courseOf({ planConfirmed: false }));
+		const papers = fakePapers();
+		const { jobs, spawned } = fakeJobContext();
+		const tool = apTools({ ...ctxOf(fake.courses, papers.papers), jobs }).ap_index_papers!;
+		const result = await tool.execute("call_idx", {} as never);
+		assert.equal(result.isError, true);
+		assert.equal(
+			(result.details as { problems: string[] }).problems[0],
+			"confirm the unit and topic list first — questions are tagged against it",
+		);
+		assert.equal(spawned.length, 0, "an unconfirmed plan never dispatches a job");
+	});
+
+	it("dispatches one ap_index job with the course id and acks fire-and-forget", async () => {
+		const fake = fakeCourses(courseOf());
+		const papers = fakePapers();
+		const { jobs, spawned } = fakeJobContext();
+		const tool = apTools({ ...ctxOf(fake.courses, papers.papers), jobs }).ap_index_papers!;
+		const result = await tool.execute("call_idx", {} as never);
+
+		assert.equal(result.isError, undefined);
+		assert.deepEqual(spawned, [
+			{ kind: "ap_index", input: { courseId: "ap_course_1" }, toolCallId: "call_idx" },
+		]);
+		const text = (result.content[0] as { text: string }).text;
+		assert.match(text, /^Dispatched \(job job_1\)\./);
+		assert.match(text, /fire-and-forget/);
 	});
 });
 

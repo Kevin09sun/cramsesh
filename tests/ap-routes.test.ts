@@ -36,6 +36,7 @@ delete process.env.LH_DESKTOP_SERVER;
 delete process.env.LH_DESKTOP_API_SECRET;
 
 const { apCourseStore } = await import("../src/store/ap-courses.ts");
+const { apIndexStore } = await import("../src/store/ap-index.ts");
 const { apPaperPath, setApPaperFetch } = await import("../src/server/ap-papers.ts");
 
 type ListRoute = typeof import("../app/api/ap/route.ts");
@@ -59,6 +60,7 @@ after(() => {
 
 type PlanDraftSection = import("../src/core/test-prep.ts").PlanDraftSection;
 type ApDocument = import("../src/core/ap.ts").ApDocument;
+type ApRealQuestion = import("../src/core/ap-frq.ts").ApRealQuestion;
 
 const BASE = "http://localhost";
 const PDF = "%PDF-1.7\n% test paper\n";
@@ -77,6 +79,20 @@ function draft(): PlanDraftSection[] {
 
 function document(id: string, kind: ApDocument["kind"], file: string, url: string): ApDocument {
 	return { id, kind, label: id, url, file };
+}
+
+function question(overrides: Partial<ApRealQuestion> = {}): ApRealQuestion {
+	return {
+		id: "2023-2",
+		paperId: "frq-2023",
+		scoringId: "scoring-2023",
+		year: 2023,
+		number: 2,
+		pages: [3, 4],
+		scoringPages: [5],
+		parts: [{ label: "a", points: [{ id: "a1", text: "first point" }] }],
+		...overrides,
+	};
 }
 
 /** Put a real PDF where the route will look for one. */
@@ -190,6 +206,44 @@ describe("GET /api/ap/[id]", () => {
 		assert.equal(frq.present, false, "a paper that was never downloaded is absent");
 		assert.equal("path" in frq, false, "an absent paper carries no path");
 		assert.equal(JSON.stringify(body).includes("%PDF-"), false, "no file contents are served");
+	});
+
+	it("carries the index summary: how many questions each released paper contributed", async () => {
+		const course = apCourseStore.create("AP Indexed");
+		apCourseStore.putDocument(course.id, document("ced", "ced", "ced.pdf", ""));
+		apCourseStore.putDocument(course.id, document("frq-2023", "frq", "frq-2023.pdf", ""));
+		apCourseStore.putDocument(course.id, document("scoring-2023", "scoring", "scoring-2023.pdf", ""));
+		apCourseStore.putDocument(course.id, document("frq-2024", "frq", "frq-2024.pdf", ""));
+		apIndexStore.putPaper(course.id, "frq-2023", [
+			question(),
+			question({ id: "2023-3", number: 3 }),
+		]);
+
+		const res = await get(course.id);
+		assert.equal(res.status, 200);
+		const body = (await res.json()) as {
+			indexedQuestions: number;
+			documents: Array<{ id: string; questions?: number }>;
+		};
+		assert.equal(body.indexedQuestions, 2, "the whole index is counted");
+		assert.equal(body.documents.find((entry) => entry.id === "frq-2023")!.questions, 2);
+		assert.equal(body.documents.find((entry) => entry.id === "frq-2024")!.questions, 0, "an unindexed paper counts zero");
+		assert.equal("questions" in body.documents.find((entry) => entry.id === "ced")!, false);
+		assert.equal("questions" in body.documents.find((entry) => entry.id === "scoring-2023")!, false);
+	});
+
+	it("reads a course with no index as zero indexed questions", async () => {
+		const course = apCourseStore.create("AP Not indexed");
+		apCourseStore.putDocument(course.id, document("frq-2023", "frq", "frq-2023.pdf", ""));
+
+		const res = await get(course.id);
+		assert.equal(res.status, 200);
+		const body = (await res.json()) as {
+			indexedQuestions: number;
+			documents: Array<{ id: string; questions?: number }>;
+		};
+		assert.equal(body.indexedQuestions, 0);
+		assert.equal(body.documents.find((entry) => entry.id === "frq-2023")!.questions, 0);
 	});
 
 	it("is a 404 for an unknown or invalid id", async () => {

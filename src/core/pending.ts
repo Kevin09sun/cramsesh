@@ -58,20 +58,24 @@ export const QUESTION_TOOLS = [
 	"recall",
 	"check_point",
 	"ap_mcq",
+	"ap_frq",
 ] as const;
 
 /** The tool→kind map (the dock's own fold, named once — the dismissal
  *  path and the dock must never disagree on what a tool is). The probe
  *  names fold onto their teach kinds, test prep's check_point is an
- *  explain-shaped free-text question, and AP's ap_mcq is a quiz-shaped
+ *  explain-shaped free-text question, AP's ap_mcq is a quiz-shaped
  *  multiple-choice question (the verdict is withheld in the core
- *  presentation seams, not by the kind). The dock is kind-driven. */
-export function toolQuestionKind(tool: string): "quiz" | "ask" | "explain" {
-	return tool === "quiz" || tool === "probe" || tool === "ap_mcq"
-		? "quiz"
-		: tool === "explain" || tool === "recall" || tool === "check_point"
-			? "explain"
-			: "ask";
+ *  presentation seams, not by the kind), and AP's ap_frq is the
+ *  multi-part free-response kind of its own. The dock is kind-driven. */
+export function toolQuestionKind(tool: string): "quiz" | "ask" | "explain" | "frq" {
+	return tool === "ap_frq"
+		? "frq"
+		: tool === "quiz" || tool === "probe" || tool === "ap_mcq"
+			? "quiz"
+			: tool === "explain" || tool === "recall" || tool === "check_point"
+				? "explain"
+				: "ask";
 }
 
 /** Tools fulfilled by background sub-agent jobs (W2/W6). */
@@ -184,11 +188,18 @@ const ACTIVITY_LABELS: Record<string, string> = {
 	pdf: "Reading a PDF…",
 	plan_init: "Drawing up the plan…",
 	probe_done: "Concluding the assessment…",
-	// AP prep (2026-11-13): the course-shape proposal, the paper download and
-	// the progress check all run long enough to need their own label.
-	ap_save_document: "Saving the course description…",
+	// AP prep (2026-11-13): the course-shape proposal, the document save and
+	// the progress check all run long enough to need their own label. The
+	// save names the document itself — it now stores the course description,
+	// released papers and scoring guidelines alike (stage 2, 2026-11-14).
+	ap_save_document: "Saving the document…",
 	propose_units: "Proposing units and topics…",
 	ap_progress: "Checking progress…",
+	ap_index_papers: "Indexing released papers…",
+	// AP prep stage 2 (2026-11-14): the grading loop's own long calls.
+	ap_rubric: "Reading the scoring guideline…",
+	ap_view_photo: "Looking at your photo…",
+	ap_record_frq: "Recording the score…",
 };
 
 /** The activity label for ONE running tool (owner, streaming round

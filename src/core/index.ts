@@ -98,3 +98,7 @@ export * from "./test-prep.ts";
 // manifest, a sitting's scope/kind and label, and the scoped queue built on
 // test-prep's rules (browser-safe).
 export * from "./ap.ts";
+// ap-frq.ts: the AP real free-response core — the synced question index and
+// its structural check, scoring an attempt by rubric point, and which
+// released questions a sitting may ask (browser-safe).
+export * from "./ap-frq.ts";

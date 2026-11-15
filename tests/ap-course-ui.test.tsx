@@ -146,7 +146,8 @@ function documentStates(presentFrq = false): Array<ApDocument & { present: boole
 
 async function mountCourse(options: {
 	course?: ApCourseRecord;
-	documents?: Array<ApDocument & { present: boolean }>;
+	documents?: Array<ApDocument & { present: boolean; questions?: number }>;
+	indexedQuestions?: number;
 	navigate?: (target: string) => void;
 } = {}) {
 	host = document.createElement("div");
@@ -157,6 +158,7 @@ async function mountCourse(options: {
 			<CourseView
 				course={options.course ?? apRecord()}
 				documents={options.documents ?? documentStates()}
+				indexedQuestions={options.indexedQuestions ?? 0}
 				cedPath="/papers/ced.pdf"
 				navigate={options.navigate ?? (() => {})}
 			/>,
@@ -297,9 +299,19 @@ test("Practise opens the kind chooser and creates the AP sitting in the chosen k
 	assert.match(chooserText, /Free-response/);
 	assert.match(chooserText, /Mixed/);
 	assert.equal(
-		(chooserText.match(/multiple-choice only for now/g) ?? []).length,
+		(chooserText.match(/needs released papers/g) ?? []).length,
 		2,
-		"free-response and mixed each carry the note",
+		"with no indexed questions free-response and mixed each carry the note",
+	);
+	assert.equal(
+		document.querySelector<HTMLButtonElement>('[data-testid="sitting-frq"]')?.disabled,
+		true,
+		"a free-response sitting cannot start before papers are indexed",
+	);
+	assert.equal(
+		document.querySelector<HTMLButtonElement>('[data-testid="sitting-mixed"]')?.disabled,
+		true,
+		"a mixed sitting cannot start before papers are indexed",
 	);
 
 	await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="sitting-mcq"]')!.click());
@@ -343,6 +355,123 @@ test("Learn creates a Teach session whose title is the learn prompt", async () =
 		}),
 	});
 	assert.deepEqual(navigated, ["/chat/chat_teach"]);
+});
+
+test("with indexed questions Free-response starts a frq sitting and Mixed a mixed sitting", async () => {
+	const seen: Array<{ url: string; method: string; body: unknown }> = [];
+	const navigated: string[] = [];
+	let created = "chat_frq";
+	globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+		const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+		const body = init?.body === undefined ? undefined : JSON.parse(String(init.body));
+		seen.push({ url, method: init?.method ?? "GET", body });
+		if (url === "/api/chats" && init?.method === "POST") return Response.json({ id: created });
+		throw new Error(`unexpected request ${url}`);
+	}) as typeof fetch;
+
+	await mountCourse({ indexedQuestions: 3, navigate: (target) => navigated.push(target) });
+	await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="practise-topic-topic_1"]')!.click());
+
+	const chooserText = document.body.textContent ?? "";
+	assert.doesNotMatch(chooserText, /needs released papers/, "indexed papers remove the notes");
+	assert.equal(document.querySelector<HTMLButtonElement>('[data-testid="sitting-frq"]')?.disabled, false);
+	assert.equal(document.querySelector<HTMLButtonElement>('[data-testid="sitting-mixed"]')?.disabled, false);
+
+	await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="sitting-frq"]')!.click());
+
+	const frqSitting = { scope: { type: "topic", topicId: "topic_1" }, kind: "frq" } as const;
+	assert.deepEqual(seen.find((request) => request.url === "/api/chats")!.body, {
+		title: sittingLabel(apRecord(), frqSitting),
+		kind: "ap",
+		apCourseId: "ap_1",
+		apSitting: frqSitting,
+	});
+	assert.deepEqual(navigated, ["/chat/chat_frq"]);
+
+	await unmount();
+	seen.length = 0;
+	navigated.length = 0;
+	created = "chat_mixed";
+	await mountCourse({ indexedQuestions: 3, navigate: (target) => navigated.push(target) });
+	await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="practise-topic-topic_1"]')!.click());
+	await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="sitting-mixed"]')!.click());
+
+	const mixedSitting = { scope: { type: "topic", topicId: "topic_1" }, kind: "mixed" } as const;
+	assert.deepEqual(seen.find((request) => request.url === "/api/chats")!.body, {
+		title: sittingLabel(apRecord(), mixedSitting),
+		kind: "ap",
+		apCourseId: "ap_1",
+		apSitting: mixedSitting,
+	});
+	assert.deepEqual(navigated, ["/chat/chat_mixed"]);
+});
+
+test("the documents block orders papers by year and says how many questions each one indexed", async () => {
+	const documents: Array<ApDocument & { present: boolean; questions?: number }> = [
+		{ id: "scoring-2024", kind: "scoring", label: "Scoring guidelines (2024)", year: 2024, url: "", file: "scoring-2024.pdf", present: false },
+		{ id: "frq-2023", kind: "frq", label: "Free-response questions (2023)", year: 2023, url: "", file: "frq-2023.pdf", present: false, questions: 0 },
+		{ id: "ced", kind: "ced", label: "Course and Exam Description (2026)", year: 2026, url: "", file: "ced.pdf", present: true },
+		{ id: "scoring-2023-set2", kind: "scoring", label: "Scoring guidelines (2023, Set 2)", year: 2023, url: "", file: "scoring-2023-set2.pdf", present: false },
+		{ id: "frq-2023-set2", kind: "frq", label: "Free-response questions (2023, Set 2)", year: 2023, url: "", file: "frq-2023-set2.pdf", present: false, questions: 1 },
+		{ id: "frq-2024", kind: "frq", label: "Free-response questions (2024)", year: 2024, url: "", file: "frq-2024.pdf", present: false, questions: 4 },
+	];
+	await mountCourse({ documents, indexedQuestions: 5 });
+
+	const order = [...document.querySelectorAll('[data-testid^="document-"]')].map((node) =>
+		node.getAttribute("data-testid"),
+	);
+	assert.deepEqual(
+		order,
+		["document-ced", "document-frq-2024", "document-scoring-2024", "document-frq-2023", "document-frq-2023-set2", "document-scoring-2023-set2"],
+		"description first, then papers by year desc and set, each paper before its scoring guideline",
+	);
+
+	const row = (id: string) => document.querySelector(`[data-testid="document-${id}"]`)?.textContent ?? "";
+	assert.match(row("frq-2024"), /4 questions indexed/);
+	assert.match(row("frq-2023-set2"), /1 question indexed/, "one is singular");
+	assert.match(row("frq-2023"), /not indexed yet/);
+	assert.doesNotMatch(row("ced"), /questions indexed|not indexed yet/);
+	assert.doesNotMatch(row("scoring-2024"), /questions indexed|not indexed yet/);
+
+	assert.match(document.body.textContent ?? "", /Released questions indexed: 5/);
+});
+
+test("Find released papers creates a session whose title and first message are the find prompt", async () => {
+	const seen: Array<{ url: string; method: string; body: unknown }> = [];
+	const navigated: string[] = [];
+	globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+		const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+		const body = init?.body === undefined ? undefined : JSON.parse(String(init.body));
+		seen.push({ url, method: init?.method ?? "GET", body });
+		if (url === "/api/chats" && init?.method === "POST") return Response.json({ id: "chat_find" });
+		throw new Error(`unexpected request ${url}`);
+	}) as typeof fetch;
+
+	await mountCourse({ navigate: (target) => navigated.push(target) });
+
+	const find = document.querySelector<HTMLButtonElement>('[data-testid="find-released-papers"]');
+	assert.ok(find, "a confirmed course offers Find released papers");
+	assert.match(find!.textContent ?? "", /Find released papers/);
+
+	await act(async () => find!.click());
+
+	const prompt = "Find the released free-response papers for AP Calculus BC.";
+	assert.deepEqual(seen.find((request) => request.url === "/api/chats")!.body, {
+		title: prompt,
+		kind: "ap",
+		apCourseId: "ap_1",
+	});
+	assert.equal(
+		JSON.parse(stored.get("lh.openingPrompt.chat_find")!).text,
+		prompt,
+		"the session's first message is the same text as its title",
+	);
+	assert.deepEqual(navigated, ["/chat/chat_find"]);
+});
+
+test("Find released papers is absent before the list is confirmed", async () => {
+	await mountCourse({ course: apRecord({ planConfirmed: false }) });
+	assert.equal(document.querySelector('[data-testid="find-released-papers"]'), null);
 });
 
 // ─── UnitsReviewCard ────────────────────────────────────────────────────────
@@ -504,7 +633,7 @@ function renderPart(part: Record<string, unknown>): string {
 }
 
 test("the three AP tools name their live activity", () => {
-	assert.equal(toolActivityLabel("ap_save_document"), "Saving the course description…");
+	assert.equal(toolActivityLabel("ap_save_document"), "Saving the document…");
 	assert.equal(toolActivityLabel("propose_units"), "Proposing units and topics…");
 	assert.equal(toolActivityLabel("ap_progress"), "Checking progress…");
 });

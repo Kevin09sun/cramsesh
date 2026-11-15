@@ -69,6 +69,34 @@ describe("ap prompt composition", () => {
 		assert.ok(prompt.includes("Never build the list from general knowledge or from a site that is not College Board's."));
 	});
 
+	it("pins the stage 2 instructions for released free-response questions", () => {
+		const prompt = composeInstructions("ap");
+		// The first sentence of every block Task 9 inserts or replaces — the
+		// tools, the setup and sitting rules, the grading section and the
+		// prohibitions.
+		for (const sentence of [
+			"saves an official College Board document into the course's local store: from a `url` on a College Board site, or from a `path` the learner attached.",
+			"starts a background job that reads every saved paper with its scoring guideline and builds the question index: each question's pages, its parts, the topic each part tests, and the official rubric points.",
+			"asks one released free-response question, by its `questionId` from `ap_progress`.",
+			"returns that question's text, each part's topic, and each official rubric point with its id.",
+			"shows you one photo of the learner's written work, by the path in their answer.",
+			"applies your grading of one answered free-response question: for each part, the ids of the rubric points earned.",
+			"corrects the topic a question part is tagged with, when the learner or the question itself shows the tag is wrong.",
+			"Once the learner has confirmed the list, find the released free-response papers for the course and the scoring guideline for each, on College Board's site, for every year published under the current course framework.",
+			"`ap_progress` gives the sitting's scope, its question kind, the topic queue, and, for free-response and mixed sittings, the released questions that fit the scope.",
+			"The learner's answer to each part, and the paths of any photos, arrive as the result of your `ap_frq` call; grade in that turn.",
+			"Never present a question you wrote as a released College Board question, and never alter a released question.",
+			"Never read out, quote or summarise the scoring guideline before the learner has answered.",
+		]) {
+			assert.ok(prompt.includes(sentence), `missing stage 2 instruction: ${sentence}`);
+		}
+		// Stage 1's free-response-not-available line is replaced.
+		assert.doesNotMatch(prompt, /In this version every question is multiple-choice/);
+		// …and the two stage 1 sentences the prompt already pinned survive.
+		assert.ok(prompt.includes("A right option reached by flawed reasoning is `wrong`."));
+		assert.ok(prompt.includes("Never build the list from general knowledge or from a site that is not College Board's."));
+	});
+
 	it("lists own fragments first, then exactly the five allowlisted shared files", () => {
 		assert.deepEqual(
 			listSourceSegments("ap").map((segment) => segment.path),

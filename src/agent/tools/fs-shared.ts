@@ -2,7 +2,7 @@ import * as fsSync from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { AUTH_FILE } from "../../../config.ts";
+import { AUTH_FILE, PATHS } from "../../../config.ts";
 import { comparisonPath, guardSourcePath, isWithin, realSourcePath as realOrMissing, resolvePolicy, type ResolvedFileAccessPolicy } from "./file-access.ts";
 
 /**
@@ -16,10 +16,11 @@ import { comparisonPath, guardSourcePath, isWithin, realSourcePath as realOrMiss
  * deliberate scope widening vs pi: relative paths and default roots resolve
  * against the LEARNER'S HOME, not a project cwd — the harness has no
  * meaningful working directory, and "find my notes" should just work.
- * The carve-out: sensitive home locations, dotenv files, and the app's
- * configured credential stores are refused by the resolver and skipped by
- * walks — whatever a tool reads is sent to the model provider. This is
- * path-based defense in depth, not a sandbox or content-redaction system.
+ * The carve-out: sensitive home locations, dotenv files, the app's configured
+ * credential stores and the AP question index (which carries every rubric
+ * point's text) are refused by the resolver and skipped by walks — whatever a
+ * tool reads is sent to the model provider. This is path-based defense in
+ * depth, not a sandbox or content-redaction system.
  *
  * Ported behaviors (mirroring pi's dist/core/tools/{ls,find,grep}.js): the
  * schemas, descriptions, output formats, and truncation notices are copied
@@ -104,8 +105,9 @@ function isCredentialTemp(absolute: string, directory: string, authBasename: str
 }
 
 /** String-only check, also usable with synthetic home/credential locations.
- *  The runtime guard below additionally resolves both sources and protected roots.
- *  Only credentials are app-private denials: learning data remains readable. */
+ *  The runtime guard below additionally resolves both sources and protected
+ *  roots, and denies the app-private AP question index. Other learning data
+ *  remains readable. */
 export function isSensitivePath(absolute: string, home: string = os.homedir(), authFile: string = AUTH_FILE): boolean {
 	const file = comparisonPath(absolute);
 	return ENV_FILE.test(path.basename(file)) ||
@@ -158,8 +160,14 @@ function sourcePathCheck(home = os.homedir()): (absolute: string) => boolean {
 	const homeRoots = sensitiveHomeLocations(home).map(protectedRealPath);
 	const files = credentialFiles(AUTH_FILE).map(protectedRealPath);
 	const credentialDir = protectedRealPath(path.dirname(AUTH_FILE));
+	// The AP question index holds every rubric point's text. It is app-private
+	// like the credential stores: no learner file tool may open or walk it.
+	// The papers folder is deliberately NOT protected — Learn sessions read
+	// the course description from there.
+	const appPrivateRoots = [protectedRealPath(PATHS.apIndex)];
 	return (absolute) => isSensitivePath(absolute, home) ||
 		homeRoots.some((p) => isWithin(absolute, p, true)) ||
+		appPrivateRoots.some((p) => isWithin(absolute, p, true)) ||
 		files.some((p) => isWithin(absolute, p)) || isCredentialTemp(absolute, credentialDir, path.basename(comparisonPath(AUTH_FILE)));
 }
 

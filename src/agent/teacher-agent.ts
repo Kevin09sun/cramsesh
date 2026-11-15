@@ -16,7 +16,7 @@ import {
 } from "./tools.ts";
 import { practiceTools, type PracticeToolContext } from "./tools/practice.ts";
 import { testPrepTools, type TestPrepToolContext } from "./tools/test-prep.ts";
-import { apTools, type ApToolContext } from "./tools/ap.ts";
+import { apTools, apViewPhotoTool, createApViewPhotoTool, type ApToolContext } from "./tools/ap.ts";
 import { healToolRecord, withArgumentHeal } from "./tools/heal.ts";
 import { sendToUserApplies, sendToUserTool } from "./tools/send-to-user.ts";
 import { makeNarrationGuard, narrationGuardApplies, SEND_TO_USER_DELIVERY_RULE } from "./narration-guard.ts";
@@ -214,7 +214,9 @@ function baseAgentOptions(kind: AgentKind, opts: AgentBuildOptions, tools: Agent
 			tools: [
 				...tools.map((tool) => tool.name === "read" && tool.execute === readTool.execute
 					? { ...tool, execute: createReadTool(engine.model).execute as AgentTool<any>["execute"] }
-					: tool),
+					: tool.name === "ap_view_photo" && tool.execute === apViewPhotoTool.execute
+						? { ...tool, execute: createApViewPhotoTool(engine.model).execute as AgentTool<any>["execute"] }
+						: tool),
 				...(sendToUserApplies(kind, engine.model, opts.tools !== undefined)
 					? [withArgumentHeal(sendToUserTool)]
 					: []),

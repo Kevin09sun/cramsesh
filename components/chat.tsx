@@ -1639,7 +1639,7 @@ export function Chat({
 													// transcript; answered ones render as records.
 													if (questionDisposition === "answered") {
 														return (
-															<AnsweredCard key={pi} answer={part.output as QuestionAnswerData} input={part.input} />
+															<AnsweredCard key={pi} answer={part.output as QuestionAnswerData} input={part.input} apCourseId={apCourseId} />
 														);
 													}
 													return null;
@@ -1763,6 +1763,7 @@ export function Chat({
 				    fold) and NEVER overlaps the composer. */}
 				<DockOverlay
 					pending={pending}
+					apCourseId={apCourseId}
 					initialQuestionDraft={pending ? questionDraft(pending.key)?.form : undefined}
 					onSaveQuestionDraft={(form) => { if (pending) saveQuestionDraft(pending.key, { form }); }}
 					practice={activeProblem}
@@ -1998,6 +1999,7 @@ export function shouldStampGeometryMute(nextH: number, prevH: number, pending: b
 
 function DockOverlay({
 	pending,
+	apCourseId,
 	initialQuestionDraft,
 	onSaveQuestionDraft,
 	practice,
@@ -2026,6 +2028,9 @@ function DockOverlay({
 	queuedSteers,
 }: {
 	pending: ReturnType<typeof pendingQuestionOf>;
+	/** The AP course (ap sessions) — the released free-response form and card
+	 *  load the question projection and page images through its route. */
+	apCourseId?: string;
 	initialQuestionDraft?: QuestionFormDraft;
 	onSaveQuestionDraft: (draft: QuestionFormDraft) => void;
 	/** Compaction running for this chat (round 14) — the docks' submit
@@ -2467,9 +2472,10 @@ function DockOverlay({
 						>
 							{pending ? (
 								<QuestionDock
-									toolName={pending.tool as "quiz" | "probe" | "ask_user_question" | "explain" | "recall" | "check_point" | "ap_mcq"}
+									toolName={pending.tool as "quiz" | "probe" | "ask_user_question" | "explain" | "recall" | "check_point" | "ap_mcq" | "ap_frq"}
 									toolCallId={pending.toolCallId}
 									input={pending.input as never}
+									apCourseId={apCourseId}
 									expanded={expanded}
 									reveal={revealPending}
 									phase={phase}

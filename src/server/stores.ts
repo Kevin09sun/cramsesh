@@ -12,6 +12,7 @@ import { sourceOrganizationStore } from "../store/source-organization.ts";
 import { jobStore } from "../store/jobs.ts";
 import { testStore } from "../store/tests.ts";
 import { apCourseStore } from "../store/ap-courses.ts";
+import { apIndexStore } from "../store/ap-index.ts";
 import { settingsStore } from "../store/settings.ts";
 import { resolveSettings, type EffectiveSettings } from "../core/settings-resolution.ts";
 import { syncCustomProvider } from "./custom-provider.ts";
@@ -23,6 +24,7 @@ export const stores = {
 	jobStore,
 	testStore,
 	apCourseStore,
+	apIndexStore,
 	settingsStore,
 };
 

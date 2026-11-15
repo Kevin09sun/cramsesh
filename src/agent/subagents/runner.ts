@@ -5,6 +5,8 @@ import {
 	buildSubagentSteer,
 	isSubagentFailure,
 	piUsageToStep,
+	type ApIndexResult,
+	type ApIndexToolInput,
 	type DemoResult,
 	type DemoToolInput,
 	type JobKind,
@@ -15,10 +17,15 @@ import {
 	type ResearchResult,
 	type ResearchToolInput,
 	type SteerMessage,
+	type SubagentResult,
 	type UsageStepLike,
 	type VisualResult,
 	type VisualToolInput,
 } from "../../core/contracts.ts";
+import type { ApCourseRecord, ApDocument } from "../../core/ap.ts";
+import type { ApQuestionIndex, ApRealQuestion } from "../../core/ap-frq.ts";
+import { apPaperPair } from "../../core/ap-frq.ts";
+import { indexApPaper } from "./ap-indexer.ts";
 import { registerJobAbort, unregisterJobAbort } from "./aborts.ts";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -61,9 +68,15 @@ export const researchModelOverride: { current?: PiEngine } = {};
 export const demoModelOverride: { current?: PiEngine } = {};
 export const visualModelOverride: { current?: PiEngine } = {};
 export const pdfModelOverride: { current?: PiEngine } = {};
+export const apIndexModelOverride: { current?: PiEngine } = {};
 
 /** The dispatch-time tool input (from src/agent/tools/jobs.ts schemas). */
-type JobToolInput = ResearchToolInput | DemoToolInput | VisualToolInput | PdfToolInput;
+type JobToolInput =
+	| ResearchToolInput
+	| DemoToolInput
+	| VisualToolInput
+	| PdfToolInput
+	| ApIndexToolInput;
 
 export interface JobRunnerDeps {
 	chatStore: ChatStore;
@@ -93,6 +106,17 @@ export interface JobRunnerDeps {
 	 *  Injected because the agent layer may not read the key store; absent
 	 *  in tests that inject engines directly (test engines never owe a key). */
 	providerKeyMissing?: (provider: string, tier: ModelSlotName) => ProviderKeyMissing | null;
+	/** The AP indexing port (AP prep stage 2): the course record, the synced
+	 *  question index, and the local paper folder — injected by the
+	 *  composition root so this layer imports no store or server module. */
+	apIndex?: {
+		course(courseId: string): ApCourseRecord | null;
+		index(courseId: string): ApQuestionIndex | null;
+		putPaper(courseId: string, paperId: string, questions: ApRealQuestion[]): void;
+		/** The absolute path of a saved PDF, or null when it is not on this
+		 *  computer. */
+		paperPath(courseId: string, file: string): string | null;
+	};
 }
 
 export interface JobRunner {
@@ -124,6 +148,7 @@ const KIND_ROLE: Record<JobKind, ModelRole> = {
 	demo: "demoBuilder",
 	visual: "visualMaker",
 	pdf: "pdfReader",
+	ap_index: "apIndexer",
 };
 
 export function createJobRunner(deps: JobRunnerDeps): JobRunner {
@@ -175,6 +200,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 			demoBuilder: demoModelOverride,
 			visualMaker: visualModelOverride,
 			pdfReader: pdfModelOverride,
+			apIndexer: apIndexModelOverride,
 		};
 		return testOverride[KIND_ROLE[kind]]?.current ?? deps.engineFor?.(KIND_ROLE[kind]);
 	}
@@ -187,6 +213,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 		demo: (jobId, engine, input, loop) => runDemoJob(jobId, engine, input, loop),
 		visual: (jobId, engine, input, loop) => runVisualJob(jobId, engine, input, loop),
 		pdf: (jobId, engine, input, loop) => runPdfJob(jobId, engine, input, loop),
+		ap_index: (jobId, engine, input, loop) => runApIndexJob(jobId, engine, input, loop),
 	};
 
 	async function runJob(jobId: string, input?: JobToolInput): Promise<void> {
@@ -218,9 +245,10 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 				| DemoToolInput
 				| VisualToolInput
 				| PdfToolInput
+				| ApIndexToolInput
 				| undefined;
 			const pdf = resolved as PdfToolInput | undefined;
-			const failure: ResearchResult | DemoResult | VisualResult | PdfResult =
+			const failure: SubagentResult =
 				job.kind === "research"
 					? { brief: `Research failed: ${reason}`, sources: [] }
 					: job.kind === "demo"
@@ -232,13 +260,15 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 							}
 						: job.kind === "visual"
 							? { svg: "", notes: `FAILED: ${reason}` }
-							: {
-									path: typeof pdf?.path === "string" ? pdf.path : "",
-									question: typeof pdf?.question === "string" ? pdf.question : "",
-									brief: `PDF failed: ${reason}`,
-									pagesRead: [],
-									pagesConsulted: [],
-								};
+							: job.kind === "ap_index"
+								? { brief: `Indexing failed: ${reason}`, indexed: [], failed: [], untagged: 0 }
+								: {
+										path: typeof pdf?.path === "string" ? pdf.path : "",
+										question: typeof pdf?.question === "string" ? pdf.question : "",
+										brief: `PDF failed: ${reason}`,
+										pagesRead: [],
+										pagesConsulted: [],
+									};
 			await finishJob(jobId, failure);
 		};
 		if (!engine) {
@@ -301,7 +331,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 	 * Save the computation outcome and session delivery obligation together.
 	 * Worker liveness ends after cleanup, not after a lesson consumes the result.
 	 */
-	async function finishJob(jobId: string, result: ResearchResult | DemoResult | VisualResult | PdfResult): Promise<void> {
+	async function finishJob(jobId: string, result: SubagentResult): Promise<void> {
 		const job = jobStore.getJob(jobId);
 		if (!job) return;
 		// Aborted mid-run (abortJob flips the record before
@@ -527,7 +557,150 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 		}
 	}
 
+	// ─── AP paper indexing (AP prep stage 2) ─────────────────────────────────
+
+	async function runApIndexJob(
+		jobId: string,
+		model: PiEngine | undefined,
+		passedInput: JobToolInput | undefined,
+		loop: LoopContext,
+	): Promise<void> {
+		const ctx = jobContext(jobId);
+		if (!ctx) return;
+
+		const input = (passedInput ?? resolveInput(ctx.job, passedInput)) as ApIndexToolInput | undefined;
+		const courseId = typeof input?.courseId === "string" ? input.courseId : "";
+
+		const port = deps.apIndex;
+		if (!port) {
+			const brief = "Indexing failed: paper indexing is not available.";
+			if (stillRunning(jobId)) jobStore.updateJob(jobId, { error: brief.replace(/^Indexing failed:\s*/i, "") });
+			await finishJob(jobId, { brief, indexed: [], failed: [], untagged: 0 });
+			return;
+		}
+
+		const course = courseId ? port.course(courseId) : null;
+		if (!course) {
+			const brief = `Indexing failed: course "${courseId}" was not found`;
+			if (stillRunning(jobId)) jobStore.updateJob(jobId, { error: brief.replace(/^Indexing failed:\s*/i, "") });
+			await finishJob(jobId, { brief, indexed: [], failed: [], untagged: 0 });
+			return;
+		}
+
+		const topics = course.sections.flatMap((section) =>
+			section.points.map((point) => ({ id: point.id, unit: section.title, text: point.text })),
+		);
+		const alreadyIndexed = new Set((port.index(courseId)?.questions ?? []).map((question) => question.paperId));
+		const indexed: ApIndexResult["indexed"] = [];
+		const failed: ApIndexResult["failed"] = [];
+
+		for (const paper of course.documents.filter((document) => document.kind === "frq")) {
+			// An abort writes nothing for the pair in flight; the abort path
+			// owns the record and the steer.
+			if (loop.abortSignal.aborted) return;
+			if (alreadyIndexed.has(paper.id)) continue;
+
+			const scoring = pairedScoring(course, paper);
+			if (!scoring) {
+				failed.push({ paperId: paper.id, reason: "no scoring guideline saved for this paper" });
+				continue;
+			}
+			const paperPath = port.paperPath(courseId, paper.file);
+			const scoringPath = port.paperPath(courseId, scoring.file);
+			if (paperPath === null || scoringPath === null) {
+				failed.push({ paperId: paper.id, reason: "not on this computer" });
+				continue;
+			}
+
+			let questions: ApRealQuestion[];
+			try {
+				questions = await indexApPaper(
+					{ paper, scoring, paperPath, scoringPath, topics },
+					{
+						engine: model,
+						signal: loop.abortSignal,
+						chatId: loop.chatId,
+						onUsage: (usage) => loop.onUsage(piUsageToStep(usage)),
+					},
+				);
+			} catch (err) {
+				if (loop.abortSignal.aborted) return;
+				const reason = pairFailureReason(err);
+				// The real error is ours to read; the brief carries only the
+				// plain reason the learner and the tutor can act on.
+				if (reason === "could not be read") console.error(`[job ${jobId}] indexing ${paper.id}:`, err);
+				failed.push({ paperId: paper.id, reason });
+				continue;
+			}
+			// The pair succeeded only in full: a thrown/aborted run never
+			// reaches this write, so no half index is ever stored.
+			if (loop.abortSignal.aborted) return;
+			try {
+				port.putPaper(courseId, paper.id, questions);
+			} catch (err) {
+				if (loop.abortSignal.aborted) return;
+				// The real error is ours to read; the brief carries only the
+				// plain reason the learner and the tutor can act on.
+				console.error(`[job ${jobId}] saving ${paper.id}:`, err);
+				failed.push({ paperId: paper.id, reason: "could not be saved" });
+				continue;
+			}
+			indexed.push({ paperId: paper.id, questions: questions.length });
+			jobStore.updateJob(jobId, { activity: `indexed ${paper.label}` });
+		}
+
+		const untagged = (port.index(courseId)?.questions ?? []).reduce(
+			(total, question) => total + question.parts.filter((part) => part.topicId === undefined).length,
+			0,
+		);
+		const questionsIndexed = indexed.reduce((total, entry) => total + entry.questions, 0);
+		const labelOf = (paperId: string) =>
+			course.documents.find((document) => document.id === paperId)?.label ?? paperId;
+
+		const sentences = [`Indexed ${questionsIndexed} questions from ${indexed.length} papers.`];
+		if (untagged > 0) sentences.push(`${untagged} parts have no topic tag.`);
+		if (failed.length > 0) {
+			sentences.push(`Failed: ${failed.map((entry) => `${labelOf(entry.paperId)} (${entry.reason})`).join("; ")}.`);
+		}
+		const result: ApIndexResult = {
+			brief:
+				indexed.length === 0 && failed.length > 0
+					? `Indexing failed: ${failed.map((entry) => entry.reason).join("; ")}`
+					: sentences.join(" "),
+			indexed,
+			failed,
+			untagged,
+		};
+
+		if (indexed.length === 0 && failed.length > 0 && stillRunning(jobId)) {
+			jobStore.updateJob(jobId, { error: result.brief.replace(/^Indexing failed:\s*/i, "") });
+		}
+		await finishJob(jobId, result);
+	}
+
 	return { runJob };
+}
+
+/** The scoring guideline saved beside a released paper: same year and set,
+ *  named by the shared file-name rule. Undefined = none was saved. */
+function pairedScoring(course: ApCourseRecord, paper: ApDocument): ApDocument | undefined {
+	const pair = apPaperPair(paper);
+	if (!pair) return undefined;
+	return course.documents.find((document) => document.kind === "scoring" && document.id === pair.scoringId);
+}
+
+/** The fixed reasons a pair may fail with, verbatim. Anything else is an
+ *  unexpected extraction/model error and reads as the plain "could not be
+ *  read" (the real error goes to the log, never to the learner). */
+const FIXED_PAIR_REASONS = new Set([
+	"too long to index",
+	"no readable text (scanned document)",
+	"the indexer never submitted a question index",
+]);
+
+function pairFailureReason(err: unknown): string {
+	const message = err instanceof Error ? err.message : String(err);
+	return FIXED_PAIR_REASONS.has(message) ? message : "could not be read";
 }
 
 // ─── module-level pure helpers ──────────────────────────────────────────────

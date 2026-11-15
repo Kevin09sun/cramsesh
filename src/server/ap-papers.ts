@@ -54,6 +54,40 @@ export function apPaperPresent(courseId: string, file: string): boolean {
 	return fs.existsSync(apPaperPath(courseId, file));
 }
 
+/** The cache path of one rendered page: beside the paper, in pages/, named
+ *  from the validated file name and the integer page. */
+export function apPageCachePath(courseId: string, file: string, page: number): string {
+	return path.join(path.dirname(apPaperPath(courseId, file)), "pages", `${file.replace(/\.pdf$/, "")}-p${page}.png`);
+}
+
+/**
+ * Remove every cached page image of one stored paper. Called after a paper is
+ * re-saved: its old pages must not keep showing behind the new bytes. Only
+ * names of the exact form "<base>-p<digits>.png" match, so frq-2023 never
+ * clears frq-2023-set2, and a missing pages folder is simply nothing to
+ * clear. Other pages in the folder are never touched.
+ */
+export async function clearApPageCache(courseId: string, file: string): Promise<void> {
+	const dir = path.join(path.dirname(apPaperPath(courseId, file)), "pages");
+	const base = file.replace(/\.pdf$/, "");
+	const pattern = new RegExp(`^${escapeRegExp(base)}-p\\d+\\.png$`);
+
+	let names: string[];
+	try {
+		names = await fsp.readdir(dir);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+		throw error;
+	}
+	await Promise.all(
+		names.filter((name) => pattern.test(name)).map((name) => fsp.rm(path.join(dir, name), { force: true })),
+	);
+}
+
+function escapeRegExp(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 /**
  * Keep ap-papers/ out of the learner's synced data repo. An existing
  * .gitignore only gains the exact line once (its content and trailing
@@ -118,7 +152,8 @@ export async function downloadApPaper(
 		if (!isPdf(bytes)) throw new Error("Not a PDF");
 
 		ensureApPapersIgnored();
-		await writePaperAtomic(target, bytes);
+		await writeBytesAtomic(target, bytes);
+		await clearPagesAfterSave(courseId, file);
 		return { file, bytes: bytes.byteLength };
 	} finally {
 		clearTimeout(timer);
@@ -144,8 +179,20 @@ export async function importApPaper(
 	if (!isPdf(bytes)) throw new Error("Not a PDF");
 
 	ensureApPapersIgnored();
-	await writePaperAtomic(target, bytes);
+	await writeBytesAtomic(target, bytes);
+	await clearPagesAfterSave(courseId, file);
 	return { file, bytes: bytes.byteLength };
+}
+
+/** A paper's cached page images describe its old bytes. Clearing them is
+ *  best-effort: the save already succeeded, so a failure is logged rather
+ *  than raised. */
+async function clearPagesAfterSave(courseId: string, file: string): Promise<void> {
+	try {
+		await clearApPageCache(courseId, file);
+	} catch (error) {
+		console.error(`AP page images could not be cleared for ${courseId}/${file}:`, error);
+	}
 }
 
 /** The port later tasks inject: no fetch seam, three arguments. */
@@ -249,11 +296,12 @@ function isPdf(bytes: Uint8Array): boolean {
 	return PDF_MAGIC.every((byte, index) => bytes[index] === byte);
 }
 
-/** Write beside the target, then rename over it; any failure removes the
- *  temp file so a refusal or a crash never leaves a half paper behind.
+/** Write bytes beside the target, then rename over it; any failure removes
+ *  the temp file so a refusal or a crash never leaves a half file behind.
  *  The exclusive open (`wx`) means a file or symlink already at the temp
- *  path is never followed or truncated. */
-async function writePaperAtomic(target: string, bytes: Uint8Array): Promise<void> {
+ *  path is never followed or truncated. Shared by the paper store and the
+ *  page cache. */
+export async function writeBytesAtomic(target: string, bytes: Uint8Array): Promise<void> {
 	await fsp.mkdir(path.dirname(target), { recursive: true });
 	const temp = `${target}.${randomUUID()}.tmp`;
 	let created = false;

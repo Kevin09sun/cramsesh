@@ -13,8 +13,10 @@ import type { ApCourseRecord, ApSitting, ApSittingScope } from "@/src/core";
  *
  * A unit, topic or the weak-topics button opens this small chooser: the
  * sitting's WHAT is the button that opened it; the chooser asks the KIND.
- * Stage 1 writes multiple-choice only, so Free-response and Mixed are shown
- * (the owner's three kinds stay visible) but each says so and cannot start.
+ * Free-response and Mixed need released questions: with none indexed they
+ * stay visible (the owner's three kinds stay visible) but say so and cannot
+ * start; once the course's index holds questions they start like
+ * multiple-choice does.
  *
  * A sitting is one session: POST /api/chats with the course id and the
  * sitting, then navigate to the returned chat. The session title is the
@@ -24,6 +26,7 @@ import type { ApCourseRecord, ApSitting, ApSittingScope } from "@/src/core";
 export function StartSitting({
 	course,
 	scope,
+	indexedQuestions,
 	testId,
 	label = "Practise",
 	navigate,
@@ -31,6 +34,8 @@ export function StartSitting({
 }: {
 	course: Pick<ApCourseRecord, "id" | "title" | "sections">;
 	scope: ApSittingScope;
+	/** How many released questions the course's index holds. */
+	indexedQuestions: number;
 	/** The trigger's data-testid (unit/topic/weak are separate buttons). */
 	testId: string;
 	label?: string;
@@ -42,6 +47,7 @@ export function StartSitting({
 	const [error, setError] = useState<string | null>(null);
 	const [starter] = useState(() => new SessionStarter());
 	const go = navigate ?? ((target: string) => window.location.assign(target));
+	const hasReleasedQuestions = indexedQuestions > 0;
 
 	async function start(sitting: ApSitting): Promise<void> {
 		if (starting) return;
@@ -100,16 +106,36 @@ export function StartSitting({
 						Multiple-choice
 					</Button>
 					<div className="mt-2 flex items-center justify-between gap-2">
-						<Button type="button" variant="ghost" size="sm" disabled>
+						<Button
+							type="button"
+							variant={hasReleasedQuestions ? "outline" : "ghost"}
+							size="sm"
+							className={hasReleasedQuestions ? "w-full justify-start" : undefined}
+							data-testid="sitting-frq"
+							disabled={starting || !hasReleasedQuestions}
+							onClick={() => void start({ scope, kind: "frq" })}
+						>
 							Free-response
 						</Button>
-						<span className="text-[11px] text-muted-foreground">multiple-choice only for now</span>
+						{!hasReleasedQuestions && (
+							<span className="text-[11px] text-muted-foreground">needs released papers</span>
+						)}
 					</div>
 					<div className="mt-1 flex items-center justify-between gap-2">
-						<Button type="button" variant="ghost" size="sm" disabled>
+						<Button
+							type="button"
+							variant={hasReleasedQuestions ? "outline" : "ghost"}
+							size="sm"
+							className={hasReleasedQuestions ? "w-full justify-start" : undefined}
+							data-testid="sitting-mixed"
+							disabled={starting || !hasReleasedQuestions}
+							onClick={() => void start({ scope, kind: "mixed" })}
+						>
 							Mixed
 						</Button>
-						<span className="text-[11px] text-muted-foreground">multiple-choice only for now</span>
+						{!hasReleasedQuestions && (
+							<span className="text-[11px] text-muted-foreground">needs released papers</span>
+						)}
 					</div>
 					{error && (
 						<p role="alert" className="mt-2 text-xs text-destructive">
