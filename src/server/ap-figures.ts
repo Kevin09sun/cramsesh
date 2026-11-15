@@ -14,9 +14,14 @@
  * so no browser is involved and none is required. Figures are rendered 1200
  * px wide (the learner's screen is high-density) at the drawing's own aspect;
  * a rendered height above 8000 px is refused rather than allocated. The
- * rasteriser is a test seam; tests inject fixed bytes and nothing paints a
- * real SVG.
+ * drawing is sized by parsing it with resvg itself, so no text scan can
+ * disagree with what the renderer will do. The rasteriser is a test seam;
+ * tests inject fixed bytes and nothing paints a real SVG.
  */
+
+import { createRequire } from "node:module";
+
+import type { ResvgRenderOptions } from "@resvg/resvg-js";
 
 import { getHeadless } from "../agent/subagents/headless.ts";
 import type { JobRecord, VisualResult } from "../core/contracts.ts";
@@ -33,7 +38,7 @@ const MAX_FIGURE_SVG_BYTES = 512 * 1024;
 /** The width every figure is rendered at. */
 const FIGURE_WIDTH = 1200;
 
-/** The largest declared side AND the largest rendered height; anything
+/** The largest document side and the largest rendered height; anything
  *  bigger is refused rather than allocated. */
 const MAX_FIGURE_SIDE = 8000;
 
@@ -52,65 +57,52 @@ interface FigureSize {
 	height: number;
 }
 
-/** The opening tag of the ROOT <svg> element, or null when there is none.
- *  A child `<rect width=…>` or `<pattern viewBox=…>` must never stand in for
- *  the root's own size. */
-function rootSvgTag(svg: string): string | null {
-	const match = svg.match(/<svg\b(?:[^>"']|"[^"]*"|'[^']*')*>/);
-	return match ? match[0] : null;
+/** The native module, loaded lazily so this server module still imports on a
+ *  machine without the package; when it is absent nothing can be sized and no
+ *  figure is ready. */
+type ResvgModule = typeof import("@resvg/resvg-js");
+let resvgModule: ResvgModule | null | undefined;
+function resvgClass(): ResvgModule["Resvg"] | null {
+	if (resvgModule === undefined) {
+		try {
+			resvgModule = createRequire(import.meta.url)("@resvg/resvg-js") as ResvgModule;
+		} catch {
+			resvgModule = null;
+		}
+	}
+	return resvgModule?.Resvg ?? null;
 }
 
-/** One length attribute: a plain number with an optional lowercase `px`
- *  unit. A percentage, exponent or anything else is not a readable size. */
-function lengthAttribute(tag: string, name: "width" | "height"): number | null {
-	// Anchored to whitespace so `stroke-width` is never read as `width`.
-	const match = tag.match(
-		new RegExp(`(?:^|\\s)${name}\\s*=\\s*["']?(\\d+(?:\\.\\d+)?)(?:px)?["']?(?=\\s|\\/?>)`),
-	);
-	if (!match) return null;
-	const value = Number(match[1]);
-	return Number.isFinite(value) && value > 0 ? value : null;
-}
+/** The options the native render path in src/agent/subagents/headless.ts
+ *  uses, minus fitTo. Constructing Resvg builds the document tree; it does
+ *  not allocate the raster. */
+const SIZE_PARSE_OPTIONS: ResvgRenderOptions = { font: { loadSystemFonts: true }, background: "#ffffff" };
 
-/** The drawing's declared size: the ROOT tag's width and height attributes
- *  when both are plain numbers (an optional `px`), else its viewBox. Null
- *  when neither names a usable size. */
-function declaredSize(svg: string): FigureSize | null {
-	const root = rootSvgTag(svg);
-	if (!root) return null;
+/** The size resvg will render this document from, or null when it cannot
+ *  parse the drawing or the resulting canvas would be too large. Asking the
+ *  renderer is the only reliable size: text before the root element, an
+ *  attribute value or a non-px unit can make a text scan disagree with it. */
+function renderableSize(svg: string): FigureSize | null {
+	const Resvg = resvgClass();
+	if (!Resvg) return null;
 
-	const width = lengthAttribute(root, "width");
-	const height = lengthAttribute(root, "height");
-	if (width !== null && height !== null) return { width, height };
-
-	const viewBox = root.match(/(?:^|\s)viewBox\s*=\s*["']([^"']*)["']/);
-	if (!viewBox) return null;
-	const parts = viewBox[1]!.trim().split(/[\s,]+/).map(Number);
-	if (parts.length !== 4) return null;
-	const [, , boxWidth, boxHeight] = parts;
-	if (
-		boxWidth === undefined ||
-		boxHeight === undefined ||
-		!Number.isFinite(boxWidth) ||
-		!Number.isFinite(boxHeight) ||
-		boxWidth <= 0 ||
-		boxHeight <= 0
-	) {
+	let width: number;
+	let height: number;
+	try {
+		const document = new Resvg(svg, SIZE_PARSE_OPTIONS);
+		width = document.width;
+		height = document.height;
+	} catch {
 		return null;
 	}
-	return { width: boxWidth, height: boxHeight };
-}
 
-/** The declared size a figure may be rendered at, or null when it cannot be
- *  read or its canvas would be too large. */
-function renderableSize(svg: string): FigureSize | null {
-	const size = declaredSize(svg);
-	if (!size || size.width > MAX_FIGURE_SIDE || size.height > MAX_FIGURE_SIDE) return null;
+	if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return null;
+	if (width > MAX_FIGURE_SIDE || height > MAX_FIGURE_SIDE) return null;
 	// The renderer scales to FIGURE_WIDTH and keeps the aspect, so this is
 	// the height it would allocate.
-	const height = Math.round((size.height / size.width) * FIGURE_WIDTH);
-	if (!Number.isFinite(height) || height > MAX_FIGURE_SIDE) return null;
-	return size;
+	const outputHeight = (height / width) * FIGURE_WIDTH;
+	if (!Number.isFinite(outputHeight) || outputHeight > MAX_FIGURE_SIDE) return null;
+	return { width, height };
 }
 
 /** The state of a job this module already knows belongs to the chat. */
