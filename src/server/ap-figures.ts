@@ -109,9 +109,11 @@ function renderableSize(svg: string): FigureSize | null {
 	if (!Number.isFinite(width) || !Number.isFinite(height)) return null;
 	if (width < MIN_FIGURE_SIDE || height < MIN_FIGURE_SIDE) return null;
 	if (width > MAX_FIGURE_SIDE || height > MAX_FIGURE_SIDE) return null;
-	// The renderer scales to FIGURE_WIDTH and keeps the aspect, so this is
-	// the height it would allocate.
-	const outputHeight = (height / width) * FIGURE_WIDTH;
+	// The renderer scales to FIGURE_WIDTH and keeps the aspect. The getters
+	// round to whole pixels, so bound the worst case they allow (true width
+	// up to 0.5 smaller, true height up to 0.5 larger); the 2 px floor keeps
+	// the divisor at 1.5 or more.
+	const outputHeight = ((height + 0.5) / (width - 0.5)) * FIGURE_WIDTH;
 	if (!Number.isFinite(outputHeight) || outputHeight > MAX_FIGURE_SIDE) return null;
 	return { width, height };
 }

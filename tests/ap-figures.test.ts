@@ -73,6 +73,12 @@ const UNPARSEABLE_SVG = `<svg ${NS}><rect></svg>`;
 /** resvg reads this as 1x6 (its size getters round), yet a 1200 px wide
  *  render of it would be 15360 px tall. */
 const SUB_2PX_SVG = `<svg ${NS} width="0.5" height="6.4"><rect/></svg>`;
+/** resvg reads this as 2x13 (predicting 7800 px tall at 1200 wide), yet it
+ *  renders 1200x10720. */
+const ROUNDED_TALL_SVG = `<svg ${NS} width="1.5" height="13.4"><rect/></svg>`;
+/** Worst-case prediction (7995.5 / 1199.5 * 1200 = 7998.8) is within the
+ *  bound; the real renderer gives 1200x7995 (measured). */
+const NEAR_BOUND_SVG = `<svg ${NS} width="1200" height="7995"><rect/></svg>`;
 /** Drawings the drawing job accepts and Teach displays after its two display
  *  repairs (svgImageSource): a missing root namespace and an `&nbsp;`. */
 const NO_NAMESPACE_SVG = '<svg width="320" height="160"><rect width="10" height="10"/></svg>';
@@ -139,6 +145,21 @@ describe("the default figure rasteriser", () => {
 			// PNG IHDR: height follows the width; 320x160 keeps its 2:1 aspect.
 			assert.equal(png.readUInt32BE(20), 600, `${label}: the PNG keeps the drawing's aspect`);
 		}
+	});
+
+	it("renders a figure just under the rendered-height bound below 8000 px", async (t) => {
+		if (!nativeRenderer) {
+			t.skip(NO_RESVG);
+			return;
+		}
+		resetFigureRasteriser();
+		const chatId = makeChat("AP figure native bound");
+		const job = makeJob(chatId);
+		jobStore.updateJob(job.id, { status: "done", result: { svg: NEAR_BOUND_SVG } });
+
+		const png = await figurePng(chatId, job.id);
+		assert.equal(png.readUInt32BE(16), 1200, "the PNG is 1200 px wide");
+		assert.equal(png.readUInt32BE(20), 7995, "the PNG is under the 8000 px bound");
 	});
 });
 
@@ -208,6 +229,11 @@ describe("figureState", { skip: skipWithoutResvg }, () => {
 			["a document the renderer cannot parse", UNPARSEABLE_SVG],
 			["a document under 2 px wide", SUB_2PX_SVG],
 			["a document under 2 px tall", `<svg ${NS} width="100" height="1.4"><rect/></svg>`],
+			["a fractional size the rounded getters under-read", ROUNDED_TALL_SVG],
+			[
+				"exactly 8000 tall at 1200 wide, which the rounding margin cannot rule out",
+				`<svg ${NS} width="1200" height="8000"><rect/></svg>`,
+			],
 		];
 		for (const [label, svg] of cases) {
 			const job = makeJob(chatId);
@@ -225,7 +251,7 @@ describe("figureState", { skip: skipWithoutResvg }, () => {
 			["the renderer's default when no size is declared", `<svg ${NS}><rect/></svg>`],
 			["a stroke-width that is not a width", `<svg ${NS} height="100" stroke-width="1"><rect/></svg>`],
 			["exactly at the 8000 side bound", `<svg ${NS} width="8000" height="8000"><rect/></svg>`],
-			["exactly at the 8000 rendered-height bound", `<svg ${NS} width="1200" height="8000"><rect/></svg>`],
+			["just under the 8000 rendered-height bound, rounding included", NEAR_BOUND_SVG],
 			[
 				"a root size beside a child with a huge width",
 				`<svg ${NS} width="100" height="50"><rect width="999999" height="999999"/></svg>`,
@@ -291,9 +317,9 @@ describe("figurePng", { skip: skipWithoutResvg }, () => {
 		}
 	});
 
-	it("rasterises a figure exactly at the rendered-height bound", async () => {
+	it("rasterises a figure just under the rendered-height bound", async () => {
 		const chatId = makeChat("AP figure bound png");
-		const svg = `<svg ${NS} width="1200" height="8000"><rect/></svg>`;
+		const svg = NEAR_BOUND_SVG;
 		const job = makeJob(chatId);
 		jobStore.updateJob(job.id, { status: "done", result: { svg } });
 
@@ -304,7 +330,7 @@ describe("figurePng", { skip: skipWithoutResvg }, () => {
 		});
 
 		assert.deepEqual(await figurePng(chatId, job.id), PNG);
-		assert.deepEqual(seen, [svg], "a figure at the bound still reaches the rasteriser");
+		assert.deepEqual(seen, [svg], "a figure just under the bound still reaches the rasteriser");
 	});
 
 	it("refuses every drawing that is not ready without rasterising", async () => {
@@ -319,6 +345,8 @@ describe("figurePng", { skip: skipWithoutResvg }, () => {
 		jobStore.updateJob(unreadable.id, { status: "done", result: { svg: UNPARSEABLE_SVG } });
 		const sub2px = makeJob(chatId);
 		jobStore.updateJob(sub2px.id, { status: "done", result: { svg: SUB_2PX_SVG } });
+		const roundedTall = makeJob(chatId);
+		jobStore.updateJob(roundedTall.id, { status: "done", result: { svg: ROUNDED_TALL_SVG } });
 		const tallThin = makeJob(chatId);
 		jobStore.updateJob(tallThin.id, { status: "done", result: { svg: `<svg ${NS} width="100" height="5000"><rect/></svg>` } });
 		const shadowed = makeJob(chatId);
@@ -374,6 +402,7 @@ describe("figurePng", { skip: skipWithoutResvg }, () => {
 			oversize.id,
 			unreadable.id,
 			sub2px.id,
+			roundedTall.id,
 			tallThin.id,
 			shadowed.id,
 			instruction.id,
