@@ -80,7 +80,6 @@ describe("ap prompt composition", () => {
 			"asks one released free-response question, by its `questionId` from `ap_progress`.",
 			"returns that question's text, each part's topic, and each official rubric point with its id.",
 			"shows you one photo of the learner's written work, by the path in their answer.",
-			"applies your grading of one answered free-response question: for each part, the ids of the rubric points earned.",
 			"corrects the topic a question part is tagged with, when the learner or the question itself shows the tag is wrong.",
 			"Once the learner has confirmed the list, find the released free-response papers for the course and the scoring guideline for each, on College Board's site, for every year published under the current course framework.",
 			"`ap_progress` gives the sitting's scope, its question kind, the topic queue, and, for free-response and mixed sittings, the released questions that fit the scope.",
@@ -95,6 +94,42 @@ describe("ap prompt composition", () => {
 		// …and the two stage 1 sentences the prompt already pinned survive.
 		assert.ok(prompt.includes("A right option reached by flawed reasoning is `wrong`."));
 		assert.ok(prompt.includes("Never build the list from general knowledge or from a site that is not College Board's."));
+	});
+
+	it("pins the stage 3 instructions for generated free-response questions and figures", () => {
+		const prompt = composeInstructions("ap");
+		// The first sentence of every block stage 3 inserts or replaces, and
+		// each new prohibition.
+		for (const sentence of [
+			"read a stored document by the file name `ap_save_document` or `ap_progress` gave you: its page count, the text of a page range, or the pages where a phrase appears.",
+			"asks one multiple-choice question on one topic.",
+			"asks one released free-response question, by its `questionId` from `ap_progress`.",
+			"applies your grading of one answered released question: for each part, the ids of the rubric points earned.",
+			"asks one free-response question you wrote.",
+			"applies your grading of the generated question the learner just answered: for each part, the ids of the rubric points earned, numbered in the order you wrote them (`a1`, `a2`, `b1`).",
+			"starts a background job that draws one precise figure from your brief.",
+			"shows you a finished figure, by its id, as the learner will see it.",
+			"every question is one you write, with `ap_mcq`.",
+			"for each topic, ask an unused released question with `ap_frq` when `ap_progress` lists one; when none fits or all are used, write one with `ap_frq_gen`.",
+			"follow the topic queue, alternating a multiple-choice question you write with a free-response question, released when an unused one covers the topic and written by you otherwise.",
+			"Before writing, read the topic's pages in the course description and the official sample questions for its unit, and model the question on them: the same skills, the same level, the same kind of wrong answers.",
+			"Use a figure only when the question cannot be asked properly without one: a graph to read, a diagram of a physical setup, a geometric construction.",
+			"For a released question, call `ap_rubric`.",
+			"Record the points earned on each part: `ap_record_frq` for a released question, `ap_record_gen` for one you wrote.",
+			"for each part that lost points, give the correct answer and say which points were lost and exactly why.",
+			"Never reveal a committed answer or a rubric point before the learner has answered.",
+			"Never use a figure you have not looked at.",
+		]) {
+			assert.ok(prompt.includes(sentence), `missing stage 3 instruction: ${sentence}`);
+		}
+		// The stage 2 wordings stage 3 replaces are gone. The old ap_record_frq
+		// tail is asserted as its full sentence, because `before you speak`
+		// also appears in ap_record_result, which stage 3 leaves byte-for-byte
+		// unchanged.
+		assert.doesNotMatch(prompt, /Use text, tables, mathematical notation and inline diagrams only/);
+		assert.doesNotMatch(prompt, /Call it once per question, before you speak\./);
+		assert.doesNotMatch(prompt, /You pass nothing else/);
+		assert.doesNotMatch(prompt, /pose a fresh multiple-choice question on it with/);
 	});
 
 	it("lists own fragments first, then exactly the five allowlisted shared files", () => {
