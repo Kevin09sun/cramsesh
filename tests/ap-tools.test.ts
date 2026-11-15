@@ -205,6 +205,8 @@ function ctxOf(
 		attempts: { record: (courseId) => courses.get(courseId)! },
 		answeredFrq: () => "none",
 		answeredFrqCount: () => 0,
+		// Stage 3 seam: no generated questions in this suite.
+		generatedFrqs: [],
 		// Stage 3 seams: no drawing states and nothing looked at yet. The
 		// figure suite (ap-figure-tools.test.ts) exercises them.
 		figures: { state: () => "unknown", png: async () => Buffer.alloc(0) },
@@ -302,10 +304,12 @@ describe("apTools registry", () => {
 			"ap_progress",
 			"ap_mcq",
 			"ap_frq",
+			"ap_frq_gen",
 			"ap_rubric",
 			"ap_view_photo",
 			"ap_view_figure",
 			"ap_record_frq",
+			"ap_record_gen",
 			"ap_retag_part",
 			"ap_record_result",
 			"read",

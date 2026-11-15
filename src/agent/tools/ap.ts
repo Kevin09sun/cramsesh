@@ -23,14 +23,29 @@
 import * as path from "node:path";
 import { Type } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
-import { apFrqInputObject, apMcqInputObject, apMcqInputProblems } from "../../core/question-core.ts";
+import {
+	apFrqGenInputObject,
+	apFrqGenInputProblems,
+	apFrqInputObject,
+	apMcqInputObject,
+	apMcqInputProblems,
+} from "../../core/question-core.ts";
+import type { ApFrqGenToolInput } from "../../core/question-core.ts";
 import { planProblems, readiness, readinessPercent } from "../../core/test-prep.ts";
 import type { AnswerResult, PlanDraftSection } from "../../core/test-prep.ts";
 import { scopedQueue, sittingLabel, sittingScopeProblem, topicInScope } from "../../core/ap.ts";
 import type { ApCourseRecord, ApDocument, ApSitting } from "../../core/ap.ts";
-import { apPaperFileName, attemptProblems, eligibleRealQuestions, scoreAttempt } from "../../core/ap-frq.ts";
+import {
+	apGenQuestionId,
+	apPaperFileName,
+	attemptProblems,
+	eligibleRealQuestions,
+	generatedScoringQuestion,
+	scoreAttempt,
+} from "../../core/ap-frq.ts";
 import { apQuestionTitle } from "../../core/ap-frq.ts";
-import type { ApQuestionIndex, ApRealAttempt } from "../../core/ap-frq.ts";
+import type { ApQuestionIndex, ApRealAttempt, ApRealQuestion } from "../../core/ap-frq.ts";
+import { parseApFrqGenInput } from "../../core/tool-parts.ts";
 import type { LhMessage } from "../../core/native-messages.ts";
 import type { SearchProvider } from "../../core/search.ts";
 import { filterEnabledTools, type EnabledTools } from "../../core/pending.ts";
@@ -126,6 +141,9 @@ export interface ApToolContext {
 	 *  (answeredFrqCountFrom). ap_record_frq compares it with the course's
 	 *  recorded attempts so one answer is graded exactly once. */
 	answeredFrqCount: (questionId: string) => number;
+	/** Every ap_frq_gen pose in this chat, oldest first (generatedFrqsFrom).
+	 *  ap_record_gen grades the newest answered one. */
+	generatedFrqs: { toolCallId: string; input: ApFrqGenToolInput; answered: boolean }[];
 	/** The finished-drawing port (stage 3), injected by the composition
 	 *  root over src/server/ap-figures.ts and scoped to this chat. */
 	figures: ApFiguresPort;
@@ -333,6 +351,31 @@ export function answeredFrqFrom(messages: readonly LhMessage[], questionId: stri
 	if (!answer) return "none";
 	if (!answer.result) return "pending";
 	return answeredFrqCountFrom(messages, questionId) > 0 ? "answered" : "none";
+}
+
+/** Every ap_frq_gen pose in this chat, oldest first, with whether its result
+ *  is a real (non-dismissed) free-response answer. A generated question's
+ *  data lives only in the posing call's arguments; a call the authoring
+ *  contract rejects is unparseable and skipped. */
+export function generatedFrqsFrom(
+	messages: readonly LhMessage[],
+): { toolCallId: string; input: ApFrqGenToolInput; answered: boolean }[] {
+	const generated: { toolCallId: string; input: ApFrqGenToolInput; answered: boolean }[] = [];
+	for (const message of messages) {
+		if (message.role !== "assistant") continue;
+		for (const part of message.content) {
+			if (part.type !== "toolCall" || part.name !== "ap_frq_gen") continue;
+			const input = parseApFrqGenInput(part.arguments);
+			if (!input) continue;
+			const result = frqResult(messages, part.id);
+			generated.push({
+				toolCallId: part.id,
+				input,
+				answered: result !== null && !result.isError && realFrqAnswer(result.details),
+			});
+		}
+	}
+	return generated;
 }
 
 /** The caption of a successful ap_view_figure result. It is the only shape
@@ -679,12 +722,11 @@ function apProgressTool(ctx: ApToolContext): AgentTool<typeof emptyInputObject> 
 						byTopic.set(topic.id, { unitTitle: unit.title, text: topic.text });
 					}
 				}
-				const queue = scopedQueue(course, sitting.scope, ctx.chatId)
-					.slice(0, 30)
-					.map((entry) => {
-						const info = byTopic.get(entry.pointId);
-						return `${entry.pointId} · ${entry.reason} · ${info?.unitTitle ?? "?"} › ${info?.text ?? ""}`;
-					});
+				const queueEntries = scopedQueue(course, sitting.scope, ctx.chatId);
+				const queue = queueEntries.slice(0, 30).map((entry) => {
+					const info = byTopic.get(entry.pointId);
+					return `${entry.pointId} · ${entry.reason} · ${info?.unitTitle ?? "?"} › ${info?.text ?? ""}`;
+				});
 				lines.push("", ...(queue.length > 0 ? ["Queue:", ...queue] : ["Queue: nothing left"]));
 
 				if (sitting.kind === "frq" || sitting.kind === "mixed") {
@@ -711,11 +753,54 @@ function apProgressTool(ctx: ApToolContext): AgentTool<typeof emptyInputObject> 
 						});
 						lines.push("", "Real questions:", ...listed);
 					}
+
+					// The topics the tutor must write its own question for: no
+					// unused released question covers them. A question answered in
+					// this chat counts as used, exactly as ap_frq treats it.
+					const uncovered: string[] = [];
+					for (const entry of queueEntries) {
+						const covered = eligible.some(
+							(candidate) =>
+								!candidate.used &&
+								ctx.answeredFrqCount(candidate.question.id) === 0 &&
+								candidate.topicIds.includes(entry.pointId),
+						);
+						if (covered) continue;
+						uncovered.push(`${entry.pointId} · ${byTopic.get(entry.pointId)?.text ?? ""}`);
+						if (uncovered.length === 20) break;
+					}
+					if (uncovered.length > 0) {
+						lines.push("", `Topics with no unused released question: ${uncovered.join("; ")}`);
+					}
 				}
 			}
 			return textResult(lines.join("\n"));
 		},
 	};
+}
+
+// ─── the figure gate shared by the question tools ───────────────────────────
+
+/** The figure gate (stage 3): a figure must be a finished drawing of this
+ *  chat that the tutor has actually looked at — in the saved record, or
+ *  earlier in this same turn (the registry's per-turn set). Null = the
+ *  figure may be used. Shared by ap_mcq and ap_frq_gen so the refusals can
+ *  never drift. */
+function figureProblem(
+	ctx: ApToolContext,
+	viewedThisTurn: ReadonlySet<string>,
+	figure: string,
+): string | null {
+	const state = ctx.figures.state(figure);
+	if (state === "unknown") return `figure ${figure} is not a figure drawn in this session`;
+	if (state === "pending") {
+		return `figure ${figure} is not finished yet — ask a question that needs no figure meanwhile`;
+	}
+	if (state === "failed") return `figure ${figure} could not be drawn`;
+	if (!ctx.viewedFigures.has(figure) && !viewedThisTurn.has(figure)) {
+		return `look at figure ${figure} with ap_view_figure before using it`;
+	}
+	return null;
 }
 
 // ─── ap_mcq ─────────────────────────────────────────────────────────────────
@@ -769,22 +854,8 @@ function apMcqTool(ctx: ApToolContext, viewedThisTurn: Set<string>): AgentTool<t
 			// of this chat that the tutor has actually looked at — in the
 			// saved record, or earlier in this same turn (the registry's set).
 			if (input.figure !== undefined) {
-				const figure = input.figure;
-				const state = ctx.figures.state(figure);
-				if (state === "unknown") {
-					return invalidInputResult("ap_mcq", [`figure ${figure} is not a figure drawn in this session`]);
-				}
-				if (state === "pending") {
-					return invalidInputResult("ap_mcq", [
-						`figure ${figure} is not finished yet — ask a question that needs no figure meanwhile`,
-					]);
-				}
-				if (state === "failed") {
-					return invalidInputResult("ap_mcq", [`figure ${figure} could not be drawn`]);
-				}
-				if (!ctx.viewedFigures.has(figure) && !viewedThisTurn.has(figure)) {
-					return invalidInputResult("ap_mcq", [`look at figure ${figure} with ap_view_figure before using it`]);
-				}
+				const problem = figureProblem(ctx, viewedThisTurn, input.figure);
+				if (problem !== null) return invalidInputResult("ap_mcq", [problem]);
 			}
 			return questionResult();
 		},
@@ -875,6 +946,105 @@ function apFrqTool(ctx: ApToolContext): AgentTool<typeof apFrqInputObject> {
 				return invalidInputResult("ap_frq", [
 					`${question.id} was already answered; ask ${nextUnused.question.id} first`,
 				]);
+			}
+			return questionResult();
+		},
+	};
+}
+
+// ─── ap_frq_gen ─────────────────────────────────────────────────────────────
+
+function apFrqGenTool(
+	ctx: ApToolContext,
+	viewedThisTurn: ReadonlySet<string>,
+): AgentTool<typeof apFrqGenInputObject> {
+	return {
+		name: "ap_frq_gen",
+		label: "ap_frq_gen",
+		description:
+			"Write and pose one multi-part free-response question yourself on this sitting's scope, when no unused " +
+			"released question covers the topic: a title, a shared stem, and one to six parts (one or two for a " +
+			"retry after lost points), each with its prompt, one confirmed topicId, the committed answer and at " +
+			"least one committed rubric point. The committed answers and rubric points are NEVER shown to the " +
+			"learner — the question shows only the title, stem, part labels and prompts, `details` and the figure — " +
+			"and they are the standard you grade against later with ap_record_gen. Every part's topicId must be a " +
+			"confirmed topic, and at least one part must be inside this sitting's scope. ONE question per turn: " +
+			"pose it, then end your turn. Refused in the setup session, in a multiple-choice sitting, for an " +
+			"unknown or blank topic, for a question testing nothing in this sitting's scope, and while an unused " +
+			"released question still covers one of its topics — ask that released question with ap_frq first; a " +
+			"topic missed in this sitting may be retried here. `figure`, when given, is a finished drawing of this " +
+			"session that you have looked at with ap_view_figure; an id that is not a drawing of this session, a " +
+			"drawing that is not finished yet, a drawing that could not be drawn and a figure you have not looked " +
+			"at are refused.",
+		parameters: apFrqGenInputObject,
+		prepareArguments: (args: unknown) => healEncodedArguments(args, apFrqGenInputObject) as never,
+		executionMode: "sequential",
+		execute: async (_toolCallId, input) => {
+			const course = ctx.courses.get(ctx.courseId);
+			const sitting = ctx.sitting;
+			const listingProblems = listingGateProblems(course, sitting, ctx.courseId);
+			if (listingProblems.length > 0) return invalidInputResult("ap_frq_gen", listingProblems);
+			const confirmedCourse = course!;
+			const confirmedSitting = sitting!;
+			if (confirmedSitting.kind === "mcq") {
+				return invalidInputResult("ap_frq_gen", ["this sitting is multiple-choice only"]);
+			}
+			const authoring = apFrqGenInputProblems(input);
+			if (authoring.length > 0) return invalidInputResult("ap_frq_gen", authoring);
+
+			// Every part's topic must exist in the confirmed list; a blank id is
+			// not in it. The question then must touch the sitting's scope at
+			// least once.
+			const unknown: string[] = [];
+			for (const part of input.parts) {
+				if (!locateTopic(confirmedCourse, part.topicId)) {
+					unknown.push(`part "${part.label.trim().toLowerCase()}": unknown topic ${part.topicId.trim()}`);
+				}
+			}
+			if (unknown.length > 0) return invalidInputResult("ap_frq_gen", unknown);
+			const inScope = input.parts.some((part) =>
+				topicInScope(confirmedCourse, confirmedSitting.scope, part.topicId),
+			);
+			if (!inScope) {
+				return invalidInputResult("ap_frq_gen", [
+					"this question tests nothing in this sitting's scope",
+				]);
+			}
+
+			if (input.figure !== undefined) {
+				const problem = figureProblem(ctx, viewedThisTurn, input.figure);
+				if (problem !== null) return invalidInputResult("ap_frq_gen", [problem]);
+			}
+
+			// RELEASED FIRST (owner decision, stage 3): an unused released
+			// question covering a part's topic wins. A topic missed in THIS
+			// sitting is the retry the written question exists for. A released
+			// question answered in this chat counts as used, exactly as ap_frq
+			// treats it.
+			const index = ctx.index.get(ctx.courseId);
+			const eligible = eligibleRealQuestions(
+				confirmedCourse,
+				index,
+				confirmedSitting.scope,
+				ctx.chatId,
+				confirmedCourse.realAttempts ?? [],
+			);
+			for (const part of input.parts) {
+				const topic = locateTopic(confirmedCourse, part.topicId)!.topic;
+				const missedThisSitting =
+					topic.status === "gap" && topic.history.at(-1)?.chatId === ctx.chatId;
+				if (missedThisSitting) continue;
+				const covering = eligible.find(
+					(entry) =>
+						!entry.used &&
+						ctx.answeredFrqCount(entry.question.id) === 0 &&
+						entry.topicIds.includes(part.topicId),
+				);
+				if (covering) {
+					return invalidInputResult("ap_frq_gen", [
+						`a released question covers ${topic.text}: ask ${covering.question.id} with ap_frq first`,
+					]);
+				}
 			}
 			return questionResult();
 		},
@@ -1140,6 +1310,79 @@ export function createApViewFigureTool(
 	};
 }
 
+// ─── the shared per-point recording ─────────────────────────────────────────
+
+/** The recording both free-response tools share (stage 2's released question
+ *  and stage 3's generated one): build the attempt from the submitted grading
+ *  (every part empty for a dontKnow), score it against the committed rubric,
+ *  fold each tagged topic into the course record, and return the score card's
+ *  text and details. A store failure is the calling tool's retryable input
+ *  error. `title` is the question's visible name. */
+function recordFreeResponse(
+	ctx: ApToolContext,
+	toolName: string,
+	course: ApCourseRecord,
+	questionId: string,
+	title: string,
+	scoringQuestion: Pick<ApRealQuestion, "parts">,
+	givenParts: { label: string; earned: string[] }[],
+	dontKnow: boolean,
+): AgentToolResult<unknown> {
+	const knownTopicIds = new Set(
+		course.sections.flatMap((unit) => unit.points.map((topic) => topic.id)),
+	);
+	const attempt: ApRealAttempt = {
+		questionId,
+		chatId: ctx.chatId,
+		at: new Date().toISOString(),
+		...(dontKnow ? { dontKnow: true } : {}),
+		parts: dontKnow
+			? scoringQuestion.parts.map((part) => ({ label: part.label, earned: [] }))
+			: givenParts.map((part) => ({ label: part.label, earned: [...part.earned] })),
+	};
+	const score = scoreAttempt(scoringQuestion, attempt, knownTopicIds);
+	let updated: ApCourseRecord;
+	try {
+		updated = ctx.attempts.record(ctx.courseId, attempt, score.topics);
+	} catch (error) {
+		return invalidInputResult(toolName, [error instanceof Error ? error.message : String(error)]);
+	}
+
+	const lines: string[] = [`${title}: ${score.earned}/${score.total} points.`];
+	for (const part of score.parts) lines.push(`(${part.label}) ${part.earned}/${part.total}`);
+	for (const topic of score.topics) {
+		const status = locateTopic(updated, topic.topicId)?.topic.status ?? "unknown";
+		lines.push(`Topic ${topic.topicId} is now ${status}.`);
+	}
+	const ready = readiness(updated);
+	const totals = ready.sections.reduce(
+		(acc, unit) => ({ solid: acc.solid + unit.solid, total: acc.total + unit.total }),
+		{ solid: 0, total: 0 },
+	);
+	lines.push(
+		`Overall readiness: ${pct(totals.solid, totals.total)} (${totals.solid}/${totals.total} points solid).`,
+	);
+
+	return {
+		content: [{ type: "text" as const, text: lines.join("\n") }],
+		details: {
+			questionId,
+			title,
+			earned: score.earned,
+			total: score.total,
+			parts: score.parts.map((part) => ({
+				label: part.label,
+				earned: part.earned,
+				total: part.total,
+				...(part.topicId === undefined
+					? {}
+					: { topicText: locateTopic(updated, part.topicId)?.topic.text ?? "none" }),
+				outcome: part.topicId === undefined ? "not counted" : part.complete ? "earned" : "missed",
+			})),
+		},
+	};
+}
+
 // ─── ap_record_frq ──────────────────────────────────────────────────────────
 
 const apRecordFrqInputObject = Type.Object({
@@ -1228,61 +1471,113 @@ function apRecordFrqTool(ctx: ApToolContext): AgentTool<typeof apRecordFrqInputO
 				if (problems.length > 0) return invalidInputResult("ap_record_frq", problems);
 			}
 
-			const knownTopicIds = new Set(
-				course.sections.flatMap((unit) => unit.points.map((topic) => topic.id)),
+			return recordFreeResponse(
+				ctx,
+				"ap_record_frq",
+				course,
+				question.id,
+				apQuestionTitle(question),
+				question,
+				givenParts,
+				input.dontKnow === true,
 			);
-			const attempt: ApRealAttempt = {
-				questionId: question.id,
-				chatId: ctx.chatId,
-				at: new Date().toISOString(),
-				...(input.dontKnow ? { dontKnow: true } : {}),
-				parts: input.dontKnow
-					? question.parts.map((part) => ({ label: part.label, earned: [] }))
-					: givenParts.map((part) => ({ label: part.label, earned: [...part.earned] })),
-			};
-			const score = scoreAttempt(question, attempt, knownTopicIds);
-			let updated: ApCourseRecord;
-			try {
-				updated = ctx.attempts.record(ctx.courseId, attempt, score.topics);
-			} catch (error) {
-				return invalidInputResult("ap_record_frq", [
-					error instanceof Error ? error.message : String(error),
+		},
+	};
+}
+
+// ─── ap_record_gen ──────────────────────────────────────────────────────────
+
+const apRecordGenInputObject = Type.Object({
+	dontKnow: Type.Optional(
+		Type.Boolean({
+			description:
+				'Set true when the learner said "I don\'t know" instead of attempting the question; every part ' +
+				"then scores zero and every tagged topic is recorded as dontKnow. Omit `parts` in that case.",
+		}),
+	),
+	parts: Type.Optional(
+		Type.Array(
+			Type.Object({
+				label: Type.String({
+					description: 'REQUIRED — one part label from the generated question you posed, e.g. "a".',
+				}),
+				earned: Type.Array(Type.String(), {
+					description:
+						'REQUIRED — the ids of the committed rubric points this part earned, in the form ' +
+						'`<label><n>` (for part "a": "a1", "a2"; empty when none). An omitted part is refused.',
+				}),
+			}),
+			{
+				description:
+					"The grading for EVERY part of the generated question, point by point against the rubric you " +
+					"committed with ap_frq_gen. Required unless dontKnow is true; when given with dontKnow it is " +
+					"still validated. A right answer reached by flawed reasoning earns no point.",
+			},
+		),
+	),
+});
+
+function apRecordGenTool(ctx: ApToolContext): AgentTool<typeof apRecordGenInputObject> {
+	return {
+		name: "ap_record_gen",
+		label: "ap_record_gen",
+		description:
+			"Record the learner's graded answer to the generated free-response question they answered most recently " +
+			"in this chat, point by point against the rubric you committed with ap_frq_gen. Pass every part with " +
+			"the rubric point ids it earned (a part's points are `<label>1`, `<label>2`, … in the order you " +
+			"committed them), or dontKnow alone to score every part zero. When parts are given with dontKnow they " +
+			"are still validated. The committed answers and rubric points are NEVER shown to the learner. Validates " +
+			"the grading with the shared attemptProblems rule, folds each tagged topic to correct/wrong/dontKnow in " +
+			"the course record, and returns the score card details for the UI: question id and title, earned/total, " +
+			"and one row per part with its outcome (earned, missed, or not counted when the part has no listed " +
+			"topic). `parts` is REQUIRED unless dontKnow is true. Refused before any generated question has been " +
+			"answered in this session, when that answer is already recorded, and for a grading that does not match " +
+			"the committed rubric.",
+		parameters: apRecordGenInputObject,
+		prepareArguments: (args: unknown) => healEncodedArguments(args, apRecordGenInputObject) as never,
+		executionMode: "sequential",
+		execute: async (_toolCallId, input) => {
+			// The newest ANSWERED generated question is the one on screen and
+			// therefore the one being graded; poses still waiting for an answer
+			// are ignored.
+			const generated = ctx.generatedFrqs.filter((entry) => entry.answered).at(-1);
+			if (!generated) {
+				return invalidInputResult("ap_record_gen", [
+					"no generated free-response question has been answered in this session",
 				]);
 			}
-
-			const lines: string[] = [`${apQuestionTitle(question)}: ${score.earned}/${score.total} points.`];
-			for (const part of score.parts) lines.push(`(${part.label}) ${part.earned}/${part.total}`);
-			for (const topic of score.topics) {
-				const status = locateTopic(updated, topic.topicId)?.topic.status ?? "unknown";
-				lines.push(`Topic ${topic.topicId} is now ${status}.`);
+			// THE ONCE-PER-ANSWER GATE: the course file is re-read here (the
+			// port re-reads it in production), so a grading recorded earlier in
+			// this same turn is already visible.
+			const course = ctx.courses.get(ctx.courseId);
+			if (!course) {
+				return invalidInputResult("ap_record_gen", [`course "${ctx.courseId}" was not found`]);
 			}
-			const ready = readiness(updated);
-			const totals = ready.sections.reduce(
-				(acc, unit) => ({ solid: acc.solid + unit.solid, total: acc.total + unit.total }),
-				{ solid: 0, total: 0 },
+			const questionId = apGenQuestionId(generated.toolCallId);
+			const recorded = (course.realAttempts ?? []).some(
+				(attempt) => attempt.questionId === questionId && attempt.chatId === ctx.chatId,
 			);
-			lines.push(
-				`Overall readiness: ${pct(totals.solid, totals.total)} (${totals.solid}/${totals.total} points solid).`,
+			if (recorded) {
+				return invalidInputResult("ap_record_gen", ["that question is already recorded"]);
+			}
+			const scoringQuestion = generatedScoringQuestion(generated.input);
+			const givenParts = input.parts ?? [];
+			// A dontKnow grading may omit parts; parts that ARE given are
+			// validated exactly as when attempting the question.
+			if (!input.dontKnow || givenParts.length > 0) {
+				const problems = attemptProblems(scoringQuestion, givenParts);
+				if (problems.length > 0) return invalidInputResult("ap_record_gen", problems);
+			}
+			return recordFreeResponse(
+				ctx,
+				"ap_record_gen",
+				course,
+				questionId,
+				generated.input.title,
+				scoringQuestion,
+				givenParts,
+				input.dontKnow === true,
 			);
-
-			return {
-				content: [{ type: "text" as const, text: lines.join("\n") }],
-				details: {
-					questionId: question.id,
-					title: apQuestionTitle(question),
-					earned: score.earned,
-					total: score.total,
-					parts: score.parts.map((part) => ({
-						label: part.label,
-						earned: part.earned,
-						total: part.total,
-						...(part.topicId === undefined
-							? {}
-							: { topicText: locateTopic(updated, part.topicId)?.topic.text ?? "none" }),
-						outcome: part.topicId === undefined ? "not counted" : part.complete ? "earned" : "missed",
-					})),
-				},
-			};
 		},
 	};
 }
@@ -1566,10 +1861,12 @@ export function apTools(ctx: ApToolContext, enabled?: EnabledTools): Record<stri
 		ap_progress: apProgressTool(ctx),
 		ap_mcq: apMcqTool(ctx, viewedThisTurn),
 		ap_frq: apFrqTool(ctx),
+		ap_frq_gen: apFrqGenTool(ctx, viewedThisTurn),
 		ap_rubric: apRubricTool(ctx),
 		ap_view_photo: apViewPhotoTool,
 		ap_view_figure: createApViewFigureTool(ctx.figures, viewedThisTurn),
 		ap_record_frq: apRecordFrqTool(ctx),
+		ap_record_gen: apRecordGenTool(ctx),
 		ap_retag_part: apRetagPartTool(ctx),
 		ap_record_result: apRecordResultTool(ctx),
 		...(ctx.jobs ? { ap_index_papers: apIndexPapersTool(ctx, ctx.jobs) } : {}),
