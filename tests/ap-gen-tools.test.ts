@@ -191,10 +191,12 @@ function fakeIndex(initial: ApQuestionIndex | null): ApIndexPort {
 	};
 }
 
-function fakePapers(): ApPapersPort {
+/** The papers folder: every paper present, except the named files (a synced
+ *  index on a computer that has not downloaded the PDFs yet). */
+function fakePapers(missing: readonly string[] = []): ApPapersPort {
 	return {
 		dir: () => ".",
-		present: () => true,
+		present: (_courseId, file) => !missing.includes(file),
 		download: async () => {
 			throw new Error("download is not expected");
 		},
@@ -233,6 +235,7 @@ interface HarnessOptions {
 	course?: ApCourseRecord;
 	sitting?: ApSitting;
 	index?: ApQuestionIndex | null;
+	missingPapers?: readonly string[];
 	figures?: Record<string, FigureState>;
 	viewed?: ReadonlySet<string>;
 	generated?: { toolCallId: string; input: ApFrqGenToolInput; answered: boolean }[];
@@ -249,7 +252,7 @@ function harness(options: HarnessOptions = {}) {
 		chatId: "chat_now",
 		courseId: course.id,
 		courses: stores.courses,
-		papers: fakePapers(),
+		papers: fakePapers(options.missingPapers ?? []),
 		index,
 		attempts: stores.attempts,
 		answeredFrq: options.answeredFrq ?? (() => "none"),
@@ -480,6 +483,49 @@ describe("ap_frq_gen", () => {
 			"a released question covers 1.1 Introducing Calculus: ask 2023-1 with ap_frq first",
 		]);
 		assert.equal(h.attempts.records.length, 0);
+	});
+
+	it("REFUSES when the covered topic is in a later part", async () => {
+		const h = harness({ sitting: FRQ, index: indexOf(releasedQuestion("2023-1", "t_deriv")) });
+		const result = await h.tools.ap_frq_gen!.execute("call_g", genInput() as never);
+		assert.equal(result.isError, true);
+		assert.deepEqual(problemsOf(result), [
+			"a released question covers 2.1 Definition of the Derivative: ask 2023-1 with ap_frq first",
+		]);
+	});
+
+	it("treats a released question with a recorded course attempt as used", async () => {
+		const h = harness({
+			course: courseOf({
+				realAttempts: [
+					{
+						questionId: "2023-1",
+						chatId: "chat_old",
+						at: "2026-11-15T01:00:00.000Z",
+						parts: [{ label: "a", earned: ["a1"] }],
+					},
+				],
+			}),
+			sitting: FRQ,
+			index: indexOf(releasedQuestion("2023-1", "t_limits")),
+		});
+		const result = await h.tools.ap_frq_gen!.execute("call_g", genInput() as never);
+		assert.equal(result.isError, undefined, "a recorded attempt makes the released question used");
+	});
+
+	it("lets a written question through when the covering paper is missing on this computer", async () => {
+		const h = harness({
+			sitting: FRQ,
+			index: indexOf(releasedQuestion("2023-1", "t_limits")),
+			missingPapers: ["frq-2023.pdf"],
+		});
+		const result = await h.tools.ap_frq_gen!.execute("call_g", genInput() as never);
+		assert.equal(
+			result.isError,
+			undefined,
+			"ap_frq cannot pose a missing paper, so it must not block the written question",
+		);
+		assert.equal(result.terminate, true);
 	});
 
 	it("exempts a topic missed in this sitting (the retry)", async () => {
@@ -815,6 +861,25 @@ describe("ap_progress — topics with no unused released question", () => {
 			text,
 			/^2023-1 · unused · a→1\.1 Introducing Calculus$/m,
 			"the released question still appears in its own block",
+		);
+	});
+
+	it("lists a topic as uncovered when the covering paper is missing on this computer", async () => {
+		const h = harness({
+			sitting: MIXED,
+			index: indexOf(releasedQuestion("2023-1", "t_limits")),
+			missingPapers: ["frq-2023.pdf"],
+		});
+		const result = await h.tools.ap_progress!.execute("call_p", {} as never);
+		const text = (result.content[0] as { text: string }).text;
+		assert.match(
+			text,
+			/^Topics with no unused released question: t_limits · 1\.1 Introducing Calculus; t_deriv · 2\.1 Definition of the Derivative$/m,
+		);
+		assert.match(
+			text,
+			/^2023-1 · unused · a→1\.1 Introducing Calculus · PAPER MISSING on this computer$/m,
+			"the released question still appears in its own block, marked missing",
 		);
 	});
 

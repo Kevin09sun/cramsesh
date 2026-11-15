@@ -44,7 +44,12 @@ import {
 	scoreAttempt,
 } from "../../core/ap-frq.ts";
 import { apQuestionTitle } from "../../core/ap-frq.ts";
-import type { ApQuestionIndex, ApRealAttempt, ApRealQuestion } from "../../core/ap-frq.ts";
+import type {
+	ApEligibleQuestion,
+	ApQuestionIndex,
+	ApRealAttempt,
+	ApRealQuestion,
+} from "../../core/ap-frq.ts";
 import { parseApFrqGenInput } from "../../core/tool-parts.ts";
 import type { LhMessage } from "../../core/native-messages.ts";
 import type { SearchProvider } from "../../core/search.ts";
@@ -756,15 +761,12 @@ function apProgressTool(ctx: ApToolContext): AgentTool<typeof emptyInputObject> 
 
 					// The topics the tutor must write its own question for: no
 					// unused released question covers them. A question answered in
-					// this chat counts as used, exactly as ap_frq treats it.
+					// this chat counts as used, exactly as ap_frq treats it, and so
+					// does one whose paper is missing on this computer.
 					const uncovered: string[] = [];
 					for (const entry of queueEntries) {
-						const covered = eligible.some(
-							(candidate) =>
-								!candidate.used &&
-								ctx.answeredFrqCount(candidate.question.id) === 0 &&
-								candidate.topicIds.includes(entry.pointId),
-						);
+						const covered =
+							unusedReleasedCovering(ctx, course, eligible, entry.pointId) !== undefined;
 						if (covered) continue;
 						uncovered.push(`${entry.pointId} · ${byTopic.get(entry.pointId)?.text ?? ""}`);
 						if (uncovered.length === 20) break;
@@ -952,6 +954,29 @@ function apFrqTool(ctx: ApToolContext): AgentTool<typeof apFrqInputObject> {
 	};
 }
 
+// ─── the released-question availability rule ────────────────────────────────
+
+/** The released question still standing in for a topic, or undefined: it is
+ *  unused, not already answered in this chat, its paper is on THIS computer
+ *  (ap_frq refuses a missing paper, so a synced index on a computer without
+ *  the PDFs must not block the written question), and it covers the topic.
+ *  Shared by ap_frq_gen's released-first refusal and ap_progress's "no unused
+ *  released question" line so the two can never disagree. */
+function unusedReleasedCovering(
+	ctx: ApToolContext,
+	course: ApCourseRecord,
+	eligible: readonly ApEligibleQuestion[],
+	topicId: string,
+): ApEligibleQuestion | undefined {
+	return eligible.find(
+		(entry) =>
+			!entry.used &&
+			ctx.answeredFrqCount(entry.question.id) === 0 &&
+			ctx.papers.present(ctx.courseId, documentFile(course, entry.question.paperId)) &&
+			entry.topicIds.includes(topicId),
+	);
+}
+
 // ─── ap_frq_gen ─────────────────────────────────────────────────────────────
 
 function apFrqGenTool(
@@ -1020,7 +1045,8 @@ function apFrqGenTool(
 			// question covering a part's topic wins. A topic missed in THIS
 			// sitting is the retry the written question exists for. A released
 			// question answered in this chat counts as used, exactly as ap_frq
-			// treats it.
+			// treats it, and so does one whose paper is missing on this computer
+			// (ap_frq could not pose it).
 			const index = ctx.index.get(ctx.courseId);
 			const eligible = eligibleRealQuestions(
 				confirmedCourse,
@@ -1034,12 +1060,7 @@ function apFrqGenTool(
 				const missedThisSitting =
 					topic.status === "gap" && topic.history.at(-1)?.chatId === ctx.chatId;
 				if (missedThisSitting) continue;
-				const covering = eligible.find(
-					(entry) =>
-						!entry.used &&
-						ctx.answeredFrqCount(entry.question.id) === 0 &&
-						entry.topicIds.includes(part.topicId),
-				);
+				const covering = unusedReleasedCovering(ctx, confirmedCourse, eligible, part.topicId);
 				if (covering) {
 					return invalidInputResult("ap_frq_gen", [
 						`a released question covers ${topic.text}: ask ${covering.question.id} with ap_frq first`,
@@ -1537,9 +1558,9 @@ function apRecordGenTool(ctx: ApToolContext): AgentTool<typeof apRecordGenInputO
 		prepareArguments: (args: unknown) => healEncodedArguments(args, apRecordGenInputObject) as never,
 		executionMode: "sequential",
 		execute: async (_toolCallId, input) => {
-			// The newest ANSWERED generated question is the one on screen and
-			// therefore the one being graded; poses still waiting for an answer
-			// are ignored.
+			// The newest ANSWERED generated question is the one being graded;
+			// it need not be the one on screen, and poses still waiting for an
+			// answer are ignored.
 			const generated = ctx.generatedFrqs.filter((entry) => entry.answered).at(-1);
 			if (!generated) {
 				return invalidInputResult("ap_record_gen", [
