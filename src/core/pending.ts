@@ -201,6 +201,9 @@ const ACTIVITY_LABELS: Record<string, string> = {
 	ap_rubric: "Reading the scoring guideline…",
 	ap_view_photo: "Looking at your photo…",
 	ap_record_frq: "Recording the score…",
+	// AP prep stage 3 (2026-11-15): a generated question's grading loop.
+	ap_view_figure: "Checking the figure…",
+	ap_record_gen: "Recording the score…",
 };
 
 /** The activity label for ONE running tool (owner, streaming round

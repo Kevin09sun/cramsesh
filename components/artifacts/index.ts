@@ -88,4 +88,10 @@ export const artifactRenderers: Record<string, ComponentType<ArtifactPartProps>>
 	// input or output (the rubric and the learner's photo never reach the
 	// transcript).
 	ap_record_frq: FrqScoreCard,
+	// AP prep stage 3 (2026-11-15): a generated question is graded by the same
+	// card, which renders from ap_record_gen's result details only. ap_frq_gen
+	// renders through the question dock; ap_view_figure stays UNREGISTERED on
+	// purpose, so neither prints its raw input or output (the committed rubric
+	// points and the viewed figure never reach the transcript).
+	ap_record_gen: FrqScoreCard,
 };

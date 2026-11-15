@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { ConfidenceRail } from "@/components/confidence-rail";
 import { photoName } from "@/components/ap/photo-name";
+import { QuestionFigure } from "@/components/ap/question-figure";
 import { QuestionPages } from "@/components/ap/question-pages";
 import { GlyphMark } from "@/components/ui/glyph-mark";
 import { ThinkingBlock } from "@/components/thinking-block";
@@ -10,7 +11,16 @@ import { PathText } from "@/components/file-path-chip";
 import { cn } from "@/lib/utils";
 import { ToolContentResponse } from "@/components/ai-elements/message";
 import type { QuestionAnswerData } from "@/src/core";
-import { answerForPresentation, parseApFrqInput, parseApMcqInput, parseAskInput, parseExplainInput, parseQuizInput } from "@/src/core";
+import {
+	answerForPresentation,
+	apFrqGenDisplay,
+	parseApFrqGenInput,
+	parseApFrqInput,
+	parseApMcqInput,
+	parseAskInput,
+	parseExplainInput,
+	parseQuizInput,
+} from "@/src/core";
 
 /**
  * Static rendering of an answered question (tool part in `output-available`).
@@ -26,12 +36,15 @@ export function AnsweredCard({
 	answer: savedAnswer,
 	input,
 	apCourseId,
+	chatId,
 }: {
 	answer: QuestionAnswerData;
 	input?: unknown;
 	/** The AP course the released question belongs to (ap_frq only): the
 	 *  "Show question" page images load through its route. */
 	apCourseId?: string;
+	/** The chat whose figure route serves an ap_mcq's drawing (stage 3). */
+	chatId?: string;
 }) {
 	const answer = answerForPresentation(savedAnswer, input);
 	const [whyOpen, setWhyOpen] = useState(false); // the tucked explanation (predictions, owner 2026-10-03)
@@ -42,9 +55,16 @@ export function AnsweredCard({
 			</div>
 		);
 	}
-	// AP's released free-response answer is a record of parts and photos —
+	// AP's answered free-response record is a record of parts and photos —
 	// never a verdict (the tutor's score card is the only verdict surface).
-	if (answer.kind === "frq") return <FrqAnsweredCard answer={answer} input={input} apCourseId={apCourseId} />;
+	// A generated question replays its projected fields (stage 3) from the
+	// call input; a released one keeps its paper pages.
+	if (answer.kind === "frq")
+		return answer.tool === "ap_frq_gen" ? (
+			<FrqGenAnsweredCard answer={answer} input={input} chatId={chatId} />
+		) : (
+			<FrqAnsweredCard answer={answer} input={input} apCourseId={apCourseId} />
+		);
 
 	const isQuiz = answer.kind === "quiz";
 	// AP multiple choice is quiz-shaped, but the verdict is the tutor's
@@ -121,6 +141,12 @@ export function AnsweredCard({
 						<span className="rounded bg-red-500/15 px-1.5 py-0.5 text-red-500">incorrect</span>
 					))}
 			</div>
+			{/* AP multiple choice may carry a drawn figure (stage 3): it sits
+			    above the question, exactly as in the live dock. No figure = the
+			    card is unchanged. */}
+			{apMcqInput?.figure !== undefined && chatId !== undefined && (
+				<QuestionFigure chatId={chatId} figure={apMcqInput.figure} className="mb-3" />
+			)}
 			<div className="mb-3 font-medium">
 				<ToolContentResponse>{answer.questionText}</ToolContentResponse>
 			</div>
@@ -337,6 +363,83 @@ function FrqAnsweredCard({
 						<div className="lh-prose whitespace-pre-wrap">
 							{part.text.trim() ? (
 								<PathText text={part.text} />
+							) : (
+								<span className="text-muted-foreground">—</span>
+							)}
+						</div>
+					</div>
+				))}
+			</div>
+			{(answer.photos ?? []).length > 0 && (
+				<div className="mt-2 flex flex-col gap-1 text-sm text-muted-foreground">
+					{answer.photos!.map((path) => (
+						<div key={path} className="truncate">
+							Photo attached: {photoName(path)}
+						</div>
+					))}
+				</div>
+			)}
+			{answer.dontKnow && <div className="mt-2 text-sm text-muted-foreground">Answered “I don't know”.</div>}
+		</div>
+	);
+}
+
+/**
+ * AP's answered generated free-response record (stage 3, 2026-11-15): the
+ * same shape of record as a released question's, but everything the tutor
+ * wrote comes from `apFrqGenDisplay` of the call input — never the raw
+ * input, which carries committed answers and rubric points. The learner's
+ * words come from the stored answer. No verdict of any kind: the tutor's
+ * score card is the only place a result is shown.
+ */
+function FrqGenAnsweredCard({
+	answer,
+	input,
+	chatId,
+}: {
+	answer: QuestionAnswerData;
+	input?: unknown;
+	chatId?: string;
+}) {
+	const parsed = parseApFrqGenInput(input);
+	const question = parsed === undefined ? undefined : apFrqGenDisplay(parsed);
+	const texts = new Map((answer.parts ?? []).map((part) => [part.label, part.text]));
+	// A failed parse still records the learner's parts, labelled but without
+	// prompts — never a raw-input field. The display order is the question's.
+	const parts: { label: string; prompt?: string }[] =
+		question?.parts ?? (answer.parts ?? []).map((part) => ({ label: part.label }));
+
+	return (
+		<div
+			className="rounded-xl border bg-card p-4 text-card-foreground [&>*:last-child]:mb-0"
+			data-testid="answered-card"
+		>
+			<div className="mb-1 flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+				AP · generated
+			</div>
+			<div className="mb-3 font-medium">
+				<ToolContentResponse>{question?.title ?? answer.questionText}</ToolContentResponse>
+			</div>
+			{question?.figure !== undefined && chatId !== undefined && (
+				<QuestionFigure chatId={chatId} figure={question.figure} className="mb-3" />
+			)}
+			{question !== undefined && (
+				<div className="mb-3">
+					<ToolContentResponse>{question.stem}</ToolContentResponse>
+				</div>
+			)}
+			<div className="flex flex-col gap-2 text-sm">
+				{parts.map((part) => (
+					<div key={part.label} className="rounded-lg border px-3 py-2">
+						<div className="mb-1 font-medium">({part.label})</div>
+						{part.prompt !== undefined && (
+							<div className="mb-1 text-sm text-muted-foreground">
+								<ToolContentResponse>{part.prompt}</ToolContentResponse>
+							</div>
+						)}
+						<div className="lh-prose whitespace-pre-wrap">
+							{(texts.get(part.label) ?? "").trim() ? (
+								<PathText text={texts.get(part.label) ?? ""} />
 							) : (
 								<span className="text-muted-foreground">—</span>
 							)}

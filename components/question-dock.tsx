@@ -7,7 +7,8 @@ import { finishDictation, isDictationActive, joinDictation, useDictationTarget }
 import { useEnterSubmits } from "@/components/enter-submits";
 import { PathInput } from "@/components/path-input";
 import { MalformedQuestion } from "@/components/malformed-question";
-import { FrqQuestion } from "@/components/ap/frq-question";
+import { FrqGenQuestionForm, FrqQuestion } from "@/components/ap/frq-question";
+import { QuestionFigure } from "@/components/ap/question-figure";
 import { ToolContentResponse } from "@/components/ai-elements/message";
 import { cn } from "@/lib/utils";
 import {
@@ -22,6 +23,8 @@ import {
 	seededRandom,
 	shuffleOptions,
 	toolQuestionKind,
+	apFrqGenDisplay,
+	parseApFrqGenInput,
 	parseApFrqInput,
 	parseApMcqInput,
 	parseAskInput,
@@ -30,6 +33,7 @@ import {
 	toggleOption,
 	toggleOther,
 	type AnswerRequest,
+	type ApFrqGenToolInput,
 	type ApFrqToolInput,
 	type ApMcqToolInput,
 	type AskToolInput,
@@ -66,12 +70,15 @@ import { CONFIDENCE_COLORS, confidenceRailStyle } from "@/components/confidence-
  */
 
 export interface QuestionDockProps {
-	toolName: "quiz" | "probe" | "ask_user_question" | "explain" | "recall" | "check_point" | "ap_mcq" | "ap_frq";
+	toolName: "quiz" | "probe" | "ask_user_question" | "explain" | "recall" | "check_point" | "ap_mcq" | "ap_frq" | "ap_frq_gen";
 	toolCallId: string;
-	input: QuizToolInput | AskToolInput | ExplainToolInput | ApMcqToolInput | ApFrqToolInput;
+	input: QuizToolInput | AskToolInput | ExplainToolInput | ApMcqToolInput | ApFrqToolInput | ApFrqGenToolInput;
 	/** The AP course the question belongs to (ap_frq only): the form fetches
 	 *  the released question and its page images through the course's route. */
 	apCourseId?: string;
+	/** The chat the question belongs to (ap_mcq / ap_frq_gen figures):
+	 *  a figure is served through its own chat's route. */
+	chatId?: string;
 	/** Collapse state, owned by the DockOverlay (it drives the shell's height morph). */
 	expanded: boolean;
 	/**
@@ -112,6 +119,7 @@ export function QuestionDock({
 	toolCallId,
 	input,
 	apCourseId,
+	chatId,
 	expanded,
 	reveal = false,
 	onExpand,
@@ -136,7 +144,7 @@ export function QuestionDock({
 			? "quiz"
 			: toolName === "recall" || toolName === "check_point"
 				? "explain"
-				: toolName === "ap_frq"
+				: toolName === "ap_frq" || toolName === "ap_frq_gen"
 					? "ask_user_question"
 					: toolName;
 	// The chip's display name carries the tool's OWN name (owner
@@ -154,7 +162,9 @@ export function QuestionDock({
 						? "AP · generated"
 						: toolName === "ap_frq"
 							? "AP · released"
-							: undefined;
+							: toolName === "ap_frq_gen"
+								? "AP · generated"
+								: undefined;
 	// Parse, don't cast (src/core/tool-parts.ts): the model authored this
 	// input, and only the schema the tool declared vouches for its shape.
 	// The dock mounts on input-available parts (already validated at the
@@ -166,7 +176,9 @@ export function QuestionDock({
 			? parseApMcqInput(input)
 			: toolName === "ap_frq"
 				? parseApFrqInput(input)
-				: canonical === "quiz"
+				: toolName === "ap_frq_gen"
+					? parseApFrqGenInput(input)
+					: canonical === "quiz"
 					? parseQuizInput(input)
 					: canonical === "explain"
 						? parseExplainInput(input)
@@ -180,7 +192,7 @@ export function QuestionDock({
 				<QuestionDockBar
 					toolName={canonical}
 					question={
-						toolName === "ap_frq"
+						toolName === "ap_frq" || toolName === "ap_frq_gen"
 							? "Free-response question"
 							: "question" in parsed
 								? parsed.question
@@ -214,11 +226,27 @@ export function QuestionDock({
 						dictationClaim={dictationClaim}
 						compactionRunning={compactionRunning}
 					/>
+				) : toolName === "ap_frq_gen" ? (
+					// A generated question needs no fetch: the call carries the
+					// visible projection, and the dock must never print the raw
+					// input (it holds the committed answers and rubric points).
+					<FrqGenQuestionForm
+						toolCallId={toolCallId}
+						chatId={chatId}
+						question={apFrqGenDisplay(parsed as ApFrqGenToolInput)}
+						onSubmit={onSubmit}
+						initialDraft={initialDraft}
+						onSaveDraft={onSaveDraft}
+						onEscape={onEscape}
+						dictationClaim={dictationClaim}
+						compactionRunning={compactionRunning}
+					/>
 				) : (
 					<QuestionDockForm
 						toolName={toolName}
 						toolCallId={toolCallId}
 						input={parsed}
+						chatId={chatId}
 						phase={phase}
 						active={expanded}
 						onSubmit={onSubmit}
@@ -317,6 +345,7 @@ function QuestionDockForm({
 	toolName,
 	toolCallId,
 	input,
+	chatId,
 	phase = "probe",
 	active,
 	onSubmit,
@@ -331,6 +360,9 @@ function QuestionDockForm({
 	// tutor's (stage 1 global constraint): no confidence slider, and no
 	// confidence is sent on its answer. Every other quiz keeps both.
 	const showsConfidence = kind === "quiz" && toolName !== "ap_mcq";
+	// AP multiple choice may carry a drawn figure (stage 3): it sits above the
+	// question. No figure = no change to the form at all.
+	const apFigure = toolName === "ap_mcq" ? (input as ApMcqToolInput).figure : undefined;
 
 	// Canonical QuestionData, built once per question. Quiz options are
 	// deterministically shuffled (seeded by toolCallId) so position never leaks
@@ -648,6 +680,9 @@ function QuestionDockForm({
 											: "Question"}
 					{qd.mode === "multi-select" && " · select all that apply"}
 				</div>
+				{apFigure !== undefined && chatId !== undefined && (
+					<QuestionFigure chatId={chatId} figure={apFigure} className="mb-3" />
+				)}
 				<div className="mb-3 font-medium">
 					<ToolContentResponse>{qd.question}</ToolContentResponse>
 				</div>
