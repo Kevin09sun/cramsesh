@@ -84,9 +84,11 @@ function resvgClass(): ResvgModule["Resvg"] | null {
 }
 
 /** The options the native render path in src/agent/subagents/headless.ts
- *  uses, minus fitTo. Constructing Resvg builds the document tree; it does
- *  not allocate the raster. */
-const SIZE_PARSE_OPTIONS: ResvgRenderOptions = { font: { loadSystemFonts: true }, background: "#ffffff" };
+ *  uses, minus fitTo and the system fonts: fonts do not change the document
+ *  size, so the size parse skips loading them (the render still loads them).
+ *  Constructing Resvg builds the document tree; it does not allocate the
+ *  raster. */
+const SIZE_PARSE_OPTIONS: ResvgRenderOptions = { font: { loadSystemFonts: false }, background: "#ffffff" };
 
 /** The size resvg will render this document from, or null when it cannot
  *  parse the drawing or the resulting canvas would be too large. Asking the
