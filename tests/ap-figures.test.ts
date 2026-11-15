@@ -68,6 +68,17 @@ const TINY_SVG =
 	'<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10" fill="#000"/></svg>';
 const NS = 'xmlns="http://www.w3.org/2000/svg"';
 const MAX_SVG_BYTES = 512 * 1024;
+/** Mismatched tags: no repair makes this a document. */
+const UNPARSEABLE_SVG = `<svg ${NS}><rect></svg>`;
+/** resvg reads this as 1x6 (its size getters round), yet a 1200 px wide
+ *  render of it would be 15360 px tall. */
+const SUB_2PX_SVG = `<svg ${NS} width="0.5" height="6.4"><rect/></svg>`;
+/** Drawings the drawing job accepts and Teach displays after its two display
+ *  repairs (svgImageSource): a missing root namespace and an `&nbsp;`. */
+const NO_NAMESPACE_SVG = '<svg width="320" height="160"><rect width="10" height="10"/></svg>';
+const NO_NAMESPACE_REPAIRED = `<svg ${NS} width="320" height="160"><rect width="10" height="10"/></svg>`;
+const NBSP_SVG = `<svg ${NS} width="320" height="160"><text x="10" y="20">A&nbsp;B</text></svg>`;
+const NBSP_REPAIRED = `<svg ${NS} width="320" height="160"><text x="10" y="20">A&#160;B</text></svg>`;
 
 let nextToolCall = 0;
 
@@ -108,6 +119,26 @@ describe("the default figure rasteriser", () => {
 		assert.deepEqual(png.subarray(0, PNG_SIGNATURE.length), PNG_SIGNATURE, "the bytes are a PNG");
 		// PNG IHDR: width is the 4-byte big-endian integer at offset 16.
 		assert.equal(png.readUInt32BE(16), 1200, "the PNG is 1200 px wide");
+	});
+
+	it("renders the drawings Teach repairs: no root namespace, or an &nbsp;", async (t) => {
+		if (!nativeRenderer) {
+			t.skip(NO_RESVG);
+			return;
+		}
+		resetFigureRasteriser();
+		const chatId = makeChat("AP figure native repairs");
+		for (const [label, svg] of [["no root namespace", NO_NAMESPACE_SVG], ["an &nbsp;", NBSP_SVG]] as const) {
+			const job = makeJob(chatId);
+			jobStore.updateJob(job.id, { status: "done", result: { svg } });
+			assert.equal(figureState(chatId, job.id), "ready", label);
+
+			const png = await figurePng(chatId, job.id);
+			assert.deepEqual(png.subarray(0, PNG_SIGNATURE.length), PNG_SIGNATURE, `${label}: the bytes are a PNG`);
+			assert.equal(png.readUInt32BE(16), 1200, `${label}: the PNG is 1200 px wide`);
+			// PNG IHDR: height follows the width; 320x160 keeps its 2:1 aspect.
+			assert.equal(png.readUInt32BE(20), 600, `${label}: the PNG keeps the drawing's aspect`);
+		}
 	});
 });
 
@@ -174,7 +205,9 @@ describe("figureState", { skip: skipWithoutResvg }, () => {
 				"percentage sizes that resolve to a tall canvas",
 				`<svg ${NS} width="10%" height="100%" viewBox="0 0 10 10"><rect/></svg>`,
 			],
-			["a document the renderer cannot parse", "<svg><rect/></svg>"],
+			["a document the renderer cannot parse", UNPARSEABLE_SVG],
+			["a document under 2 px wide", SUB_2PX_SVG],
+			["a document under 2 px tall", `<svg ${NS} width="100" height="1.4"><rect/></svg>`],
 		];
 		for (const [label, svg] of cases) {
 			const job = makeJob(chatId);
@@ -237,6 +270,27 @@ describe("figurePng", { skip: skipWithoutResvg }, () => {
 		assert.deepEqual(seen, [TINY_SVG], "the rasteriser receives the stored SVG");
 	});
 
+	it("rasterises the drawings Teach repairs, passing the repaired SVG", async () => {
+		const chatId = makeChat("AP figure repaired png");
+		for (const [label, svg, repaired] of [
+			["no root namespace", NO_NAMESPACE_SVG, NO_NAMESPACE_REPAIRED],
+			["an &nbsp;", NBSP_SVG, NBSP_REPAIRED],
+		] as const) {
+			const job = makeJob(chatId);
+			jobStore.updateJob(job.id, { status: "done", result: { svg } });
+			assert.equal(figureState(chatId, job.id), "ready", label);
+
+			const seen: string[] = [];
+			setFigureRasteriser(async (value) => {
+				seen.push(value);
+				return PNG;
+			});
+			assert.deepEqual(await figurePng(chatId, job.id), PNG, label);
+			assert.deepEqual(seen, [repaired], `${label}: the rasteriser receives the repaired SVG`);
+			assert.equal((jobStore.getJob(job.id)?.result as { svg?: string } | undefined)?.svg, svg, `${label}: the stored SVG is not rewritten`);
+		}
+	});
+
 	it("rasterises a figure exactly at the rendered-height bound", async () => {
 		const chatId = makeChat("AP figure bound png");
 		const svg = `<svg ${NS} width="1200" height="8000"><rect/></svg>`;
@@ -262,7 +316,9 @@ describe("figurePng", { skip: skipWithoutResvg }, () => {
 		const oversize = makeJob(chatId);
 		jobStore.updateJob(oversize.id, { status: "done", result: { svg: "x".repeat(MAX_SVG_BYTES + 1) } });
 		const unreadable = makeJob(chatId);
-		jobStore.updateJob(unreadable.id, { status: "done", result: { svg: "<svg><rect/></svg>" } });
+		jobStore.updateJob(unreadable.id, { status: "done", result: { svg: UNPARSEABLE_SVG } });
+		const sub2px = makeJob(chatId);
+		jobStore.updateJob(sub2px.id, { status: "done", result: { svg: SUB_2PX_SVG } });
 		const tallThin = makeJob(chatId);
 		jobStore.updateJob(tallThin.id, { status: "done", result: { svg: `<svg ${NS} width="100" height="5000"><rect/></svg>` } });
 		const shadowed = makeJob(chatId);
@@ -317,6 +373,7 @@ describe("figurePng", { skip: skipWithoutResvg }, () => {
 			failed.id,
 			oversize.id,
 			unreadable.id,
+			sub2px.id,
 			tallThin.id,
 			shadowed.id,
 			instruction.id,
@@ -400,6 +457,8 @@ describe("GET /api/chats/[id]/figures/[jobId]", { skip: skipWithoutResvg }, () =
 			status: "done",
 			result: { svg: `<svg ${NS} width="10%" height="100%" viewBox="0 0 10 10"><rect/></svg>` },
 		});
+		const sub2px = makeJob(chatId);
+		jobStore.updateJob(sub2px.id, { status: "done", result: { svg: SUB_2PX_SVG } });
 		const foreign = makeReadyJob(other);
 		const research = makeJob(chatId, "research");
 
@@ -412,6 +471,7 @@ describe("GET /api/chats/[id]/figures/[jobId]", { skip: skipWithoutResvg }, () =
 		for (const jobId of [
 			pending.id,
 			failed.id,
+			sub2px.id,
 			tallThin.id,
 			shadowed.id,
 			instruction.id,

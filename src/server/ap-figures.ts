@@ -13,10 +13,14 @@
  * native resvg path (`nativeOnly`): a stored figure never executes markup,
  * so no browser is involved and none is required. Figures are rendered 1200
  * px wide (the learner's screen is high-density) at the drawing's own aspect;
- * a rendered height above 8000 px is refused rather than allocated. The
- * drawing is sized by parsing it with resvg itself, so no text scan can
- * disagree with what the renderer will do. The rasteriser is a test seam;
- * tests inject fixed bytes and nothing paints a real SVG.
+ * a rendered height above 8000 px is refused rather than allocated, and so
+ * is a document under 2 px on a side. The drawing is sized by parsing it with
+ * resvg itself, so no text scan can disagree with what the renderer will do.
+ * Before sizing, the stored SVG gets the same two display repairs Teach
+ * applies (svgImageSource: a missing root namespace, `&nbsp;`), so every
+ * drawing Teach displays can be a figure; the record itself is never
+ * rewritten. The rasteriser is a test seam; tests inject fixed bytes and
+ * nothing paints a real SVG.
  */
 
 import { createRequire } from "node:module";
@@ -25,6 +29,7 @@ import type { ResvgRenderOptions } from "@resvg/resvg-js";
 
 import { getHeadless } from "../agent/subagents/headless.ts";
 import type { JobRecord, VisualResult } from "../core/contracts.ts";
+import { svgImageSource } from "../core/svg-image-source.ts";
 import { stores } from "./stores.ts";
 
 export type FigureState = "ready" | "pending" | "failed" | "unknown";
@@ -41,6 +46,11 @@ const FIGURE_WIDTH = 1200;
 /** The largest document side and the largest rendered height; anything
  *  bigger is refused rather than allocated. */
 const MAX_FIGURE_SIDE = 8000;
+
+/** The smallest document side. resvg's size getters round to whole pixels,
+ *  so a fraction-of-a-pixel side would make the rendered height (scaled to
+ *  FIGURE_WIDTH) far larger than the getters predict; such a side is refused. */
+const MIN_FIGURE_SIDE = 2;
 
 /** The drawing job owned by this chat, or null for anything else. */
 function figureJob(chatId: string, jobId: string): JobRecord | null {
@@ -96,7 +106,8 @@ function renderableSize(svg: string): FigureSize | null {
 		return null;
 	}
 
-	if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return null;
+	if (!Number.isFinite(width) || !Number.isFinite(height)) return null;
+	if (width < MIN_FIGURE_SIDE || height < MIN_FIGURE_SIDE) return null;
 	if (width > MAX_FIGURE_SIDE || height > MAX_FIGURE_SIDE) return null;
 	// The renderer scales to FIGURE_WIDTH and keeps the aspect, so this is
 	// the height it would allocate.
@@ -105,14 +116,34 @@ function renderableSize(svg: string): FigureSize | null {
 	return { width, height };
 }
 
+/** The last size check, keyed by job id and the SVG text it parsed: one
+ *  figure request (the route's state check, then the render) parses the
+ *  drawing once. A changed record is a different key and is parsed again. */
+let lastSizeCheck: { jobId: string; svg: string; size: FigureSize | null } | null = null;
+
+function figureSize(jobId: string, svg: string): FigureSize | null {
+	if (lastSizeCheck && lastSizeCheck.jobId === jobId && lastSizeCheck.svg === svg) return lastSizeCheck.size;
+	const size = renderableSize(svg);
+	lastSizeCheck = { jobId, svg, size };
+	return size;
+}
+
+/** The repaired SVG of a finished drawing that can be rendered, or null.
+ *  The 512 KB cap applies to the stored text, before any parse; the repaired
+ *  text is what is both sized and rendered. */
+function readyFigureSvg(job: JobRecord): string | null {
+	const result = job.result as Partial<VisualResult> | undefined;
+	const stored = result?.svg;
+	if (job.status !== "done" || typeof stored !== "string" || stored.length === 0) return null;
+	if (Buffer.byteLength(stored, "utf8") > MAX_FIGURE_SVG_BYTES) return null;
+	const svg = svgImageSource(stored);
+	return figureSize(job.id, svg) ? svg : null;
+}
+
 /** The state of a job this module already knows belongs to the chat. */
 function stateOf(job: JobRecord): FigureState {
 	if (job.status === "running") return "pending";
-	const result = job.result as Partial<VisualResult> | undefined;
-	const svg = result?.svg;
-	if (job.status !== "done" || typeof svg !== "string" || svg.length === 0) return "failed";
-	if (Buffer.byteLength(svg, "utf8") > MAX_FIGURE_SVG_BYTES) return "failed";
-	return renderableSize(svg) ? "ready" : "failed";
+	return readyFigureSvg(job) ? "ready" : "failed";
 }
 
 /** A drawing job of this chat, by job id. "unknown" covers another chat's
@@ -142,14 +173,13 @@ export function resetFigureRasteriser(): void {
 	figureRasteriser = rasteriseWithHeadless;
 }
 
-/** PNG of a ready figure, rasterised from its stored SVG. Throws
- *  "figure not ready" otherwise. */
+/** PNG of a ready figure, rasterised from its stored SVG with Teach's display
+ *  repairs. Throws "figure not ready" otherwise. */
 export async function figurePng(chatId: string, jobId: string): Promise<Buffer> {
 	const job = figureJob(chatId, jobId);
-	if (!job || stateOf(job) !== "ready") throw new Error("figure not ready");
-	const svg = (job.result as VisualResult).svg;
-	// Re-check the rendered-size bound at the last moment before the
-	// renderer, so nothing oversized reaches it.
-	if (!renderableSize(svg)) throw new Error("figure not ready");
+	// The text that passed the size check is the text rendered, so nothing
+	// oversized reaches the renderer.
+	const svg = job ? readyFigureSvg(job) : null;
+	if (!svg) throw new Error("figure not ready");
 	return figureRasteriser(svg);
 }

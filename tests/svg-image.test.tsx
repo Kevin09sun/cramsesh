@@ -7,7 +7,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { createRoot } from "react-dom/client";
 import { parseHTML } from "linkedom";
 import { VisualOutputCard } from "../components/artifacts/visual-card.tsx";
-import { svgImageSource } from "../components/artifacts/svg-image.tsx";
+import { svgImageSource } from "../src/core/svg-image-source.ts";
+import { svgImageSource as barrelSvgImageSource } from "../src/core/index.ts";
 import { MermaidOverlay, SessionMermaidContext } from "../components/session-overlay.tsx";
 
 // Structure-only checks: linkedom does not load images or implement CSS cascade.
@@ -31,6 +32,10 @@ function assertImageBoundary(holder: Element, source: string) {
 }
 
 describe("SVG display compatibility", () => {
+	it("is the one shared repair, reachable through the core barrel", () => {
+		assert.equal(barrelSvgImageSource, svgImageSource);
+	});
+
 	it("leaves standalone SVG unchanged, including comments and CDATA", () => {
 		const source = FIGURE.replace("</svg>", '<!-- &nbsp; <svg> --><![CDATA[&nbsp; <svg>]]></svg>');
 		assert.equal(svgImageSource(source), source);
