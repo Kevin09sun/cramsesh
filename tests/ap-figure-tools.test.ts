@@ -171,6 +171,7 @@ function ctxOf(
 		attempts: { record: (courseId) => courses.get(courseId)! },
 		answeredFrq: () => "none",
 		answeredFrqCount: () => 0,
+		skippedFrq: () => false,
 		generatedFrqs: [],
 		figures,
 		viewedFigures: options.viewed ?? new Set<string>(),

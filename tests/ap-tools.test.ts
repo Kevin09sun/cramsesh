@@ -205,6 +205,7 @@ function ctxOf(
 		attempts: { record: (courseId) => courses.get(courseId)! },
 		answeredFrq: () => "none",
 		answeredFrqCount: () => 0,
+		skippedFrq: () => false,
 		// Stage 3 seam: no generated questions in this suite.
 		generatedFrqs: [],
 		// Stage 3 seams: no drawing states and nothing looked at yet. The

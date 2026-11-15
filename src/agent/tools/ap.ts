@@ -146,6 +146,10 @@ export interface ApToolContext {
 	 *  (answeredFrqCountFrom). ap_record_frq compares it with the course's
 	 *  recorded attempts so one answer is graded exactly once. */
 	answeredFrqCount: (questionId: string) => number;
+	/** Whether the learner skipped a pose of this question in this chat
+	 *  (skippedFrqFrom). A skipped released question no longer blocks its
+	 *  topic in the released-question availability rule. */
+	skippedFrq: (questionId: string) => boolean;
 	/** Every ap_frq_gen pose in this chat, oldest first (generatedFrqsFrom).
 	 *  ap_record_gen grades the newest answered one. */
 	generatedFrqs: { toolCallId: string; input: ApFrqGenToolInput; answered: boolean }[];
@@ -345,6 +349,17 @@ export function answeredFrqCountFrom(messages: readonly LhMessage[], questionId:
 		const result = frqResult(messages, call.toolCallId);
 		return result !== null && !result.isError && realFrqAnswer(result.details);
 	}).length;
+}
+
+/** Whether any ap_frq pose of this question in this chat was skipped: its
+ *  result is not an error and carries the dismissal record. A later re-pose
+ *  does not undo an earlier skip. */
+export function skippedFrqFrom(messages: readonly LhMessage[], questionId: string): boolean {
+	return frqCalls(messages, "ap_frq").some((call) => {
+		if (call.questionId !== questionId) return false;
+		const result = frqResult(messages, call.toolCallId);
+		return result !== null && !result.isError && isDismissed(result.details);
+	});
 }
 
 /** "answered" | "pending" | "none" for one released question, from the chat
@@ -742,16 +757,16 @@ function apProgressTool(ctx: ApToolContext): AgentTool<typeof emptyInputObject> 
 						ctx.chatId,
 						course.realAttempts ?? [],
 					);
+					const paperPresent = paperPresence(ctx, course);
 					if (eligible.length === 0) {
 						lines.push("", "Real questions: none for this scope");
 					} else {
 						const listed = eligible.slice(0, 20).map((entry) => {
-							const file = documentFile(course, entry.question.paperId);
 							const parts = entry.question.parts.map((part) => {
 								const topic = part.topicId === undefined ? undefined : byTopic.get(part.topicId);
 								return `${part.label}→${topic?.text ?? "none"}`;
 							});
-							const missing = ctx.papers.present(ctx.courseId, file)
+							const missing = paperPresent(entry.question.paperId)
 								? ""
 								: " · PAPER MISSING on this computer";
 							return `${entry.question.id} · ${entry.used ? "used" : "unused"} · ${parts.join("; ")}${missing}`;
@@ -762,11 +777,12 @@ function apProgressTool(ctx: ApToolContext): AgentTool<typeof emptyInputObject> 
 					// The topics the tutor must write its own question for: no
 					// unused released question covers them. A question answered in
 					// this chat counts as used, exactly as ap_frq treats it, and so
-					// does one whose paper is missing on this computer.
+					// do one skipped in this chat and one whose paper is missing on
+					// this computer.
 					const uncovered: string[] = [];
 					for (const entry of queueEntries) {
 						const covered =
-							unusedReleasedCovering(ctx, course, eligible, entry.pointId) !== undefined;
+							unusedReleasedCovering(ctx, paperPresent, eligible, entry.pointId) !== undefined;
 						if (covered) continue;
 						uncovered.push(`${entry.pointId} · ${byTopic.get(entry.pointId)?.text ?? ""}`);
 						if (uncovered.length === 20) break;
@@ -956,24 +972,41 @@ function apFrqTool(ctx: ApToolContext): AgentTool<typeof apFrqInputObject> {
 
 // ─── the released-question availability rule ────────────────────────────────
 
+/** Whether a question's paper is on THIS computer, checked once per paper:
+ *  one call's checks share the answer instead of re-reading the folder. */
+function paperPresence(ctx: ApToolContext, course: ApCourseRecord): (paperId: string) => boolean {
+	const known = new Map<string, boolean>();
+	return (paperId) => {
+		let present = known.get(paperId);
+		if (present === undefined) {
+			present = ctx.papers.present(ctx.courseId, documentFile(course, paperId));
+			known.set(paperId, present);
+		}
+		return present;
+	};
+}
+
 /** The released question still standing in for a topic, or undefined: it is
- *  unused, not already answered in this chat, its paper is on THIS computer
- *  (ap_frq refuses a missing paper, so a synced index on a computer without
- *  the PDFs must not block the written question), and it covers the topic.
- *  Shared by ap_frq_gen's released-first refusal and ap_progress's "no unused
- *  released question" line so the two can never disagree. */
+ *  unused, covers the topic, was neither answered nor skipped in this chat
+ *  (owner decision 2026-11-15: a skip no longer blocks the topic), and its
+ *  paper is on THIS computer (ap_frq refuses a missing paper, so a synced
+ *  index on a computer without the PDFs must not block the written
+ *  question). The cheap checks run first. Shared by ap_frq_gen's
+ *  released-first refusal and ap_progress's "no unused released question"
+ *  line so the two can never disagree. */
 function unusedReleasedCovering(
 	ctx: ApToolContext,
-	course: ApCourseRecord,
+	paperPresent: (paperId: string) => boolean,
 	eligible: readonly ApEligibleQuestion[],
 	topicId: string,
 ): ApEligibleQuestion | undefined {
 	return eligible.find(
 		(entry) =>
 			!entry.used &&
+			entry.topicIds.includes(topicId) &&
 			ctx.answeredFrqCount(entry.question.id) === 0 &&
-			ctx.papers.present(ctx.courseId, documentFile(course, entry.question.paperId)) &&
-			entry.topicIds.includes(topicId),
+			!ctx.skippedFrq(entry.question.id) &&
+			paperPresent(entry.question.paperId),
 	);
 }
 
@@ -1045,7 +1078,8 @@ function apFrqGenTool(
 			// question covering a part's topic wins. A topic missed in THIS
 			// sitting is the retry the written question exists for. A released
 			// question answered in this chat counts as used, exactly as ap_frq
-			// treats it, and so does one whose paper is missing on this computer
+			// treats it, and so do one skipped in this chat (owner decision
+			// 2026-11-15) and one whose paper is missing on this computer
 			// (ap_frq could not pose it).
 			const index = ctx.index.get(ctx.courseId);
 			const eligible = eligibleRealQuestions(
@@ -1055,12 +1089,13 @@ function apFrqGenTool(
 				ctx.chatId,
 				confirmedCourse.realAttempts ?? [],
 			);
+			const paperPresent = paperPresence(ctx, confirmedCourse);
 			for (const part of input.parts) {
 				const topic = locateTopic(confirmedCourse, part.topicId)!.topic;
 				const missedThisSitting =
 					topic.status === "gap" && topic.history.at(-1)?.chatId === ctx.chatId;
 				if (missedThisSitting) continue;
-				const covering = unusedReleasedCovering(ctx, confirmedCourse, eligible, part.topicId);
+				const covering = unusedReleasedCovering(ctx, paperPresent, eligible, part.topicId);
 				if (covering) {
 					return invalidInputResult("ap_frq_gen", [
 						`a released question covers ${topic.text}: ask ${covering.question.id} with ap_frq first`,

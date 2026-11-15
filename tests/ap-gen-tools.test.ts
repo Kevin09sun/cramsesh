@@ -241,6 +241,7 @@ interface HarnessOptions {
 	generated?: { toolCallId: string; input: ApFrqGenToolInput; answered: boolean }[];
 	answeredFrq?: (questionId: string) => "answered" | "pending" | "none";
 	answeredFrqCount?: (questionId: string) => number;
+	skippedFrq?: (questionId: string) => boolean;
 }
 
 function harness(options: HarnessOptions = {}) {
@@ -257,6 +258,7 @@ function harness(options: HarnessOptions = {}) {
 		attempts: stores.attempts,
 		answeredFrq: options.answeredFrq ?? (() => "none"),
 		answeredFrqCount: options.answeredFrqCount ?? (() => 0),
+		skippedFrq: options.skippedFrq ?? (() => false),
 		figures: scripted.figures,
 		viewedFigures: options.viewed ?? new Set<string>(),
 		generatedFrqs: options.generated ?? [],
@@ -560,6 +562,29 @@ describe("ap_frq_gen", () => {
 		});
 		const result = await h.tools.ap_frq_gen!.execute("call_g", genInput() as never);
 		assert.equal(result.isError, undefined);
+	});
+
+	it("treats a released question skipped in this chat as used", async () => {
+		const h = harness({
+			sitting: FRQ,
+			index: indexOf(releasedQuestion("2023-1", "t_limits")),
+			skippedFrq: (questionId) => questionId === "2023-1",
+		});
+		const result = await h.tools.ap_frq_gen!.execute("call_g", genInput() as never);
+		assert.equal(result.isError, undefined, "a skipped released question no longer blocks its topic");
+	});
+
+	it("still REFUSES while an un-skipped unused released question covers the topic", async () => {
+		const h = harness({
+			sitting: FRQ,
+			index: indexOf(releasedQuestion("2023-1", "t_limits"), releasedQuestion("2023-2", "t_limits")),
+			skippedFrq: (questionId) => questionId === "2023-1",
+		});
+		const result = await h.tools.ap_frq_gen!.execute("call_g", genInput() as never);
+		assert.equal(result.isError, true);
+		assert.deepEqual(problemsOf(result), [
+			"a released question covers 1.1 Introducing Calculus: ask 2023-2 with ap_frq first",
+		]);
 	});
 
 	it("poses the question as a pending question and ends the turn", async () => {
@@ -880,6 +905,19 @@ describe("ap_progress — topics with no unused released question", () => {
 			text,
 			/^2023-1 · unused · a→1\.1 Introducing Calculus · PAPER MISSING on this computer$/m,
 			"the released question still appears in its own block, marked missing",
+		);
+	});
+
+	it("lists a topic as uncovered when its released question was skipped in this chat", async () => {
+		const h = harness({
+			sitting: MIXED,
+			index: indexOf(releasedQuestion("2023-1", "t_limits")),
+			skippedFrq: (questionId) => questionId === "2023-1",
+		});
+		const result = await h.tools.ap_progress!.execute("call_p", {} as never);
+		assert.match(
+			(result.content[0] as { text: string }).text,
+			/^Topics with no unused released question: t_limits · 1\.1 Introducing Calculus; t_deriv · 2\.1 Definition of the Derivative$/m,
 		);
 	});
 
