@@ -30,7 +30,9 @@ process.env.LH_DATA_DIR = TMP_DATA;
 delete process.env.LH_DESKTOP_SERVER;
 delete process.env.LH_DESKTOP_API_SECRET;
 
-const { figurePng, figureState, setFigureRasteriser } = await import("../src/server/ap-figures.ts");
+const { figurePng, figureState, resetFigureRasteriser, setFigureRasteriser } = await import(
+	"../src/server/ap-figures.ts"
+);
 const { chatStore } = await import("../src/store/chats.ts");
 const { jobStore } = await import("../src/store/jobs.ts");
 
@@ -76,20 +78,22 @@ function getFigure(id: string, jobId: string): Promise<Response> {
 }
 
 describe("the default figure rasteriser", () => {
-	// First in the file: no test has replaced the module seam yet.
-	it("rasterises a stored drawing with the native SVG renderer", async (t) => {
+	it("rasterises a stored drawing with the native SVG renderer 1200 px wide", async (t) => {
 		try {
 			await import("@resvg/resvg-js");
 		} catch {
 			t.skip("the native SVG renderer (@resvg/resvg-js) is unavailable on this machine");
 			return;
 		}
+		resetFigureRasteriser();
 		const chatId = makeChat("AP figure native");
 		const job = makeReadyJob(chatId);
 
 		const png = await figurePng(chatId, job.id);
 		assert.ok(png.byteLength > PNG_SIGNATURE.length, "the renderer returned bytes");
 		assert.deepEqual(png.subarray(0, PNG_SIGNATURE.length), PNG_SIGNATURE, "the bytes are a PNG");
+		// PNG IHDR: width is the 4-byte big-endian integer at offset 16.
+		assert.equal(png.readUInt32BE(16), 1200, "the PNG is 1200 px wide");
 	});
 });
 
@@ -121,6 +125,38 @@ describe("figureState", () => {
 		jobStore.updateJob(job.id, { status: "done", result: { svg: "x".repeat(MAX_SVG_BYTES + 1) } });
 
 		assert.equal(figureState(chatId, job.id), "failed");
+	});
+
+	it("is failed when a declared side exceeds 8000 or the size cannot be read", () => {
+		const chatId = makeChat("AP figure bounds");
+		const cases: Array<[string, string]> = [
+			["a declared width over 8000", '<svg width="8001" height="10"></svg>'],
+			["a declared height over 8000", '<svg width="10" height="8001"></svg>'],
+			["a viewBox width over 8000", '<svg viewBox="0 0 8001 10"></svg>'],
+			["no size attributes and no viewBox", "<svg><rect/></svg>"],
+			["percentage sizes without a viewBox", '<svg width="100%" height="100%"></svg>'],
+			["only a stroke-width attribute", '<svg height="10" stroke-width="5"></svg>'],
+		];
+		for (const [label, svg] of cases) {
+			const job = makeJob(chatId);
+			jobStore.updateJob(job.id, { status: "done", result: { svg } });
+			assert.equal(figureState(chatId, job.id), "failed", label);
+		}
+	});
+
+	it("reads the size from plain width/height attributes or from the viewBox", () => {
+		const chatId = makeChat("AP figure sizes");
+		const cases: Array<[string, string]> = [
+			["plain attributes", '<svg width="100" height="50"></svg>'],
+			["px attributes", '<svg width="100px" height="50px"></svg>'],
+			["a viewBox fallback", '<svg viewBox="0 0 100 50"></svg>'],
+			["exactly at the 8000 bound", '<svg width="8000" height="8000"></svg>'],
+		];
+		for (const [label, svg] of cases) {
+			const job = makeJob(chatId);
+			jobStore.updateJob(job.id, { status: "done", result: { svg } });
+			assert.equal(figureState(chatId, job.id), "ready", label);
+		}
 	});
 
 	it("is unknown for another chat's drawing, a non-visual job, an absent job and invalid ids", () => {
@@ -163,6 +199,8 @@ describe("figurePng", () => {
 		jobStore.updateJob(failed.id, { status: "error" });
 		const oversize = makeJob(chatId);
 		jobStore.updateJob(oversize.id, { status: "done", result: { svg: "x".repeat(MAX_SVG_BYTES + 1) } });
+		const unreadable = makeJob(chatId);
+		jobStore.updateJob(unreadable.id, { status: "done", result: { svg: "<svg><rect/></svg>" } });
 		const foreign = makeReadyJob(other);
 		const research = makeJob(chatId, "research");
 
@@ -172,7 +210,15 @@ describe("figurePng", () => {
 			return PNG;
 		});
 
-		for (const jobId of [pending.id, failed.id, oversize.id, foreign.id, research.id, "job_never_existed"]) {
+		for (const jobId of [
+			pending.id,
+			failed.id,
+			oversize.id,
+			unreadable.id,
+			foreign.id,
+			research.id,
+			"job_never_existed",
+		]) {
 			await assert.rejects(
 				figurePng(chatId, jobId),
 				(error: Error) => error.message === "figure not ready",
@@ -231,6 +277,27 @@ describe("GET /api/chats/[id]/figures/[jobId]", () => {
 			assert.equal((await getFigure(id, jobId)).status, 404, `${id}/${jobId} is malformed`);
 		}
 		assert.equal(calls, 0, "nothing is rasterised unless the figure is ready");
+	});
+
+	it("is a 404 when the drawing stops being ready between the check and the render", async () => {
+		const chatId = makeChat("AP figure route race");
+		const job = makeReadyJob(chatId);
+		setFigureRasteriser(async () => {
+			throw new Error("figure not ready");
+		});
+
+		const logged: unknown[][] = [];
+		const original = console.error;
+		console.error = (...args: unknown[]) => {
+			logged.push(args);
+		};
+		try {
+			const res = await getFigure(chatId, job.id);
+			assert.equal(res.status, 404, "an expected refusal is a 404");
+			assert.equal(logged.length, 0, "an expected refusal is not logged");
+		} finally {
+			console.error = original;
+		}
 	});
 
 	it("answers 500 and logs when rasterising fails unexpectedly", async () => {
