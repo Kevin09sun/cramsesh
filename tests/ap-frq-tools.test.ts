@@ -309,6 +309,10 @@ function harness(options: HarnessOptions = {}) {
 		attempts: stores.attempts,
 		answeredFrq: answered,
 		answeredFrqCount: answeredCount,
+		// Stage 3 seams: no drawings and nothing looked at (the figure suite
+		// exercises them; this suite only needs the registry to build).
+		figures: { state: () => "unknown", png: async () => Buffer.alloc(0) },
+		viewedFigures: new Set<string>(),
 		...(options.sitting === undefined ? {} : { sitting: options.sitting }),
 	};
 	return {

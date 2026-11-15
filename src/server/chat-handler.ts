@@ -9,7 +9,7 @@ import {
 	type TeachingAgent,
 } from "../agent/teacher-agent.ts";
 import { piEngineForSpec, type PiEngine } from "../agent/models.ts";
-import { answeredFrqCountFrom, answeredFrqFrom } from "../agent/tools/ap.ts";
+import { answeredFrqCountFrom, answeredFrqFrom, viewedFiguresFrom } from "../agent/tools/ap.ts";
 import { connectionBackgroundAllowed as subscriptionBackgroundAllowed, connectionScopeCurrent, isSubscriptionProvider } from "../agent/subscription-connections.ts";
 import { nativeSubscriptionError } from "../agent/subscription-stream.ts";
 import { chatGPTStreamError } from "../agent/chatgpt-stream.ts";
@@ -38,6 +38,7 @@ import { collectToolCallIds } from "./pi/call-ids.ts";
 import { providerEventNote } from "../agent/provider-events.ts";
 import { effectiveSettings, stores } from "./stores.ts";
 import { apPaperPath, apPaperPresent, apPapers } from "./ap-papers.ts";
+import { figurePng, figureState } from "./ap-figures.ts";
 import { searchAvailable, searchProvider } from "./search.ts";
 import { providerKeyPresent } from "./keys.ts";
 import { CLAUDE_CODE_PROVIDER } from "../core/contracts/claude-code.ts";
@@ -544,8 +545,15 @@ export async function handleChatInput(
 						// record plus the answer that re-enters this turn.
 						answeredFrq: (questionId) => answeredFrqFrom(agentMessages, questionId),
 						answeredFrqCount: (questionId) => answeredFrqCountFrom(agentMessages, questionId),
-						// The rarely-needed set, wired exactly like test prep's: the
-						// research + pdf jobs.
+						// Figures (stage 3): a finished drawing of THIS chat, and
+						// the ids already looked at in its saved record.
+						figures: {
+							state: (jobId) => figureState(chatId, jobId),
+							png: (jobId) => figurePng(chatId, jobId),
+						},
+						viewedFigures: viewedFiguresFrom(agentMessages),
+						// The rarely-needed set, wired exactly like test prep's:
+						// the research, drawing (stage 3) and paper-indexing jobs.
 						jobs: {
 							chatId,
 							jobStore: stores.jobStore,

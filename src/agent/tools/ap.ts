@@ -33,8 +33,8 @@ import { apQuestionTitle } from "../../core/ap-frq.ts";
 import type { ApQuestionIndex, ApRealAttempt } from "../../core/ap-frq.ts";
 import type { LhMessage } from "../../core/native-messages.ts";
 import type { SearchProvider } from "../../core/search.ts";
-import type { EnabledTools } from "../../core/pending.ts";
-import { invalidInputResult, questionResult, serverExecute } from "../tool-execute.ts";
+import { filterEnabledTools, type EnabledTools } from "../../core/pending.ts";
+import { invalidInputResult, questionResult, serverExecute, toToolResult } from "../tool-execute.ts";
 import { parsePageSpec, pdfExtract, pdfInfo, pdfPageCount } from "../subagents/pdf-ops.ts";
 import { loadLearnerImage } from "./learner-image.ts";
 import type { ReadModel } from "./read.ts";
@@ -95,6 +95,19 @@ export interface ApAttemptsPort {
  *  the answer result has come back. */
 export type ApFrqAnswerState = "answered" | "pending" | "none";
 
+/** A drawing job's state as the injected figure port reports it —
+ *  structurally src/server/ap-figures.ts's FigureState. The agent layer
+ *  declares the shape here and imports no server module. */
+export type ApFigureState = "ready" | "pending" | "failed" | "unknown";
+
+/** The finished-drawing port (AP prep stage 3): a drawing job's state by id
+ *  and the PNG bytes of a ready one, both scoped to this chat by the
+ *  composition root. */
+export interface ApFiguresPort {
+	state(jobId: string): ApFigureState;
+	png(jobId: string): Promise<Buffer>;
+}
+
 /** The record-reading context the gates need (the practice-tools idiom). */
 export interface ApToolContext {
 	chatId: string;
@@ -113,6 +126,13 @@ export interface ApToolContext {
 	 *  (answeredFrqCountFrom). ap_record_frq compares it with the course's
 	 *  recorded attempts so one answer is graded exactly once. */
 	answeredFrqCount: (questionId: string) => number;
+	/** The finished-drawing port (stage 3), injected by the composition
+	 *  root over src/server/ap-figures.ts and scoped to this chat. */
+	figures: ApFiguresPort;
+	/** Figure ids already looked at in this chat, derived from the saved
+	 *  record (viewedFiguresFrom). Read-only; this turn's additions live in
+	 *  the registry's own set. */
+	viewedFigures: ReadonlySet<string>;
 	/** THE RARELY-NEEDED SET (the practice-tools idiom): the research job,
 	 *  injected by the composition root. Absent (tests, wiring bugs) = absent
 	 *  from the registry. */
@@ -313,6 +333,44 @@ export function answeredFrqFrom(messages: readonly LhMessage[], questionId: stri
 	if (!answer) return "none";
 	if (!answer.result) return "pending";
 	return answeredFrqCountFrom(messages, questionId) > 0 ? "answered" : "none";
+}
+
+/** The caption of a successful ap_view_figure result. It is the only shape
+ *  that counts as having looked at a figure. */
+function viewedFigureText(figure: string): string {
+	return `Figure ${figure}, as the learner will see it.`;
+}
+
+/** The figure ids the tutor has successfully looked at in this chat's saved
+ *  record: one ap_view_figure call whose result succeeded with the fixed
+ *  caption. The text-only-model branch, an errored result and another
+ *  tool's result never count; the image itself is not needed, because an AP
+ *  record keeps a text note in its place (persistTurn). */
+export function viewedFiguresFrom(messages: readonly LhMessage[]): ReadonlySet<string> {
+	const results = new Map<string, { toolName: string; isError: boolean; texts: string[] }>();
+	for (const message of messages) {
+		if (message.role !== "toolResult") continue;
+		const texts = message.content.flatMap((part) => (part.type === "text" ? [part.text] : []));
+		results.set(message.toolCallId, {
+			toolName: message.toolName,
+			isError: message.isError === true,
+			texts,
+		});
+	}
+
+	const viewed = new Set<string>();
+	for (const message of messages) {
+		if (message.role !== "assistant") continue;
+		for (const part of message.content) {
+			if (part.type !== "toolCall" || part.name !== "ap_view_figure") continue;
+			const figure = (part.arguments as { figure?: unknown } | undefined)?.figure;
+			if (typeof figure !== "string" || figure.trim().length === 0) continue;
+			const result = results.get(part.id);
+			if (!result || result.toolName !== "ap_view_figure" || result.isError) continue;
+			if (result.texts.includes(viewedFigureText(figure))) viewed.add(figure);
+		}
+	}
+	return viewed;
 }
 
 // ─── ap_save_document ───────────────────────────────────────────────────────
@@ -662,7 +720,7 @@ function apProgressTool(ctx: ApToolContext): AgentTool<typeof emptyInputObject> 
 
 // ─── ap_mcq ─────────────────────────────────────────────────────────────────
 
-function apMcqTool(ctx: ApToolContext): AgentTool<typeof apMcqInputObject> {
+function apMcqTool(ctx: ApToolContext, viewedThisTurn: Set<string>): AgentTool<typeof apMcqInputObject> {
 	return {
 		name: "ap_mcq",
 		label: "ap_mcq",
@@ -674,7 +732,10 @@ function apMcqTool(ctx: ApToolContext): AgentTool<typeof apMcqInputObject> {
 			"must name a topic in the confirmed list and inside this sitting's scope. ONE question per turn: pose, " +
 			"then end your turn. AFTER A MISS this sitting (the topic's last answer in this chat was wrong or " +
 			"\"I don't know\") the fresh question MUST carry the short diagnosis in `details` — the right answer and " +
-			"where the thinking went wrong; the call is rejected without it.",
+			"where the thinking went wrong; the call is rejected without it. `figure`, when given, is a finished " +
+			"drawing of this session that you have looked at with ap_view_figure; an id that is not a drawing of " +
+			"this session, a drawing that is not finished yet, a drawing that could not be drawn and a figure you " +
+			"have not looked at are refused.",
 		parameters: apMcqInputObject,
 		prepareArguments: (args: unknown) => healEncodedArguments(args, apMcqInputObject) as never,
 		executionMode: "sequential",
@@ -703,6 +764,27 @@ function apMcqTool(ctx: ApToolContext): AgentTool<typeof apMcqInputObject> {
 				return invalidInputResult("ap_mcq", [
 					"after a miss, put the short explanation (including the right answer) in `details` — the learner sees it with the fresh question",
 				]);
+			}
+			// THE FIGURE GATE (stage 3): a figure must be a finished drawing
+			// of this chat that the tutor has actually looked at — in the
+			// saved record, or earlier in this same turn (the registry's set).
+			if (input.figure !== undefined) {
+				const figure = input.figure;
+				const state = ctx.figures.state(figure);
+				if (state === "unknown") {
+					return invalidInputResult("ap_mcq", [`figure ${figure} is not a figure drawn in this session`]);
+				}
+				if (state === "pending") {
+					return invalidInputResult("ap_mcq", [
+						`figure ${figure} is not finished yet — ask a question that needs no figure meanwhile`,
+					]);
+				}
+				if (state === "failed") {
+					return invalidInputResult("ap_mcq", [`figure ${figure} could not be drawn`]);
+				}
+				if (!ctx.viewedFigures.has(figure) && !viewedThisTurn.has(figure)) {
+					return invalidInputResult("ap_mcq", [`look at figure ${figure} with ap_view_figure before using it`]);
+				}
 			}
 			return questionResult();
 		},
@@ -958,6 +1040,105 @@ export function createApViewPhotoTool(model?: ReadModel): AgentTool<typeof apVie
 
 /** The unwrapped tool (teacher-agent rebinds its execute to the live model). */
 export const apViewPhotoTool = createApViewPhotoTool();
+
+// ─── ap_view_figure ─────────────────────────────────────────────────────────
+
+const apViewFigureInputObject = Type.Object({
+	figure: Type.String({
+		description:
+			"REQUIRED — the job id of the finished drawing to look at, exactly as the drawing job's result gives it. " +
+			"A blank id is refused. Refused for an id that is not a figure drawn in this session, for a drawing " +
+			"that is not finished yet and for a drawing that could not be drawn.",
+	}),
+});
+
+/** A per-turn ap_view_figure: it owns this turn's viewed set, so each
+ *  registry has its own instance. `bindModel` swaps in the session's live
+ *  model, the way teacher-agent rebinds read and ap_view_photo. */
+export interface ApViewFigureTool extends AgentTool<any> {
+	bindModel(model?: ReadModel): AgentTool<any>;
+}
+
+/** Whether this is the app's own ap_view_figure tool (not a caller's test
+ *  registry stand-in with the same name). */
+export function isApViewFigureTool(tool: AgentTool<any>): tool is ApViewFigureTool {
+	return tool.name === "ap_view_figure" && typeof (tool as unknown as { bindModel?: unknown }).bindModel === "function";
+}
+
+/**
+ * Look at one finished drawing of this session. The PNG rides the tool
+ * result's native image content part, exactly as ap_view_photo returns a
+ * photo, and a model that cannot see images gets one honest sentence
+ * instead — without
+ * the id being remembered as viewed, because nothing was checked. A state
+ * refusal and a blank id are retryable tool errors; a rasteriser failure is
+ * returned as a normal result, exactly like ap_view_photo's file errors.
+ * `model` is rebound per engine in teacher-agent.ts.
+ */
+export function createApViewFigureTool(
+	figures: ApFiguresPort,
+	viewed: Set<string>,
+	model?: ReadModel,
+): ApViewFigureTool {
+	const bound: { current?: ReadModel } = { current: model };
+	return {
+		name: "ap_view_figure",
+		label: "ap_view_figure",
+		description:
+			"Look at one finished figure the drawing tool produced in this session, by its job id, exactly as the " +
+			"learner will see it in a question. Call it after the drawing job has finished and check every value, " +
+			"label and direction against the question you intend to ask; a question accepts only a figure you have " +
+			"looked at this way. Refused for an id that is not a figure drawn in this session, for a drawing that is " +
+			"not finished yet and for a drawing that could not be drawn. This model receives the image as an " +
+			"attachment when it can see images; a model that cannot see images cannot check a figure, so pose " +
+			"questions without one.",
+		parameters: apViewFigureInputObject,
+		prepareArguments: (args: unknown) => healEncodedArguments(args, apViewFigureInputObject) as never,
+		executionMode: "sequential",
+		bindModel(next?: ReadModel) {
+			bound.current = next;
+			return this;
+		},
+		execute: async (_toolCallId, rawInput, signal) => {
+			// The agent loop validates against the schema above; the loose
+			// AgentTool<any> surface needs this narrowing here.
+			const input = rawInput as { figure: string };
+			if ((input.figure ?? "").trim().length === 0) {
+				return invalidInputResult("ap_view_figure", ["figure must not be blank"]);
+			}
+			const state = figures.state(input.figure);
+			if (state === "unknown") {
+				return invalidInputResult("ap_view_figure", [
+					`figure ${input.figure} is not a figure drawn in this session`,
+				]);
+			}
+			if (state === "pending") {
+				return invalidInputResult("ap_view_figure", [`figure ${input.figure} is not finished yet`]);
+			}
+			if (state === "failed") {
+				return invalidInputResult("ap_view_figure", [`figure ${input.figure} could not be drawn`]);
+			}
+			if (bound.current && !bound.current.input.includes("image")) {
+				return toToolResult({
+					text: "This model cannot see images, so the figure cannot be checked. Pose the question without a figure.",
+				});
+			}
+			try {
+				signal?.throwIfAborted();
+				const png = await figures.png(input.figure);
+				// Remembered only once the image has actually been produced:
+				// the tutor has now seen what the learner will see.
+				viewed.add(input.figure);
+				return toToolResult({
+					text: viewedFigureText(input.figure),
+					images: [{ data: png.toString("base64"), mimeType: "image/png" }],
+				});
+			} catch (error) {
+				return toToolResult({ text: error instanceof Error ? error.message : String(error) });
+			}
+		},
+	};
+}
 
 // ─── ap_record_frq ──────────────────────────────────────────────────────────
 
@@ -1362,9 +1543,16 @@ export function gateScoringGuideline(
 
 /** The AP tutor's whole registry. The three pdf readers are scoped to the
  *  course's papers folder; there is no web_fetch_pdf, no pdf job and no
- *  demo/visual here. */
+ *  demo. The drawing job's `visual` tool joins exactly as Teach registers it
+ *  (stage 3), behind the shared Settings switch. */
 export function apTools(ctx: ApToolContext, enabled?: EnabledTools): Record<string, AgentTool<any>> {
 	const jobs = ctx.jobs ? jobTools(ctx.jobs) : null;
+	// The Settings switch governs drawings in AP exactly as in Teach — the
+	// shared filtering site, keyed by the model-facing tool name.
+	const visual = jobs?.visual ? filterEnabledTools({ visual: jobs.visual }, enabled).visual : undefined;
+	// One set per registry (= per turn): a figure looked at this turn may be
+	// used before the saved record has it (Review Focus 2).
+	const viewedThisTurn = new Set<string>();
 	const papersDir = ctx.papers.dir(ctx.courseId);
 	const pdfTools = createPdfReadTools(papersDir);
 	// healToolRecord — the standard argument heal over the WHOLE registry
@@ -1376,10 +1564,11 @@ export function apTools(ctx: ApToolContext, enabled?: EnabledTools): Record<stri
 		pdf_search: gateScoringGuideline(pdfTools.pdf_search!, ctx, "pdf_search"),
 		propose_units: proposeUnitsTool(ctx),
 		ap_progress: apProgressTool(ctx),
-		ap_mcq: apMcqTool(ctx),
+		ap_mcq: apMcqTool(ctx, viewedThisTurn),
 		ap_frq: apFrqTool(ctx),
 		ap_rubric: apRubricTool(ctx),
 		ap_view_photo: apViewPhotoTool,
+		ap_view_figure: createApViewFigureTool(ctx.figures, viewedThisTurn),
 		ap_record_frq: apRecordFrqTool(ctx),
 		ap_retag_part: apRetagPartTool(ctx),
 		ap_record_result: apRecordResultTool(ctx),
@@ -1389,6 +1578,7 @@ export function apTools(ctx: ApToolContext, enabled?: EnabledTools): Record<stri
 		find: findTool,
 		grep: grepTool,
 		...(jobs?.research ? { research: jobs.research } : {}),
+		...(visual ? { visual } : {}),
 		// Direct web tools: the settings `web` switch is the only toggle this
 		// registry reads.
 		...tutorWebTools(ctx.search, enabled),
