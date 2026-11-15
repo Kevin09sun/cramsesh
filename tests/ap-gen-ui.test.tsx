@@ -240,6 +240,14 @@ describe("AP: the answered ap_frq_gen card", () => {
 		assert.ok(!html.includes("Users"), "the photo's full path never renders");
 	});
 
+	it("replays the call's details line", () => {
+		const html = renderToStaticMarkup(
+			<AnsweredCard answer={answeredGenerated()} input={generatedInput} chatId="chat1" />,
+		);
+		assert.ok(html.includes(generatedInput.details!), "the details line renders");
+		for (const secret of SECRETS) assert.ok(!html.includes(secret), `${secret} never reaches the card`);
+	});
+
 	it("carries no committed answer, rubric point, verdict or confidence record", () => {
 		const html = renderToStaticMarkup(
 			<AnsweredCard answer={answeredGenerated()} input={generatedInput} chatId="chat1" />,

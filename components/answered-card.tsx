@@ -420,6 +420,12 @@ function FrqGenAnsweredCard({
 			<div className="mb-3 font-medium">
 				<ToolContentResponse>{question?.title ?? answer.questionText}</ToolContentResponse>
 			</div>
+			{question?.details && (
+				// The details line, in the released card's place and paint.
+				<div className="mb-3 text-sm text-muted-foreground">
+					<ToolContentResponse>{question.details}</ToolContentResponse>
+				</div>
+			)}
 			{question?.figure !== undefined && chatId !== undefined && (
 				<QuestionFigure chatId={chatId} figure={question.figure} className="mb-3" />
 			)}
