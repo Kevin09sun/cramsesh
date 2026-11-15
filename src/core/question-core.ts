@@ -412,7 +412,9 @@ export const apMcqInputObject = Type.Object({
 	figure: Type.Optional(
 		Type.String({
 			description:
-				"Optional: the id of a figure you have drawn and looked at with ap_view_figure; it is shown with the question.",
+				"Optional: the id of a finished figure this tutor drew in this session and has looked at with " +
+				"ap_view_figure; it is shown with the question. A figure from another session, an unfinished or " +
+				"failed drawing, and one not looked at are refused.",
 		}),
 	),
 });
@@ -557,8 +559,9 @@ export const apFrqGenInputObject = Type.Object({
 	figure: Type.Optional(
 		Type.String({
 			description:
-				"Optional: the id of a finished figure (a drawing job you have looked at with ap_view_figure); " +
-				"it is shown with the question.",
+				"Optional: the id of a finished figure this tutor drew in this session and has looked at with " +
+				"ap_view_figure; it is shown with the question. A figure from another session, an unfinished or " +
+				"failed drawing, and one not looked at are refused.",
 		}),
 	),
 	details: Type.Optional(

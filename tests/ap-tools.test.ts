@@ -317,10 +317,13 @@ describe("apTools registry", () => {
 			"find",
 			"grep",
 		]);
-		// No acquire/render tool of its own, no pdf job, no demo/visual.
-		for (const forbidden of ["web_fetch_pdf", "pdf", "visual", "demo"]) {
+		// No acquire/render tool of its own and no pdf job; `demo` is never
+		// registered. `visual` is absent here because this registry has no
+		// jobs context, not because AP never carries it.
+		for (const forbidden of ["web_fetch_pdf", "pdf", "demo"]) {
 			assert.equal(tools[forbidden], undefined, `${forbidden} must never be registered`);
 		}
+		assert.equal(tools.visual, undefined, "no jobs context → no drawing tool");
 	});
 
 	it("wires research, the drawing tool, paper indexing and the direct web tools when their seams are passed", () => {

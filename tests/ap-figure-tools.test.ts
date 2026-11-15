@@ -27,27 +27,27 @@ import { createFauxCore } from "@earendil-works/pi-ai";
 import type { ApCourseRecord, ApSitting } from "../src/core/ap.ts";
 import type { AnswerResult, PlanDraftSection } from "../src/core/test-prep.ts";
 import type { LhMessage } from "../src/core/native-messages.ts";
-import {
-	apTools,
-	createApViewFigureTool,
-	viewedFiguresFrom,
-	type ApCourseStorePort,
-	type ApFiguresPort,
-	type ApIndexPort,
-	type ApPapersPort,
-	type ApToolContext,
+import type {
+	ApCourseStorePort,
+	ApFiguresPort,
+	ApIndexPort,
+	ApPapersPort,
+	ApToolContext,
 } from "../src/agent/tools/ap.ts";
 import type { ReadModel } from "../src/agent/tools/read.ts";
-import { createApAgent } from "../src/agent/teacher-agent.ts";
 
-// ── the record seam, BEFORE any config-loading import ─────────────────────
+// ── the store seam, BEFORE any config-loading import ────────────────────────
+// The tools module itself loads no config; teacher-agent does (config.ts
+// resolves the data root at import time), so it is imported dynamically with
+// the isolated root already in place. Store-touching tests live in
+// tests/ap-figure-record.test.ts, which follows the same discipline.
 const TMP_DATA = fs.mkdtempSync(path.join(os.tmpdir(), "lh-ap-figure-tools-"));
 process.env.LH_DATA_DIR = TMP_DATA;
 delete process.env.LH_DESKTOP_SERVER;
 delete process.env.LH_DESKTOP_API_SECRET;
 
-const { persistTurn } = await import("../src/server/turn-service.ts");
-const { chatStore } = await import("../src/store/chats.ts");
+const { apTools, createApViewFigureTool, viewedFiguresFrom } = await import("../src/agent/tools/ap.ts");
+const { createApAgent } = await import("../src/agent/teacher-agent.ts");
 
 after(() => {
 	fs.rmSync(TMP_DATA, { recursive: true, force: true });
@@ -220,7 +220,7 @@ describe("apTools and the drawing tool", () => {
 		assert.ok(off.ap_mcq, "the rest of the registry is untouched");
 	});
 
-	it("registers ap_view_figure with the saved viewed set injected", () => {
+	it("registers ap_view_figure in the AP registry", () => {
 		const { figures } = fakeFigures({});
 		const tools = apTools(ctxOf(figures, { viewed: new Set(["fig_saved"]) }));
 		assert.ok(tools.ap_view_figure, "the figure viewer is part of the AP registry");
@@ -288,6 +288,27 @@ describe("ap_view_figure", () => {
 		assert.equal(result.details, null);
 		assert.deepEqual(scripted.pngCalls, [], "nothing is rasterised for a model that cannot see it");
 		assert.equal(viewed.size, 0, "the id is NOT remembered as viewed");
+	});
+
+	it("returns a rasteriser failure as a normal result and does not remember the id", async () => {
+		const figures: ApFiguresPort = {
+			state: () => "ready",
+			png: async () => {
+				throw new Error("the drawing could not be rasterised");
+			},
+		};
+		const tools = apTools(ctxOf(figures));
+
+		const looked = await tools.ap_view_figure!.execute("call_v", { figure: "fig_ready" } as never);
+		assert.equal(looked.isError, undefined, "a failed render is a normal result, like ap_view_photo's file errors");
+		assert.equal((looked.content[0] as { text: string }).text, "the drawing could not be rasterised");
+		assert.equal(looked.content.length, 1, "no image part");
+
+		const question = await tools.ap_mcq!.execute("call_q", { ...MCQ_INPUT, figure: "fig_ready" } as never);
+		assert.equal(question.isError, true, "the failed look did not mark the figure viewed");
+		assert.deepEqual(problemsOf(question as { details: unknown }), [
+			"look at figure fig_ready with ap_view_figure before using it",
+		]);
 	});
 });
 
@@ -361,7 +382,7 @@ describe("ap_mcq with a figure", () => {
 		assert.equal(result.isError, undefined, "the look happened this turn, before the saved record knows");
 	});
 
-	it("keeps every existing gate before the figure checks", async () => {
+	it("runs the post-miss diagnosis gate before the figure checks", async () => {
 		// The post-miss diagnosis gate runs before the figure state gate.
 		const { figures } = fakeFigures({});
 		const result = await apTools(
@@ -471,32 +492,5 @@ describe("createApAgent and the figure model", () => {
 
 		assert.equal((result.content[0] as { text: string }).text, TEXT_ONLY);
 		assert.equal(result.content.length, 1, "the text-only model receives no image");
-	});
-});
-
-// ── the saved record never keeps the figure image ───────────────────────────
-
-describe("an ap_view_figure result in an AP turn", () => {
-	it("is saved without its image, and the saved set derives from the record", () => {
-		const chat = chatStore.createChat("Test: AP figure images not kept", "ap", undefined, {
-			courseId: "ap_figures",
-		});
-		const call = assistantCall("fig_call_1", "ap_view_figure", { figure: "fig_ready" });
-		const result = toolResult("fig_call_1", OK_TEXT, { image: true });
-
-		persistTurn(chatStore, chat.id, 0, [call, result], false);
-
-		const record = chatStore.getChat(chat.id)!;
-		const saved = record.messages.find((message) => message.role === "toolResult")!;
-		assert.deepEqual((saved as { content: unknown }).content, [
-			{ type: "text", text: OK_TEXT },
-			{ type: "text", text: "[Image viewed during this turn; not kept in the session.]" },
-		]);
-		assert.ok(!JSON.stringify(record).includes("AAAA"), "no image bytes reach the record");
-		assert.deepEqual((result as { content: unknown }).content, [
-			{ type: "text", text: OK_TEXT },
-			{ type: "image", data: "AAAA", mimeType: "image/png" },
-		], "the live turn's message keeps its image");
-		assert.deepEqual([...viewedFiguresFrom(record.messages)], ["fig_ready"]);
 	});
 });
