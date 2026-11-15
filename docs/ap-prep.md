@@ -1,6 +1,6 @@
 # AP prep mode
 
-AP prep is the fourth session type, alongside Teach, Practice and Test prep. It is built around a named AP course: the agent builds the course's units and official topics from College Board's Course and Exam Description, teaches any topic with the ordinary Teach mode, asks newly written multiple-choice questions and real released free-response questions, and tracks readiness per unit and course with a status per topic across sittings.
+AP prep is the fourth session type, alongside Teach, Practice and Test prep. It is built around a named AP course: the agent builds the course's units and official topics from College Board's Course and Exam Description, teaches any topic with the ordinary Teach mode, asks multiple-choice and free-response questions it writes as well as real released free-response questions, draws figures for questions that need one, and tracks readiness per unit and course with a status per topic across sittings.
 
 Use it when you are preparing for an AP exam and want practice that judges your reasoning, not only your final answer.
 
@@ -66,16 +66,16 @@ A solid topic that is later missed becomes a gap again. Readiness is solid topic
 **Practise** asks two things. The **scope** is whichever button opened it: a single topic, one whole unit, or **Practise weak topics** across units. The chooser then asks the question **kind**:
 
 - **Multiple-choice** starts a sitting of questions the tutor writes.
-- **Free-response** starts a sitting of real released College Board questions.
-- **Mixed** alternates between released questions and questions the tutor writes.
+- **Free-response** starts a sitting of free-response questions: released College Board questions first, then questions the tutor writes when no unused released question covers the topic.
+- **Mixed** alternates between multiple-choice questions the tutor writes and free-response questions, asking a released one when an unused one covers the topic and a written one otherwise.
 
-Free-response and Mixed need at least one indexed released question. Until the course has one, they stay visible but cannot be selected, and each says `needs released papers`.
+All three kinds start on every course. A free-response or mixed sitting needs no released papers: the tutor writes the question when the index has none.
 
 Each sitting is its own session, titled with the course, the scope and the kind (for example `AP Calculus BC · Unit 1 Limits · free-response`). Within the scope, topics are ordered weak-first: re-checks first, then topics not yet asked, then remaining gaps. A single-topic sitting asks several different questions on that topic.
 
 ## How multiple-choice questions work
 
-A multiple-choice question is newly written by the agent. It is modelled on the official sample questions for the topic's unit in the course description, and tests one topic. Each card is labelled **AP · generated**.
+A multiple-choice question is newly written by the agent. It is modelled on the official sample questions for the topic's unit in the course description, and tests one topic. Each card is labelled **AP · generated**. A question may also show a drawn figure when it cannot be asked properly without one; see Figures below.
 
 Pick an option. You may also type or dictate your reasoning; the field is **YOUR REASONING (optional)**.
 
@@ -87,9 +87,11 @@ The card shows no verdict: the app does not mark an option right or wrong, does 
 
 ## How free-response questions work
 
-A free-response question is a real released College Board question from the course's question index. Its card is labelled **AP · released** and shows the question's original paper page as an image, so figures and formatting are exactly the official ones. While the question loads, the card says `Loading the question…`.
+A free-response question is either a real released College Board question from the course's question index or one the tutor writes, modelled on the released ones. Released comes first, then generated: the tutor asks an unused released question for a topic when one exists, and writes one when none fits or all have been used. A released question's card is labelled **AP · released** and shows the question's original paper page as an image, so figures and formatting are exactly the official ones. While the question loads, the card says `Loading the question…`.
 
-Below the page there is one answer box per part. Each box is labelled with the part's letter, with the topic the part is tagged with in smaller text beside it. Type or dictate each answer; dictation goes to the box that last had focus, the first box by default. A part you leave blank earns no points.
+A written question's card is labelled **AP · generated** and shows its title, its stem and one answer box per part; it has no original page. The tutor writes the complete solution and the full rubric before the question is shown, and commits them: neither is displayed.
+
+Below the page or the stem there is one answer box per part. Each box is labelled with the part's letter, with the topic the part is tagged with in smaller text beside it. Type or dictate each answer; dictation goes to the box that last had focus, the first box by default. A part you leave blank earns no points.
 
 **Attach photo** adds a photo of your written work, up to six; each can be removed before you submit. The tutor sees a photo while it grades and says what it read from the page before grading. The image is not kept in the session: the answer record lists each attached photo by file name as `Photo attached: <name>`, and the tutor's written read-back is what stays with the transcript.
 
@@ -97,7 +99,13 @@ Below the page there is one answer box per part. Each box is labelled with the p
 
 **Submit answer** sends every part at once. After you submit, the conversation keeps a record of your answer: each part under its letter (a blank part is an em dash) and each photo by file name. **Show question** reopens the original page. That record shows no verdict — the score card is the only place a result is shown.
 
-The scoring guideline is never shown before you answer. If the paper is not on this computer (for example on a second computer), the card says `This paper is not on this computer. Download it from the course page.` and links to the course page, where **Download** fetches it again. The indexed questions work without re-indexing once the paper is back. A page that cannot be rendered says `This page could not be shown.`
+The scoring guideline, and a written question's committed rubric, are never shown before you answer. If a released question's paper is not on this computer (for example on a second computer), the card says `This paper is not on this computer. Download it from the course page.` and links to the course page, where **Download** fetches it again. The indexed questions work without re-indexing once the paper is back. A page that cannot be rendered says `This page could not be shown.`
+
+## Figures
+
+A question may show a figure when it cannot be asked properly without one — a graph to read, a diagram of a physical setup, a geometric construction. The tutor starts the drawing in the background; the drawing arrives later as a message in the chat, and a question that uses it is asked only after it has arrived and the tutor has looked at it. The tutor checks every value, label and direction against the question and uses only a figure that is exactly right. A figure it has not opened this way cannot be put in a question.
+
+Figures in AP follow the **Tool · visual** switch in Settings. With drawings turned off, the tutor has no drawing tool and writes questions without figures. Checking a figure needs a model that can see images; when the session's model cannot, the tutor asks questions without one. A figure that cannot be shown says `This figure could not be shown.`
 
 ## After a multiple-choice answer
 
@@ -108,11 +116,11 @@ Only an answered question moves a topic.
 
 ## After a free-response answer
 
-The tutor grades every scoring point against the official rubric, point by point, not the final answer alone; a right answer whose required working or justification is missing earns no point. It records the result once for that answer.
+The tutor grades every scoring point, point by point, against the official rubric for a released question or the rubric it committed for a written one; not the final answer alone. A right answer whose required working or justification is missing earns no point. It records the result once for that answer.
 
 A topic counts as correct only when every scoring point on every part tagged to it was earned. A part tagged to no listed topic earns points but moves no topic.
 
-The tutor explains the score in its reply. The score card is the only place a result is shown. Its header reads `2023 FRQ 2 — scored 4/9`, and each part gets a row with its letter, its points as `earned/total`, the topic it tests when tagged, and one of three words:
+The tutor explains the score in its reply. The score card is the only place a result is shown. Its header reads `<title> — scored <earned>/<total>` — for example `2023 FRQ 2 — scored 4/9`; a written question's header carries its title in the same form. Each part gets a row with its letter, its points as `earned/total`, the topic it tests when tagged, and one of three words:
 
 | Word | Meaning |
 | --- | --- |
@@ -120,7 +128,7 @@ The tutor explains the score in its reply. The score card is the only place a re
 | `missed` | At least one scoring point on that part was not earned. |
 | `not counted` | The part is tagged to no listed topic, so it moves none. |
 
-After points are lost, the tutor gives the correct answer and says which points were lost and why. The retry for each missed topic inside the sitting's scope is a fresh multiple-choice question, with the diagnosis shown alongside it. If you answered **I don't know**, the tutor gives the correct answer to each part and then retries the same way.
+After points are lost, the tutor gives the correct answer and says which points were lost and why. The retry for each missed topic inside the sitting's scope is a short free-response question the tutor writes — one or two parts on that topic — with the diagnosis shown alongside it. If you answered **I don't know**, the tutor gives the correct answer to each part and then retries the same way.
 
 ## Learn
 
@@ -143,10 +151,6 @@ The course record holds the units, topics, statuses, answer history and the list
 The PDFs and their page images do not sync. They stay on this computer under `data/ap-papers/<courseId>/`, and `ap-papers/` is excluded in `data/.gitignore`. Learner photos stay local as well: the image itself is never kept in the session or the synced data, and an answer shows a photo only by file name.
 
 A course opened on another computer therefore has its progress and indexed questions intact, but not its papers. The course page shows **Missing on this computer** beside a missing document, with a **Download** button that fetches it again. Downloads come only from College Board sites. Free-response questions work again once the paper is downloaded; there is no second indexing pass.
-
-## Later stages
-
-Free-response practice uses real released questions. Questions the tutor writes in free-response form, and drawn figures, come in a later stage; multiple-choice questions use text, tables, mathematical notation and inline diagrams only.
 
 ## Where progress is stored
 

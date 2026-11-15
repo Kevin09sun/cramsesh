@@ -366,7 +366,6 @@ export function CourseView({
 										<StartSitting
 											course={course}
 											scope={unitScope}
-											indexedQuestions={indexedQuestions}
 											testId={`practise-unit-${section.id}`}
 											navigate={go}
 										/>
@@ -419,7 +418,6 @@ export function CourseView({
 														<StartSitting
 															course={course}
 															scope={{ type: "topic", topicId: point.id }}
-															indexedQuestions={indexedQuestions}
 															testId={`practise-topic-${point.id}`}
 															navigate={go}
 														/>
@@ -440,7 +438,6 @@ export function CourseView({
 					<StartSitting
 						course={course}
 						scope={{ type: "weak" }}
-						indexedQuestions={indexedQuestions}
 						testId="practise-weak"
 						label="Practise weak topics"
 						navigate={go}
