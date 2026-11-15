@@ -97,7 +97,7 @@ Below the page or the stem there is one answer box per part. Each box is labelle
 
 **I don't know** covers the whole question. It disables the answer boxes and photos, but anything already typed or attached is still sent, marked as "I don't know"; the tutor records the question as not known.
 
-**Submit answer** sends every part at once. After you submit, the conversation keeps a record of your answer: each part under its letter (a blank part is an em dash) and each photo by file name. **Show question** reopens the original page. That record shows no verdict — the score card is the only place a result is shown.
+**Submit answer** sends every part at once. After you submit, the conversation keeps a record of your answer: each part under its letter (a blank part is an em dash) and each photo by file name. For a released question, **Show question** reopens the original page; a written question's record already shows the question. That record shows no verdict — the score card is the only place a result is shown.
 
 The scoring guideline, and a written question's committed rubric, are never shown before you answer. If a released question's paper is not on this computer (for example on a second computer), the card says `This paper is not on this computer. Download it from the course page.` and links to the course page, where **Download** fetches it again. The indexed questions work without re-indexing once the paper is back. A page that cannot be rendered says `This page could not be shown.`
 
@@ -128,7 +128,7 @@ The tutor explains the score in its reply. The score card is the only place a re
 | `missed` | At least one scoring point on that part was not earned. |
 | `not counted` | The part is tagged to no listed topic, so it moves none. |
 
-After points are lost, the tutor gives the correct answer and says which points were lost and why. The retry for each missed topic inside the sitting's scope is a short free-response question the tutor writes — one or two parts on that topic — with the diagnosis shown alongside it. If you answered **I don't know**, the tutor gives the correct answer to each part and then retries the same way.
+After points are lost, the tutor gives the correct answer and says which points were lost and why. The retry for each missed topic inside the sitting's scope is a short free-response question the tutor writes — one or two parts on that topic — that comes after the tutor's diagnosis. If you answered **I don't know**, the tutor gives the correct answer to each part and then retries the same way.
 
 ## Learn
 
