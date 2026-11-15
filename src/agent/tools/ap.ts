@@ -70,10 +70,12 @@ export interface ApPapersPort {
 }
 
 /** The synced question-index port: read the course's indexed released
- *  questions and correct one part's topic tag. Structurally satisfied by
+ *  questions, remove one paper's entries (a re-saved paper is indexed again),
+ *  and correct one part's topic tag. Structurally satisfied by
  *  store/ap-index.ts. */
 export interface ApIndexPort {
 	get(courseId: string): ApQuestionIndex | null;
+	forgetPaper(courseId: string, paperId: string): boolean;
 	retagPart(courseId: string, questionId: string, label: string, topicId: string | undefined): void;
 }
 
@@ -147,6 +149,11 @@ const RELEASED_SITTING_REFUSAL =
  *  flood the model's context or the saved session. */
 export const AP_PDF_EXTRACT_MAX_PAGES = 15;
 const AP_PDF_EXTRACT_REFUSAL = `Read at most ${AP_PDF_EXTRACT_MAX_PAGES} pages of the course description per call; ask for a specific page range.`;
+
+/** ap_rubric's whole-result cap. Rubric points always come first, so the cap
+ *  only ever cuts extracted question or guideline text. */
+const AP_RUBRIC_MAX_CHARS = 60_000;
+const AP_RUBRIC_TRUNCATED = "\n[rubric output truncated]";
 
 /** Plain-text result (these tools answer the model in prose, not JSON). */
 function textResult(text: string): AgentToolResult<string> {
@@ -434,7 +441,29 @@ function apSaveDocumentTool(ctx: ApToolContext): AgentTool<typeof apSaveDocument
 			};
 			ctx.courses.putDocument(ctx.courseId, doc);
 			if (kind !== "ced") {
-				return textResult(`Saved ${input.label} as ${file} (${pages} page${pages === 1 ? "" : "s"}).`);
+				const saved = `Saved ${input.label} as ${file} (${pages} page${pages === 1 ? "" : "s"}).`;
+				// A re-saved paper replaces its file, so its old index entries no
+				// longer describe what is on this computer. Clear them; the next
+				// ap_index_papers run indexes the new file. A scoring guideline
+				// clears its paired paper's entries.
+				const paperId =
+					kind === "frq"
+						? id
+						: apPaperFileName("frq", input.year!, input.set).slice(0, -".pdf".length);
+				let removed: boolean;
+				try {
+					removed = ctx.index.forgetPaper(ctx.courseId, paperId);
+				} catch {
+					return textResult(
+						`${saved} The index for this paper could not be cleared; run ap_index_papers and check the result.`,
+					);
+				}
+				if (removed) {
+					return textResult(
+						`${saved} Its earlier index entries were removed; run ap_index_papers to index it again.`,
+					);
+				}
+				return textResult(saved);
 			}
 			return textResult(
 				`Saved ${CED_FILE} (${pages} page${pages === 1 ? "" : "s"}) to this course's papers folder. ` +
@@ -748,8 +777,18 @@ function apFrqTool(ctx: ApToolContext): AgentTool<typeof apFrqInputObject> {
 				ctx.chatId,
 				confirmedCourse.realAttempts ?? [],
 			);
-			const used = eligible.find((entry) => entry.question.id === question.id)?.used ?? false;
-			const nextUnused = eligible.find((entry) => !entry.used && entry.question.id !== question.id);
+			// A question answered only in this chat (the course attempt is
+			// recorded later, during grading) counts as used, exactly like one
+			// the course record already has an attempt for.
+			const used =
+				(eligible.find((entry) => entry.question.id === question.id)?.used ?? false) ||
+				ctx.answeredFrqCount(question.id) > 0;
+			const nextUnused = eligible.find(
+				(entry) =>
+					!entry.used &&
+					entry.question.id !== question.id &&
+					ctx.answeredFrqCount(entry.question.id) === 0,
+			);
 			if (used && nextUnused) {
 				return invalidInputResult("ap_frq", [
 					`${question.id} was already answered; ask ${nextUnused.question.id} first`,
@@ -774,11 +813,13 @@ function apRubricTool(ctx: ApToolContext): AgentTool<typeof apRubricInputObject>
 		name: "ap_rubric",
 		label: "ap_rubric",
 		description:
-			"Read the official rubric of a released free-response question AFTER the learner has answered it: the " +
-			"question text (from the paper on this computer), each part with its topic and every scoring point, and " +
-			"the scoring guideline's own text for this question's scoring pages (at most 15 pages). The learner " +
-			"NEVER sees this — it is grading material only, and the answer card stays hidden until ap_record_frq " +
-			"records the grading. Refused before the learner has answered this question in this chat (`answeredFrq`).",
+			"Read the official rubric of a released free-response question AFTER the learner has answered it: each " +
+			"part with its topic and every scoring point, then the question text (from the paper on this computer, " +
+			"at most 15 pages) and the scoring guideline's own text for this question's scoring pages (at most 15 " +
+			"pages). The whole result is capped at 60,000 characters; the points always come first and are never " +
+			"cut. The learner NEVER sees this — it is grading material only, and the answer card stays hidden until " +
+			"ap_record_frq records the grading. Refused before the learner has answered this question in this chat " +
+			"(`answeredFrq`).",
 		parameters: apRubricInputObject,
 		prepareArguments: (args: unknown) => healEncodedArguments(args, apRubricInputObject) as never,
 		executionMode: "sequential",
@@ -815,24 +856,31 @@ function apRubricTool(ctx: ApToolContext): AgentTool<typeof apRubricInputObject>
 			};
 
 			const lines: string[] = [apQuestionTitle(question)];
-			const paperFile = documentFile(course, question.paperId);
-			const paperLabel = documentLabel(course, question.paperId);
-			if (!ctx.papers.present(ctx.courseId, paperFile)) {
-				lines.push("", `${paperLabel} is not on this computer — the question's text cannot be read here.`);
-			} else {
-				try {
-					lines.push("", await readPages(paperFile, question.pages));
-				} catch {
-					lines.push(
-						"",
-						`${paperLabel} could not be read on this computer — the question's text is unavailable.`,
-					);
-				}
-			}
+			// The points come before any extracted text: the whole-result cap
+			// below must never cut a rubric point.
 			for (const part of question.parts) {
 				const topic = part.topicId === undefined ? undefined : locateTopic(course, part.topicId)?.topic;
 				lines.push("", `(${part.label}) topic: ${topic?.text ?? "none"}`);
 				for (const point of part.points) lines.push(`${point.id}: ${point.text}`);
+			}
+
+			// The question's own pages are capped like the guideline's.
+			const paperFile = documentFile(course, question.paperId);
+			const paperLabel = documentLabel(course, question.paperId);
+			const questionPages = question.pages.slice(0, AP_PDF_EXTRACT_MAX_PAGES);
+			const questionCapped = question.pages.length > AP_PDF_EXTRACT_MAX_PAGES;
+			if (!ctx.papers.present(ctx.courseId, paperFile)) {
+				lines.push("", `${paperLabel} is not on this computer — the question's text cannot be read here.`);
+			} else {
+				lines.push(
+					"",
+					`Question text (pages ${questionPages.join(", ")}${questionCapped ? "; first 15 pages" : ""}):`,
+				);
+				try {
+					lines.push(await readPages(paperFile, questionPages));
+				} catch {
+					lines.push(`${paperLabel} could not be read on this computer — the question's text is unavailable.`);
+				}
 			}
 
 			// THE GUIDELINE TEXT, not a pointer: during a sitting the pdf tools
@@ -857,7 +905,9 @@ function apRubricTool(ctx: ApToolContext): AgentTool<typeof apRubricInputObject>
 					);
 				}
 			}
-			return proseResult(lines.join("\n"));
+			const text = lines.join("\n");
+			if (text.length <= AP_RUBRIC_MAX_CHARS) return proseResult(text);
+			return proseResult(text.slice(0, AP_RUBRIC_MAX_CHARS - AP_RUBRIC_TRUNCATED.length) + AP_RUBRIC_TRUNCATED);
 		},
 	};
 }

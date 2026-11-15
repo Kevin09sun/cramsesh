@@ -70,6 +70,33 @@ function putPaper(courseId: string, paperId: string, questions: ApRealQuestion[]
 	return next;
 }
 
+/**
+ * Remove every indexed question of one paper — a re-saved paper is indexed
+ * again from scratch. Returns whether anything was removed. A course with no
+ * index, or one holding no question of that paper, is left untouched: no file
+ * is created, no bytes are rewritten, and nothing is announced.
+ */
+function forgetPaper(courseId: string, paperId: string): boolean {
+	const index = get(courseId);
+	if (!index) return false;
+	const questions = index.questions.filter((question) => question.paperId !== paperId);
+	if (questions.length === index.questions.length) return false;
+
+	const next: ApQuestionIndex = {
+		courseId,
+		version: 1,
+		updatedAt: new Date().toISOString(),
+		questions,
+	};
+	// The kept questions were valid a moment ago; this still guards the write
+	// so a bad edit can never leave an unreadable index behind.
+	if (!isApQuestionIndex(next)) throw new Error("invalid question index");
+	fs.mkdirSync(PATHS.apIndex, { recursive: true });
+	writeIndex(next);
+	emit("ap-changed", {});
+	return true;
+}
+
 /** Set one part's topic tag, or clear it with undefined. The change affects
  *  future gradings only: an attempt already recorded is never rewritten. */
 function retagPart(
@@ -113,6 +140,7 @@ function retagPart(
 
 export const apIndexStore = {
 	get,
+	forgetPaper,
 	putPaper,
 	retagPart,
 };

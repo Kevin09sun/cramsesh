@@ -150,6 +150,9 @@ export function submissionProblem(
 		numbers.add(question.number);
 
 		if (question.pages.length === 0) problems.push(`question ${question.number} has no pages`);
+		if (question.scoringPages.length === 0) {
+			problems.push(`question ${question.number} lists no scoring guideline pages`);
+		}
 		for (const page of question.pages) {
 			if (page < 1 || page > paperPages) {
 				problems.push(

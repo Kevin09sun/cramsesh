@@ -32,6 +32,7 @@ process.env.LH_DATA_DIR = TMP_DATA;
 
 const { createJobRunner, apIndexModelOverride } = await import("../src/agent/subagents/runner.ts");
 const { submissionProblem } = await import("../src/agent/subagents/ap-indexer.ts");
+const { apIndexStore } = await import("../src/store/ap-index.ts");
 
 const PAPERS_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "lh-ap-indexer-papers-"));
 
@@ -342,7 +343,7 @@ describe("ap_index job", () => {
 
 	it("rejects every structural hole and still stores a good pair in the same job", async () => {
 		// Years this suite's other cases do not touch (the paper folder is shared).
-		const years = [2030, 2031, 2032, 2033, 2034, 2035];
+		const years = [2030, 2031, 2032, 2033, 2034, 2035, 2036];
 		const docs: ApDocument[] = [];
 		for (const year of years) {
 			writePaper(`frq-${year}.pdf`);
@@ -366,6 +367,7 @@ describe("ap_index job", () => {
 		});
 		const holes = [
 			one({ pages: [] }),
+			one({ scoringPages: [] }),
 			one({ number: 0 }),
 			one({}, [part({ label: "A1" })]),
 			one({}, [part({ points: ["   "] })]),
@@ -382,11 +384,11 @@ describe("ap_index job", () => {
 
 		const { result } = await run(fake.port, fauxEngine(steps));
 
-		assert.deepEqual(fake.puts.map((put) => put.paperId), ["frq-2035"], "nothing malformed is written");
-		assert.deepEqual(result.indexed, [{ paperId: "frq-2035", questions: 1 }]);
+		assert.deepEqual(fake.puts.map((put) => put.paperId), ["frq-2036"], "nothing malformed is written");
+		assert.deepEqual(result.indexed, [{ paperId: "frq-2036", questions: 1 }]);
 		assert.deepEqual(
 			result.failed.map((failure) => failure.paperId),
-			["frq-2030", "frq-2031", "frq-2032", "frq-2033", "frq-2034"],
+			["frq-2030", "frq-2031", "frq-2032", "frq-2033", "frq-2034", "frq-2035"],
 			"every rejected hole fails only its own pair",
 		);
 		for (const failure of result.failed) {
@@ -524,6 +526,36 @@ describe("ap_index job", () => {
 		assert.equal(job.status, "done", "a skipped paper is not a failure");
 	});
 
+	it("indexes a paper again after forgetPaper cleared its old entries", async () => {
+		writePaper("frq-2037.pdf");
+		writePaper("scoring-2037.pdf");
+		const course = courseOf([frqDoc(2037), scoringDoc(2037)]);
+		// The real store, seeded with this paper's old index entries.
+		apIndexStore.putPaper(course.id, "frq-2037", [question("frq-2037", { year: 2037 })]);
+		const puts: { paperId: string; questions: ApRealQuestion[] }[] = [];
+		const port: NonNullable<JobRunnerDeps["apIndex"]> = {
+			course: (courseId) => (courseId === course.id ? course : null),
+			index: (courseId) => apIndexStore.get(courseId),
+			putPaper: (courseId, paperId, questions) => {
+				puts.push({ paperId, questions });
+				apIndexStore.putPaper(courseId, paperId, questions);
+			},
+			paperPath: (_courseId, file) => {
+				const full = path.join(PAPERS_DIR, file);
+				return fs.existsSync(full) ? full : null;
+			},
+		};
+
+		const skipped = await run(port, fauxEngine([]));
+		assert.deepEqual(skipped.result.indexed, [], "the seeded paper is skipped while its entries exist");
+		assert.equal(puts.length, 0);
+
+		assert.equal(apIndexStore.forgetPaper(course.id, "frq-2037"), true, "the stale entries are removed");
+		const redone = await run(port, fauxEngine([submit(GOOD_INDEX, "redone")]));
+		assert.deepEqual(redone.result.indexed, [{ paperId: "frq-2037", questions: 1 }]);
+		assert.equal(puts.length, 1, "the paper is indexed again");
+	});
+
 	it("reports a paper without its scoring guideline and writes nothing", async () => {
 		writePaper("frq-2024.pdf");
 		const course = courseOf([frqDoc(2024)]);
@@ -592,6 +624,26 @@ describe("ap_index job", () => {
 		);
 
 		assert.equal(problem, "question number 1.5 is not a positive integer");
+	});
+
+	it("rejects a question with no scoring guideline pages", () => {
+		const problem = submissionProblem(
+			{
+				questions: [
+					{
+						number: 1,
+						pages: [1],
+						scoringPages: [],
+						parts: [{ label: "a", topicId: "t_limits", points: ["A point"] }],
+					},
+				],
+			},
+			2,
+			2,
+			new Set(["t_limits"]),
+		);
+
+		assert.equal(problem, "question 1 lists no scoring guideline pages");
 	});
 
 	it("normalises a padded part label and trims a padded rubric point", async () => {

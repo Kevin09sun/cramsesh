@@ -531,6 +531,7 @@ export async function handleChatInput(
 						// free-response attempts (stage 2).
 						index: {
 							get: (courseId) => stores.apIndexStore.get(courseId),
+							forgetPaper: (courseId, paperId) => stores.apIndexStore.forgetPaper(courseId, paperId),
 							retagPart: (courseId, questionId, label, topicId) => {
 								stores.apIndexStore.retagPart(courseId, questionId, label, topicId);
 							},

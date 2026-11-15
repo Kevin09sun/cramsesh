@@ -111,6 +111,7 @@ describe("isApQuestionIndex", () => {
 	it("isApRealQuestion applies the same checks to one question", () => {
 		assert.equal(isApRealQuestion(question()), true);
 		assert.equal(isApRealQuestion({ ...question(), pages: [] }), false);
+		assert.equal(isApRealQuestion({ ...question(), scoringPages: [] }), false);
 		assert.equal(isApRealQuestion({ ...question(), number: 0 }), false);
 		assert.equal(isApRealQuestion({ ...question(), parts: [] }), false);
 		assert.equal(isApRealQuestion(null), false);
@@ -148,9 +149,9 @@ describe("isApQuestionIndex", () => {
 		assert.equal(isApQuestionIndex(rawIndex([question(), question()])), false);
 	});
 
-	it("rejects a question with an empty pages list, but allows empty scoringPages", () => {
+	it("rejects a question with an empty pages list or an empty scoringPages list", () => {
 		assert.equal(isApQuestionIndex(rawIndex([rawQuestion({ pages: [] })])), false);
-		assert.equal(isApQuestionIndex(rawIndex([rawQuestion({ scoringPages: [] })])), true);
+		assert.equal(isApQuestionIndex(rawIndex([rawQuestion({ scoringPages: [] })])), false);
 	});
 
 	it("rejects duplicate part labels", () => {

@@ -161,6 +161,57 @@ describe("AP question index store (AP prep stage 2, 2026-11-14)", () => {
 		assert.equal(apIndexStore.get("../escape"), null, "an invalid id reads as absent, never throws");
 	});
 
+	it("forgetPaper removes only that paper's questions and reports true", () => {
+		const courseId = "ap_forget_paper";
+		apIndexStore.putPaper(courseId, "frq-2022", [
+			question({ id: "2022-1", paperId: "frq-2022", scoringId: "scoring-2022", year: 2022, number: 1 }),
+		]);
+		apIndexStore.putPaper(courseId, "frq-2023", [question()]);
+
+		assert.equal(apIndexStore.forgetPaper(courseId, "frq-2023"), true, "something was removed");
+		assert.deepEqual(
+			apIndexStore.get(courseId)!.questions.map((item) => item.id),
+			["2022-1"],
+			"the other paper's question stays",
+		);
+		assert.equal(apIndexStore.forgetPaper(courseId, "frq-2023"), false, "nothing left to remove");
+	});
+
+	it("forgetPaper creates no file when the course has no index", () => {
+		const courseId = "ap_forget_absent";
+		assert.equal(fs.existsSync(indexFile(courseId)), false, "no index file yet");
+
+		assert.equal(apIndexStore.forgetPaper(courseId, "frq-2023"), false);
+		assert.equal(fs.existsSync(indexFile(courseId)), false, "an absent index is never created");
+		assert.equal(apIndexStore.get(courseId), null);
+	});
+
+	it("forgetPaper leaves the bytes alone when nothing matches", () => {
+		const courseId = "ap_forget_no_match";
+		apIndexStore.putPaper(courseId, "frq-2023", [question()]);
+		const before = fs.readFileSync(indexFile(courseId), "utf-8");
+
+		assert.equal(apIndexStore.forgetPaper(courseId, "frq-1999"), false);
+		assert.equal(fs.readFileSync(indexFile(courseId), "utf-8"), before, "a no-op never rewrites the file");
+	});
+
+	it("forgetPaper announces ap-changed only when it wrote", () => {
+		const courseId = "ap_forget_events";
+		apIndexStore.putPaper(courseId, "frq-2023", [question()]);
+		let announces = 0;
+		const off = subscribe((event) => {
+			if (event.type === "ap-changed") announces++;
+		});
+
+		assert.equal(apIndexStore.forgetPaper(courseId, "frq-2023"), true);
+		assert.equal(announces, 1, "a real removal announces");
+
+		assert.equal(apIndexStore.forgetPaper(courseId, "frq-2023"), false);
+		assert.equal(announces, 1, "a no-op never announces");
+
+		off();
+	});
+
 	it("retagPart sets and clears a part's topic tag", () => {
 		const courseId = "ap_retag";
 		apIndexStore.putPaper(courseId, "frq-2023", [question()]);

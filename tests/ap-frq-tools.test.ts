@@ -209,6 +209,7 @@ function fakeIndex(initial: ApQuestionIndex | null, options: { retagError?: stri
 				),
 			};
 		},
+		forgetPaper: () => false,
 	};
 	return { port, retags, current: () => current };
 }
@@ -526,6 +527,31 @@ describe("ap_frq", () => {
 		assert.equal(result.terminate, true);
 	});
 
+	it("REFUSES a question already answered in this chat while another eligible question remains", async () => {
+		const used = questionOf({ id: "2023-1", number: 1 });
+		const unused = questionOf({ id: "2023-2", number: 2 });
+		const h = harness({
+			sitting: FRQ,
+			index: indexOf(used, unused),
+			// No course attempt yet: the answer lives only in this chat's record.
+			answeredCount: (questionId) => (questionId === "2023-1" ? 1 : 0),
+		});
+		const result = await h.tools.ap_frq!.execute("call_q", { questionId: "2023-1" } as never);
+		assert.equal(result.isError, true);
+		assert.deepEqual(problemsOf(result), ["2023-1 was already answered; ask 2023-2 first"]);
+	});
+
+	it("allows a question answered in this chat when every other eligible question is used too", async () => {
+		const h = harness({
+			sitting: FRQ,
+			index: indexOf(questionOf({ id: "2023-1", number: 1 }), questionOf({ id: "2023-2", number: 2 })),
+			answeredCount: () => 1,
+		});
+		const result = await h.tools.ap_frq!.execute("call_q", { questionId: "2023-1" } as never);
+		assert.equal(result.isError, undefined, "nothing unused remains, so the question may be re-posed");
+		assert.equal(result.terminate, true);
+	});
+
 	it("poses the released question as a pending question and ends the turn", async () => {
 		const h = harness({ sitting: FRQ });
 		const result = await h.tools.ap_frq!.execute("call_q", { questionId: "2023-1" } as never);
@@ -597,6 +623,88 @@ describe("ap_rubric", () => {
 		assert.match(text, /^Scoring guideline text \(pages 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15; first 15 pages\):$/m);
 		assert.match(text, /Scoring page 15/);
 		assert.doesNotMatch(text, /Scoring page 16/);
+	});
+
+	it("caps the question's own pages at 15 and says so", async () => {
+		fs.writeFileSync(
+			path.join(PAPERS_DIR, "frq-2027.pdf"),
+			tinyPdf(
+				Array.from({ length: 20 }, (_, index) => ({
+					runs: [{ text: `Question page ${index + 1}`, x: 36, y: 720 }],
+				})),
+			),
+		);
+		const paper: ApDocument = {
+			id: "frq-2027",
+			kind: "frq",
+			label: "2027 FRQ",
+			year: 2027,
+			url: "",
+			file: "frq-2027.pdf",
+			pages: 20,
+		};
+		const course = courseOf({ documents: [paper, scoringDoc()] });
+		const question = questionOf({
+			id: "2027-1",
+			paperId: "frq-2027",
+			year: 2027,
+			number: 1,
+			pages: Array.from({ length: 20 }, (_, index) => index + 1),
+		});
+		const h = harness({ course, sitting: FRQ, answered: () => "answered", index: indexOf(question) });
+		const result = await h.tools.ap_rubric!.execute("call_r", { questionId: "2027-1" } as never);
+		assert.equal(result.isError, undefined);
+		const text = (result.content[0] as { text: string }).text;
+		assert.match(text, /^Question text \(pages 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15; first 15 pages\):$/m);
+		assert.match(text, /Question page 15/);
+		assert.doesNotMatch(text, /Question page 16/);
+	});
+
+	it("caps the whole result at 60,000 characters with every rubric point intact", async () => {
+		// A single PDF text run is clipped by extraction to roughly a page
+		// width, so the long text is emitted as many runs across 15 pages.
+		fs.writeFileSync(
+			path.join(PAPERS_DIR, "frq-2028.pdf"),
+			tinyPdf(
+				Array.from({ length: 15 }, () => ({
+					runs: Array.from({ length: 50 }, (_, index) => ({
+						text: "word ".repeat(30),
+						x: 36,
+						y: 720 - index * 12,
+					})),
+				})),
+			),
+		);
+		const paper: ApDocument = {
+			id: "frq-2028",
+			kind: "frq",
+			label: "2028 FRQ",
+			year: 2028,
+			url: "",
+			file: "frq-2028.pdf",
+			pages: 15,
+		};
+		const course = courseOf({ documents: [paper, scoringDoc()] });
+		const question = questionOf({
+			id: "2028-1",
+			paperId: "frq-2028",
+			year: 2028,
+			number: 1,
+			pages: Array.from({ length: 15 }, (_, index) => index + 1),
+		});
+		const h = harness({ course, sitting: FRQ, answered: () => "answered", index: indexOf(question) });
+		const result = await h.tools.ap_rubric!.execute("call_r", { questionId: "2028-1" } as never);
+		assert.equal(result.isError, undefined);
+		const text = (result.content[0] as { text: string }).text;
+		assert.ok(text.length <= 60_000, `the result is capped (was ${text.length} characters)`);
+		assert.ok(text.endsWith("[rubric output truncated]"), "a truncated result ends with the fixed line");
+		assert.match(text, /^a1: States the substitution\.$/m);
+		assert.match(text, /^a2: Evaluates the integral\.$/m);
+		assert.match(text, /^b1: Justifies the step\.$/m);
+		assert.ok(
+			text.indexOf("a1: States the substitution.") < text.indexOf("word word"),
+			"the points come before the extracted question text",
+		);
 	});
 
 	it("says the scoring guideline is missing in one line and continues with the rubric", async () => {

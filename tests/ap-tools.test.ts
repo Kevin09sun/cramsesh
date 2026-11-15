@@ -24,7 +24,7 @@ import type { JobRecord } from "../src/core/contracts.ts";
 import type { JobStore } from "../src/core/ports.ts";
 import { QUESTION_TOOLS, toolQuestionKind } from "../src/core/pending.ts";
 import { createApAgent } from "../src/agent/teacher-agent.ts";
-import { apTools, capPdfExtract, AP_PDF_EXTRACT_MAX_PAGES, type ApCourseStorePort, type ApPapersPort, type ApToolContext } from "../src/agent/tools/ap.ts";
+import { apTools, capPdfExtract, AP_PDF_EXTRACT_MAX_PAGES, type ApCourseStorePort, type ApIndexPort, type ApPapersPort, type ApToolContext } from "../src/agent/tools/ap.ts";
 import { tinyPdf } from "./helpers/tiny-pdf.ts";
 
 // ── fixtures ─────────────────────────────────────────────────────────────────
@@ -192,6 +192,7 @@ function ctxOf(
 	courses: ApCourseStorePort,
 	papers: ApPapersPort,
 	sitting?: ApSitting,
+	index?: ApIndexPort,
 ): ApToolContext {
 	return {
 		chatId: "chat_now",
@@ -200,12 +201,35 @@ function ctxOf(
 		papers,
 		// Stage 2 seams: an empty index, no recorded attempts and no answers.
 		// The free-response suite (ap-frq-tools.test.ts) exercises them.
-		index: { get: () => null, retagPart: () => {} },
+		index: index ?? { get: () => null, retagPart: () => {}, forgetPaper: () => false },
 		attempts: { record: (courseId) => courses.get(courseId)! },
 		answeredFrq: () => "none",
 		answeredFrqCount: () => 0,
 		...(sitting ? { sitting } : {}),
 	};
+}
+
+interface FakeIndexCalls {
+	forgetPaper: Array<{ courseId: string; paperId: string }>;
+}
+
+/** A standalone index port for ap_save_document's re-save tests: it records
+ *  every forgetPaper call and returns the configured outcome. */
+function fakeIndexPort(options: { removed?: boolean; error?: string } = {}): {
+	port: ApIndexPort;
+	calls: FakeIndexCalls;
+} {
+	const calls: FakeIndexCalls = { forgetPaper: [] };
+	const port: ApIndexPort = {
+		get: () => null,
+		retagPart: () => {},
+		forgetPaper: (courseId, paperId) => {
+			if (options.error) throw new Error(options.error);
+			calls.forgetPaper.push({ courseId, paperId });
+			return options.removed ?? false;
+		},
+	};
+	return { port, calls };
 }
 
 /** A scripted pi engine — the agent factories need one injected (BYOK). */
@@ -619,6 +643,112 @@ describe("ap_save_document", () => {
 		assert.equal(papers.calls.download.length, 0);
 		assert.equal(papers.calls.importFile.length, 0);
 		assert.equal(fake.calls.putDocument.length, 0);
+	});
+});
+
+// ── ap_save_document clears the paper's old index ───────────────────────────
+
+describe("ap_save_document — re-saving clears the paper's index", () => {
+	it("forgets the re-saved frq paper and says its index entries were removed", async () => {
+		const fake = fakeCourses(courseOf());
+		const papers = fakePapers();
+		const index = fakeIndexPort({ removed: true });
+		const tool = apTools(ctxOf(fake.courses, papers.papers, undefined, index.port)).ap_save_document!;
+		const result = await tool.execute("call_save", {
+			kind: "frq",
+			label: "2023 FRQ",
+			year: 2023,
+			url: "https://apcentral.collegeboard.org/frq-2023.pdf",
+		} as never);
+
+		assert.equal(result.isError, undefined);
+		assert.deepEqual(index.calls.forgetPaper, [{ courseId: "ap_course_1", paperId: "frq-2023" }]);
+		assert.equal(
+			(result.content[0] as { text: string }).text,
+			"Saved 2023 FRQ as frq-2023.pdf (2 pages). Its earlier index entries were removed; run ap_index_papers to index it again.",
+		);
+	});
+
+	it("forgets the paired paper when a scoring guideline is re-saved, including a set", async () => {
+		const cases: Array<{ set?: number; paperId: string }> = [
+			{ paperId: "frq-2023" },
+			{ set: 2, paperId: "frq-2023-set2" },
+		];
+		for (const { set, paperId } of cases) {
+			const fake = fakeCourses(courseOf());
+			const papers = fakePapers();
+			const index = fakeIndexPort({ removed: true });
+			const tool = apTools(ctxOf(fake.courses, papers.papers, undefined, index.port)).ap_save_document!;
+			const result = await tool.execute("call_save", {
+				kind: "scoring",
+				label: "2023 Scoring",
+				year: 2023,
+				...(set === undefined ? {} : { set }),
+				url: "https://apcentral.collegeboard.org/scoring-2023.pdf",
+			} as never);
+
+			assert.equal(result.isError, undefined);
+			assert.deepEqual(index.calls.forgetPaper, [{ courseId: "ap_course_1", paperId }]);
+		}
+	});
+
+	it("never forgets on a ced save or a failed save", async () => {
+		const fake = fakeCourses(courseOf());
+		const index = fakeIndexPort({ removed: true });
+		const cedTool = apTools(ctxOf(fake.courses, fakePapers().papers, undefined, index.port)).ap_save_document!;
+		await cedTool.execute("call_save", {
+			kind: "ced",
+			label: "Course and Exam Description",
+			url: "https://apcentral.collegeboard.org/ced.pdf",
+		} as never);
+		assert.equal(index.calls.forgetPaper.length, 0, "the course description has no paper index");
+
+		const failing = fakePapers({ downloadError: "Only College Board addresses are accepted" });
+		const failedTool = apTools(ctxOf(fake.courses, failing.papers, undefined, index.port)).ap_save_document!;
+		const failed = await failedTool.execute("call_save", {
+			kind: "frq",
+			label: "2023 FRQ",
+			year: 2023,
+			url: "https://example.com/frq-2023.pdf",
+		} as never);
+		assert.equal(failed.isError, true);
+		assert.equal(index.calls.forgetPaper.length, 0, "a failed save forgets nothing");
+	});
+
+	it("keeps today's text when nothing was removed", async () => {
+		const fake = fakeCourses(courseOf());
+		const papers = fakePapers();
+		const index = fakeIndexPort({ removed: false });
+		const tool = apTools(ctxOf(fake.courses, papers.papers, undefined, index.port)).ap_save_document!;
+		const result = await tool.execute("call_save", {
+			kind: "frq",
+			label: "2023 FRQ",
+			year: 2023,
+			url: "https://apcentral.collegeboard.org/frq-2023.pdf",
+		} as never);
+
+		assert.equal(result.isError, undefined);
+		assert.deepEqual(index.calls.forgetPaper, [{ courseId: "ap_course_1", paperId: "frq-2023" }]);
+		assert.equal((result.content[0] as { text: string }).text, "Saved 2023 FRQ as frq-2023.pdf (2 pages).");
+	});
+
+	it("still reports the save when clearing the index fails", async () => {
+		const fake = fakeCourses(courseOf());
+		const papers = fakePapers();
+		const index = fakeIndexPort({ error: "invalid question index" });
+		const tool = apTools(ctxOf(fake.courses, papers.papers, undefined, index.port)).ap_save_document!;
+		const result = await tool.execute("call_save", {
+			kind: "frq",
+			label: "2023 FRQ",
+			year: 2023,
+			url: "https://apcentral.collegeboard.org/frq-2023.pdf",
+		} as never);
+
+		assert.equal(result.isError, undefined, "a failed index clear never fails the save");
+		assert.equal(
+			(result.content[0] as { text: string }).text,
+			"Saved 2023 FRQ as frq-2023.pdf (2 pages). The index for this paper could not be cleared; run ap_index_papers and check the result.",
+		);
 	});
 });
 

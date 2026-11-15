@@ -143,7 +143,7 @@ export function isApRealQuestion(value: unknown): value is ApRealQuestion {
 	if (question.set !== undefined && !isPositiveInteger(question.set)) return false;
 	if (!isPositiveInteger(question.number)) return false;
 	if (!isPositivePageList(question.pages) || question.pages.length === 0) return false;
-	if (!isPositivePageList(question.scoringPages)) return false;
+	if (!isPositivePageList(question.scoringPages) || question.scoringPages.length === 0) return false;
 	if (!Array.isArray(question.parts) || question.parts.length === 0) return false;
 	if (!question.parts.every(isRealPart)) return false;
 

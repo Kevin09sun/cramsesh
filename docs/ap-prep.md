@@ -38,7 +38,7 @@ The indexing result arrives as a message in the session. It says how many questi
 - the card's header is **Released papers indexed** when the papers were read, or **Indexing failed** when none could be;
 - the body reports the count and any part left without a topic tag.
 
-Each paper is indexed once. Papers already in the index are skipped, so asking for papers again only indexes what is new. The **Official documents** block on the course page shows each released paper's count — `3 questions indexed`, `1 question indexed`, or `not indexed yet` — and the course total as `Released questions indexed: <n>`.
+Each paper is indexed once. Papers already in the index are skipped, so asking for papers again only indexes what is new. If a paper or its scoring guideline was saved from the wrong file, ask the tutor in a papers session to save the right one again — that removes the paper's old index entries — and it is then indexed again. The **Official documents** block on the course page shows each released paper's count — `3 questions indexed`, `1 question indexed`, or `not indexed yet` — and the course total as `Released questions indexed: <n>`.
 
 ## The course page
 
@@ -93,7 +93,7 @@ Below the page there is one answer box per part. Each box is labelled with the p
 
 **Attach photo** adds a photo of your written work, up to six; each can be removed before you submit. The tutor sees a photo while it grades and says what it read from the page before grading. The image is not kept in the session: the answer record lists each attached photo by file name as `Photo attached: <name>`, and the tutor's written read-back is what stays with the transcript.
 
-**I don't know** covers the whole question. It disables the answer boxes and photos and submits every part as blank.
+**I don't know** covers the whole question. It disables the answer boxes and photos, but anything already typed or attached is still sent, marked as "I don't know"; the tutor records the question as not known.
 
 **Submit answer** sends every part at once. After you submit, the conversation keeps a record of your answer: each part under its letter (a blank part is an em dash) and each photo by file name. **Show question** reopens the original page. That record shows no verdict — the score card is the only place a result is shown.
 
