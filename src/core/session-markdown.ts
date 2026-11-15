@@ -110,6 +110,49 @@ function toolResultBody(result: ToolResultMessage, ctx?: MarkdownContext): { hea
 		return { heading: "AP free-response", body };
 	}
 
+	// AP generated free response (stage 3): the tutor wrote this question, so
+	// the committed answers and rubric points live in the posing call's
+	// arguments and NEVER appear here. What is shown is the title, the stem,
+	// each part's prompt and the learner's answer to it, and a plain "Photo
+	// attached" per photo.
+	if (result.toolName === "ap_frq_gen") {
+		const answer = result.details as Partial<QuestionAnswerData> | undefined;
+		const input = ctx?.calls.get(result.toolCallId)?.args as
+			| { title?: unknown; stem?: unknown; parts?: unknown }
+			| undefined;
+		const title =
+			typeof input?.title === "string" && input.title.trim()
+				? input.title
+				: typeof answer?.frq?.title === "string" && answer.frq.title
+					? answer.frq.title
+					: typeof answer?.questionText === "string" && answer.questionText
+						? answer.questionText
+						: "(no question title)";
+		const body: string[] = [`**${title}**`];
+		const stem = typeof input?.stem === "string" ? input.stem.trim() : "";
+		if (stem) body.push(stem);
+		if (answer?.dismissed === true) body.push("The learner skipped this question.");
+		else if (answer?.dontKnow === true) body.push("The learner did not know.");
+		else {
+			const answers = new Map(
+				(Array.isArray(answer?.parts) ? answer.parts : []).map((part) => [part.label, part.text] as const),
+			);
+			const parts = Array.isArray(input?.parts) ? input.parts : [];
+			for (const rawPart of parts) {
+				const part = rawPart as { label?: unknown; prompt?: unknown };
+				if (typeof part.label !== "string") continue;
+				const label = part.label.trim().toLowerCase();
+				const prompt = typeof part.prompt === "string" ? part.prompt.trim() : "";
+				body.push(prompt ? `**(${label})** ${prompt}` : `**(${label})**`);
+				const reply = answers.get(label);
+				body.push(reply !== undefined && reply.trim() ? reply : "—");
+			}
+		}
+		const photos = Array.isArray(answer?.photos) ? answer.photos : [];
+		for (let i = 0; i < photos.length; i++) body.push("Photo attached");
+		return { heading: "AP free-response (generated)", body };
+	}
+
 	// AP multiple choice: the export shows the question, the options, the
 	// learner's pick and reasoning — never a correctness mark, the correct
 	// option or the option notes (the tutor's reply is the verdict).

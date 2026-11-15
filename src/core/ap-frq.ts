@@ -12,6 +12,7 @@
  */
 
 import { scopedQueue, topicInScope, type ApCourseRecord, type ApDocument, type ApSittingScope } from "./ap.ts";
+import type { ApFrqGenToolInput } from "./question-core.ts";
 import type { AnswerResult } from "./test-prep.ts";
 
 // ─── records ────────────────────────────────────────────────────────────────
@@ -187,6 +188,36 @@ export function isApQuestionIndex(value: unknown): value is ApQuestionIndex {
 	return true;
 }
 
+// ─── generated questions (AP prep stage 3) ──────────────────────────────────
+
+/**
+ * A question the tutor wrote itself gets a stable id from the call that posed
+ * it, distinct from a released paper's `<year>-<number>`: `gen-<toolCallId>`.
+ */
+export function apGenQuestionId(toolCallId: string): string {
+	return `gen-${toolCallId}`;
+}
+
+/**
+ * The committed rubric of a generated question as something `attemptProblems`
+ * and `scoreAttempt` can grade: each input part becomes an `ApRealPart` whose
+ * point ids are `<label><n>` (1-based, in the committed order). Labels are
+ * trimmed and lower-cased exactly as `apFrqGenInputProblems` validated them,
+ * and point text is trimmed.
+ */
+export function generatedScoringQuestion(input: ApFrqGenToolInput): Pick<ApRealQuestion, "parts"> {
+	return {
+		parts: input.parts.map((part) => {
+			const label = part.label.trim().toLowerCase();
+			return {
+				label,
+				topicId: part.topicId,
+				points: part.points.map((text, index) => ({ id: `${label}${index + 1}`, text: text.trim() })),
+			};
+		}),
+	};
+}
+
 // ─── scoring ────────────────────────────────────────────────────────────────
 
 export interface ApPartScore {
@@ -210,7 +241,7 @@ export interface ApAttemptScore {
  * named in the question's part order.
  */
 export function attemptProblems(
-	q: ApRealQuestion,
+	q: Pick<ApRealQuestion, "parts">,
 	parts: { label: string; earned: string[] }[],
 ): string[] {
 	const problems: string[] = [];
@@ -258,7 +289,7 @@ export function attemptProblems(
  * contributes no topic and carries no `topicId`.
  */
 export function scoreAttempt(
-	q: ApRealQuestion,
+	q: Pick<ApRealQuestion, "parts">,
 	attempt: Pick<ApRealAttempt, "parts" | "dontKnow">,
 	knownTopicIds: ReadonlySet<string>,
 ): ApAttemptScore {

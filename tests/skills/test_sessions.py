@@ -224,6 +224,26 @@ class SessionsTest(unittest.TestCase):
         self.assertNotIn("Unsupported/unrendered tool-result semantics", text)
         self.assertNotIn("Unsupported/unrendered tool semantics", text)
 
+    def test_ap_frq_gen_answers_are_question_tools(self):
+        payload = {"kind": "frq", "questionText": "Generated FRQ snapshot", "dontKnow": False,
+                   "parts": [{"label": "a", "text": "generated part answer"},
+                             {"label": "b", "text": ""}],
+                   "photos": ["C:/photos/work.jpg"],
+                   "frq": {"questionId": "gen-call1",
+                           "title": "Rates of change in a cooling model"}}
+        source = record([
+            assistant(call("ap_frq_gen", {"title": "Rates of change in a cooling model"})),
+            result("ap_frq_gen", payload),
+        ])
+        self.assertIn("ap_frq_gen", sessions.QUESTION_TOOLS)
+        text = self.render(source)
+        self.assertIn("Learner answer snapshot", text)
+        self.assertIn("Generated FRQ snapshot", text)
+        self.assertIn("generated part answer", text)
+        self.assertIn("Rates of change in a cooling model", text)
+        self.assertNotIn("Unsupported/unrendered tool-result semantics", text)
+        self.assertNotIn("Unsupported/unrendered tool semantics", text)
+
     def test_json_content_fallback_when_details_absent_or_null(self):
         payload = {"kind": "explain", "text": "fallback answer", "note": "old note", "thinkingWhileReading": "fallback reading", "confidence": 0}
         for details in ({}, {"details": None}):

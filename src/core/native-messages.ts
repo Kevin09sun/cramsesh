@@ -78,6 +78,14 @@ export const AP_MCQ_ANSWER_FRAME =
 export const AP_FRQ_ANSWER_FRAME =
 	"The learner answered the ap_frq question you posed. This tool result IS the learner's answer to each part and, when present, the paths of photos of their written work — call ap_rubric for this question, look at each photo with ap_view_photo, grade every rubric point, then call ap_record_frq.";
 
+/** The contract sentence for an AP generated free-response answer (stage 3):
+ *  the result IS the learner's per-part answer plus, when present, photo
+ *  paths. The rubric is already committed in the posing call, so there is
+ *  nothing to fetch — every committed point is graded and recorded with
+ *  ap_record_gen. Scoped to its own tool like the other frames. */
+export const AP_FRQ_GEN_ANSWER_FRAME =
+	"The learner answered the ap_frq_gen question you posed. This tool result IS the learner's answer to each part and, when present, the paths of photos of their written work — look at each photo with ap_view_photo, grade every rubric point you committed, then call ap_record_gen.";
+
 // ─── The record's message type ───────────────────────────────────────────────
 
 /**
@@ -238,9 +246,10 @@ export function newAnswerResult(
 	answer: unknown,
 ): LhMessage & ToolResultMessage {
 	const compact = JSON.stringify(compactAnswerForModel(answer as QuestionAnswerData));
-	// check_point, ap_mcq and ap_frq only (controller rulings, 2026-11-11 /
-	// stage 1 / stage 2): state that this result IS the learner's answer.
-	// Dismissals are not answers and keep the bare compact record.
+	// check_point, ap_mcq, ap_frq and ap_frq_gen only (controller rulings,
+	// 2026-11-11 / stage 1 / stage 2 / stage 3): state that this result IS the
+	// learner's answer. Dismissals are not answers and keep the bare compact
+	// record.
 	const frame =
 		toolName === "check_point"
 			? CHECK_POINT_ANSWER_FRAME
@@ -248,7 +257,9 @@ export function newAnswerResult(
 				? AP_MCQ_ANSWER_FRAME
 				: toolName === "ap_frq"
 					? AP_FRQ_ANSWER_FRAME
-					: undefined;
+					: toolName === "ap_frq_gen"
+						? AP_FRQ_GEN_ANSWER_FRAME
+						: undefined;
 	const framed = frame !== undefined && !(answer as QuestionAnswerData | null)?.dismissed;
 	return {
 		id: newMessageId(),

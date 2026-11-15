@@ -290,7 +290,6 @@ function FrqAnsweredCard({
 	const [questionOpen, setQuestionOpen] = useState(false);
 	const details = parseApFrqInput(input)?.details;
 	const frq = answer.frq;
-	const showPages = frq !== undefined && apCourseId !== undefined;
 
 	return (
 		<div
@@ -308,7 +307,10 @@ function FrqAnsweredCard({
 					<ToolContentResponse>{details}</ToolContentResponse>
 				</div>
 			)}
-			{showPages && (
+			{frq !== undefined &&
+				apCourseId !== undefined &&
+				frq.file !== undefined &&
+				frq.pages !== undefined && (
 				<div className="mb-3" data-testid="answered-frq-pages">
 					<button
 						type="button"
