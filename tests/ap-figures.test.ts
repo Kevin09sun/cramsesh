@@ -133,9 +133,15 @@ describe("figureState", () => {
 			["a declared width over 8000", '<svg width="8001" height="10"></svg>'],
 			["a declared height over 8000", '<svg width="10" height="8001"></svg>'],
 			["a viewBox width over 8000", '<svg viewBox="0 0 8001 10"></svg>'],
+			["a viewBox height over 8000", '<svg viewBox="0 0 10 8001"></svg>'],
 			["no size attributes and no viewBox", "<svg><rect/></svg>"],
 			["percentage sizes without a viewBox", '<svg width="100%" height="100%"></svg>'],
 			["only a stroke-width attribute", '<svg height="10" stroke-width="5"></svg>'],
+			["a tall, thin figure whose rendered height exceeds 8000", '<svg width="100" height="5000"></svg>'],
+			[
+				"an unreadable root size shadowed by a child viewBox",
+				'<svg width="1e9"><pattern viewBox="0 0 10 10"/></svg>',
+			],
 		];
 		for (const [label, svg] of cases) {
 			const job = makeJob(chatId);
@@ -150,7 +156,12 @@ describe("figureState", () => {
 			["plain attributes", '<svg width="100" height="50"></svg>'],
 			["px attributes", '<svg width="100px" height="50px"></svg>'],
 			["a viewBox fallback", '<svg viewBox="0 0 100 50"></svg>'],
-			["exactly at the 8000 bound", '<svg width="8000" height="8000"></svg>'],
+			["exactly at the 8000 side bound", '<svg width="8000" height="8000"></svg>'],
+			["exactly at the 8000 rendered-height bound", '<svg width="1200" height="8000"></svg>'],
+			[
+				"a root size beside a child with a huge width",
+				'<svg width="100" height="50"><rect width="999999" height="999999"/></svg>',
+			],
 		];
 		for (const [label, svg] of cases) {
 			const job = makeJob(chatId);
@@ -201,6 +212,8 @@ describe("figurePng", () => {
 		jobStore.updateJob(oversize.id, { status: "done", result: { svg: "x".repeat(MAX_SVG_BYTES + 1) } });
 		const unreadable = makeJob(chatId);
 		jobStore.updateJob(unreadable.id, { status: "done", result: { svg: "<svg><rect/></svg>" } });
+		const tallThin = makeJob(chatId);
+		jobStore.updateJob(tallThin.id, { status: "done", result: { svg: '<svg width="100" height="5000"></svg>' } });
 		const foreign = makeReadyJob(other);
 		const research = makeJob(chatId, "research");
 
@@ -215,6 +228,7 @@ describe("figurePng", () => {
 			failed.id,
 			oversize.id,
 			unreadable.id,
+			tallThin.id,
 			foreign.id,
 			research.id,
 			"job_never_existed",
@@ -256,6 +270,8 @@ describe("GET /api/chats/[id]/figures/[jobId]", () => {
 		const pending = makeJob(chatId);
 		const failed = makeJob(chatId);
 		jobStore.updateJob(failed.id, { status: "error" });
+		const tallThin = makeJob(chatId);
+		jobStore.updateJob(tallThin.id, { status: "done", result: { svg: '<svg width="100" height="5000"></svg>' } });
 		const foreign = makeReadyJob(other);
 		const research = makeJob(chatId, "research");
 
@@ -265,7 +281,7 @@ describe("GET /api/chats/[id]/figures/[jobId]", () => {
 			return PNG;
 		});
 
-		for (const jobId of [pending.id, failed.id, foreign.id, research.id, "job_never_existed"]) {
+		for (const jobId of [pending.id, failed.id, tallThin.id, foreign.id, research.id, "job_never_existed"]) {
 			assert.equal((await getFigure(chatId, jobId)).status, 404, `job ${jobId} is not servable`);
 		}
 		for (const [id, jobId] of [

@@ -12,8 +12,10 @@
  * rasterised PNG leaves this module. Rendering uses the headless module's
  * native resvg path (`nativeOnly`): a stored figure never executes markup,
  * so no browser is involved and none is required. Figures are rendered 1200
- * px wide (the learner's screen is high-density). The rasteriser is a test
- * seam; tests inject fixed bytes and nothing paints a real SVG.
+ * px wide (the learner's screen is high-density) at the drawing's own aspect;
+ * a rendered height above 8000 px is refused rather than allocated. The
+ * rasteriser is a test seam; tests inject fixed bytes and nothing paints a
+ * real SVG.
  */
 
 import { getHeadless } from "../agent/subagents/headless.ts";
@@ -31,8 +33,8 @@ const MAX_FIGURE_SVG_BYTES = 512 * 1024;
 /** The width every figure is rendered at. */
 const FIGURE_WIDTH = 1200;
 
-/** The largest declared side a drawing may have; a larger canvas is refused
- *  rather than allocated. */
+/** The largest declared side AND the largest rendered height; anything
+ *  bigger is refused rather than allocated. */
 const MAX_FIGURE_SIDE = 8000;
 
 /** The drawing job owned by this chat, or null for anything else. */
@@ -50,11 +52,19 @@ interface FigureSize {
 	height: number;
 }
 
+/** The opening tag of the ROOT <svg> element, or null when there is none.
+ *  A child `<rect width=…>` or `<pattern viewBox=…>` must never stand in for
+ *  the root's own size. */
+function rootSvgTag(svg: string): string | null {
+	const match = svg.match(/<svg\b(?:[^>"']|"[^"]*"|'[^']*')*>/);
+	return match ? match[0] : null;
+}
+
 /** One length attribute: a plain number with an optional lowercase `px`
- *  unit. A percentage or anything else is not a readable size. */
-function lengthAttribute(svg: string, name: "width" | "height"): number | null {
+ *  unit. A percentage, exponent or anything else is not a readable size. */
+function lengthAttribute(tag: string, name: "width" | "height"): number | null {
 	// Anchored to whitespace so `stroke-width` is never read as `width`.
-	const match = svg.match(
+	const match = tag.match(
 		new RegExp(`(?:^|\\s)${name}\\s*=\\s*["']?(\\d+(?:\\.\\d+)?)(?:px)?["']?(?=\\s|\\/?>)`),
 	);
 	if (!match) return null;
@@ -62,15 +72,18 @@ function lengthAttribute(svg: string, name: "width" | "height"): number | null {
 	return Number.isFinite(value) && value > 0 ? value : null;
 }
 
-/** The drawing's declared size: its width and height attributes when both
- *  are plain numbers (an optional `px`), else its viewBox. Null when neither
- *  names a usable size. */
+/** The drawing's declared size: the ROOT tag's width and height attributes
+ *  when both are plain numbers (an optional `px`), else its viewBox. Null
+ *  when neither names a usable size. */
 function declaredSize(svg: string): FigureSize | null {
-	const width = lengthAttribute(svg, "width");
-	const height = lengthAttribute(svg, "height");
+	const root = rootSvgTag(svg);
+	if (!root) return null;
+
+	const width = lengthAttribute(root, "width");
+	const height = lengthAttribute(root, "height");
 	if (width !== null && height !== null) return { width, height };
 
-	const viewBox = svg.match(/(?:^|\s)viewBox\s*=\s*["']([^"']*)["']/);
+	const viewBox = root.match(/(?:^|\s)viewBox\s*=\s*["']([^"']*)["']/);
 	if (!viewBox) return null;
 	const parts = viewBox[1]!.trim().split(/[\s,]+/).map(Number);
 	if (parts.length !== 4) return null;
@@ -88,6 +101,18 @@ function declaredSize(svg: string): FigureSize | null {
 	return { width: boxWidth, height: boxHeight };
 }
 
+/** The declared size a figure may be rendered at, or null when it cannot be
+ *  read or its canvas would be too large. */
+function renderableSize(svg: string): FigureSize | null {
+	const size = declaredSize(svg);
+	if (!size || size.width > MAX_FIGURE_SIDE || size.height > MAX_FIGURE_SIDE) return null;
+	// The renderer scales to FIGURE_WIDTH and keeps the aspect, so this is
+	// the height it would allocate.
+	const height = Math.round((size.height / size.width) * FIGURE_WIDTH);
+	if (!Number.isFinite(height) || height > MAX_FIGURE_SIDE) return null;
+	return size;
+}
+
 /** The state of a job this module already knows belongs to the chat. */
 function stateOf(job: JobRecord): FigureState {
 	if (job.status === "running") return "pending";
@@ -95,9 +120,7 @@ function stateOf(job: JobRecord): FigureState {
 	const svg = result?.svg;
 	if (job.status !== "done" || typeof svg !== "string" || svg.length === 0) return "failed";
 	if (Buffer.byteLength(svg, "utf8") > MAX_FIGURE_SVG_BYTES) return "failed";
-	const size = declaredSize(svg);
-	if (!size || size.width > MAX_FIGURE_SIDE || size.height > MAX_FIGURE_SIDE) return "failed";
-	return "ready";
+	return renderableSize(svg) ? "ready" : "failed";
 }
 
 /** A drawing job of this chat, by job id. "unknown" covers another chat's
@@ -107,14 +130,12 @@ export function figureState(chatId: string, jobId: string): FigureState {
 	return job ? stateOf(job) : "unknown";
 }
 
-/** resvg's native path takes its width from `svgViewport`, which honours an
- *  option width only when a height is supplied too — so pass the proportional
- *  height as well; the renderer keeps the drawing's aspect. */
+/** resvg's native fitTo-width path scales the drawing to FIGURE_WIDTH and
+ *  keeps its own aspect — the rendered height is never passed to it. The
+ *  headless seam's `svgViewport` accepts an option width only alongside a
+ *  height, so a gate height rides along; it does not size the output. */
 async function rasteriseWithHeadless(svg: string): Promise<Buffer> {
-	const size = declaredSize(svg);
-	if (!size) throw new Error("figure has no readable size");
-	const height = Math.max(1, Math.round((size.height / size.width) * FIGURE_WIDTH));
-	return getHeadless().renderSvg(svg, { width: FIGURE_WIDTH, height, nativeOnly: true });
+	return getHeadless().renderSvg(svg, { width: FIGURE_WIDTH, height: FIGURE_WIDTH, nativeOnly: true });
 }
 
 let figureRasteriser: (svg: string) => Promise<Buffer> = rasteriseWithHeadless;
@@ -135,5 +156,8 @@ export async function figurePng(chatId: string, jobId: string): Promise<Buffer> 
 	const job = figureJob(chatId, jobId);
 	if (!job || stateOf(job) !== "ready") throw new Error("figure not ready");
 	const svg = (job.result as VisualResult).svg;
+	// Re-check the rendered-size bound at the last moment before the
+	// renderer, so nothing oversized reaches it.
+	if (!renderableSize(svg)) throw new Error("figure not ready");
 	return figureRasteriser(svg);
 }
