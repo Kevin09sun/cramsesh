@@ -29,7 +29,7 @@ export const AP_PAPER_MAX_BYTES = 80 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 120_000;
 const MAX_REDIRECTS = 5;
 /** Bare minimum identity — no cookies, no credentials, no browser impersonation. */
-const USER_AGENT = "LearnHarness/1.0";
+const USER_AGENT = "Cramsesh/1.0";
 const PDF_MAGIC = [0x25, 0x50, 0x44, 0x46, 0x2d]; // "%PDF-"
 
 const COURSE_ID_PATTERN = /^[A-Za-z0-9_-]+$/;

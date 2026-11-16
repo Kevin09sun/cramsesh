@@ -115,11 +115,11 @@ describe("pickNativePaths — the Windows dialog", () => {
 		}
 		assert.match(scripts.folder!, /FOS_PICKFOLDERS/, "folder mode asks for folders");
 		assert.doesNotMatch(scripts.folder!, /FOS_ALLOWMULTISELECT/);
-		assert.match(scripts.folder!, /Pick\(\$owner\.Handle, \$true, 'Choose a folder for LearnHarness'\)/);
+		assert.match(scripts.folder!, /Pick\(\$owner\.Handle, \$true, 'Choose a folder for Cramsesh'\)/);
 		assert.match(scripts.files!, /FOS_ALLOWMULTISELECT/, "files mode allows multiple");
 		assert.match(scripts.files!, /FOS_FILEMUSTEXIST/);
 		assert.doesNotMatch(scripts.files!, /FOS_PICKFOLDERS/);
-		assert.match(scripts.files!, /Pick\(\$owner\.Handle, \$false, 'Choose files for LearnHarness'\)/);
+		assert.match(scripts.files!, /Pick\(\$owner\.Handle, \$false, 'Choose files for Cramsesh'\)/);
 		for (const decoded of Object.values(scripts)) {
 			assert.match(decoded, /FOS_FORCEFILESYSTEM/);
 			assert.match(decoded, /FOS_PATHMUSTEXIST/);

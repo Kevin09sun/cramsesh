@@ -185,8 +185,8 @@ const FILES_OPTIONS = `    private const uint FOS_NOCHANGEDIR = 0x8;
  *  topmost owner keeps the dialog above the browser that asked for it. */
 function windowsDialogScript(mode: PathPickerMode): string {
 	const call = mode === "folder"
-		? "[LearnHarnessFileDialog]::Pick($owner.Handle, $true, 'Choose a folder for LearnHarness')"
-		: "[LearnHarnessFileDialog]::Pick($owner.Handle, $false, 'Choose files for LearnHarness')";
+		? "[LearnHarnessFileDialog]::Pick($owner.Handle, $true, 'Choose a folder for Cramsesh')"
+		: "[LearnHarnessFileDialog]::Pick($owner.Handle, $false, 'Choose files for Cramsesh')";
 	const types = windowsDialogTypes(mode === "folder" ? FOLDER_OPTIONS : FILES_OPTIONS);
 	return `$ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false

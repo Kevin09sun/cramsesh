@@ -14,8 +14,8 @@ import UpdateBanner from "@/components/update-banner";
 const nunito = Nunito({ subsets: ["latin"], variable: "--font-nunito" });
 
 export const metadata: Metadata = {
-	title: "Learning Harness",
-	description: "A teacher agent with a memory — sessions, quizzes, and a knowledge graph of what you know.",
+	title: "Cramsesh",
+	description: "AP prep made EZ — a study buddy that teaches, quizzes, and checks your thinking.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
