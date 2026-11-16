@@ -1,93 +1,58 @@
-> **Fork of [amosblomqvist/learnharness](https://github.com/amosblomqvist/learnharness)** by Kevin09sun. Licensed AGPL-3.0 like the original.
-
-## What's different in this fork
-
-- **Light mode**, plus readability fixes for faded text, graph labels and the logo
-- **Running token counter** for each session
-- **Teach from your materials:** the teacher uses the files and folders you point it at
-- **Test prep mode:** plan a test from your outline, skip what you know, and track readiness across sittings
-- **AP prep mode:** build an AP course from College Board's official description, practise multiple-choice questions with reasoning, and track readiness across sittings
-- **Visual file and folder picker** in the web version
-- **Windows scripts:** setup, autostart and data sync
-
-## Planned
-
-- Use it on your phone from a link, with sessions synced across devices
-- Fix the paperclip file/folder picker
-- Fix voice dictation (Deepgram permissions)
-- Additional sidebar features
-
-The original README follows.
-
----
-
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/lh_banner_dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="docs/assets/lh_banner_light.png">
-    <img src="docs/assets/lh_banner_light.png" alt="LearnHarness" width="640">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/cramsesh_banner_dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/cramsesh_banner_light.png">
+    <img src="docs/assets/cramsesh_banner_light.png" alt="Cramsesh — AP prep made EZ" width="640">
   </picture>
 </p>
 
-<p align="center"><strong>An agent harness for learning.</strong></p>
+<p align="center"><strong>AP prep made EZ.</strong></p>
 
-<p align="center">
-  <a href="https://learnharness.ai">Download</a> ·
-  <a href="#how-it-works">How it works</a> ·
-  <a href="docs/README.md">Documentation</a> ·
-  <a href="https://github.com/amosblomqvist/learnharness/issues">Issues</a> ·
-  <a href="https://discord.gg/5tCHHQEB2e">Discord</a>
-</p>
+Cramsesh is a study app for AP exams. It teaches a topic from where your understanding actually is, quizzes you on your reasoning, grades free-response work against official scoring, and keeps a knowledge graph of what you have learned.
 
-LearnHarness uses AI agents to plan and teach lessons from your current understanding to your goal. It builds a detailed picture of what you understand and how you reason. That picture is updated as you learn.
+## What it does
 
-Instead of just giving you an explanation, it uses your answers and thinking to decide what you need next. Teaching builds understanding one reasoning step at a time. Practice makes it usable. A persistent knowledge graph carries it across sessions.
+- **Teach.** A session starts by probing what you already understand, then plans a route to your goal and teaches one reasoning step at a time. Each step builds on something you already know, and the plan adapts when your understanding turns out different.
+- **Quiz.** Practice and test-prep sessions pose problems that require the right knowledge to come to mind without being named first. You explain your reasoning as you work, and the tutor responds to how you reasoned, not just to the final answer.
+- **Remember.** What you learn accumulates in a knowledge graph of claims and the premises that lead to them, with links back to the sessions that produced it. Later sessions can teach and set problems from it instead of starting from scratch.
 
-![LearnHarness teaching session](docs/assets/teaching-session.png)
+## What Cramsesh adds
 
-## How it works
+Cramsesh is a fork of LearnHarness rebuilt around AP exam prep, with a light mode and a warm cream-and-blue theme.
 
-1. **Measure.** Before teaching, the agent finds where your understanding ends on each part the lesson depends on. Your answers, confidence, and thinking show it where to start.
-2. **Plan.** It works out a dependency map from that starting point to your goal. You can see the plan, and the lesson adapts when your understanding turns out different.
-3. **Teach.** Each step builds on something you already understand. You predict, get an explanation, and check your understanding. Confusions are repaired before anything is built on them. The aim is for the goal to feel obviously true, not merely familiar.
-4. **Practice.** Separate sessions pose varied problems that require the right knowledge to come to mind without being named first. Problems and hints adapt to your reasoning.
+- **AP prep mode.** Add an AP course by name; the tutor finds College Board's current Course and Exam Description, saves it, and proposes the official units and topics for you to confirm. Readiness is tracked per topic, per unit and per course across sittings.
+- **Released free-response questions.** Practise real released College Board free-response questions, with the official scoring guideline used for grading. The question appears as the original paper page, so figures and formatting are exactly the official ones.
+- **Generated free-response questions.** When no unused released question covers a topic, the tutor writes a new free-response question in the AP style, complete with the solution and the full rubric.
+- **Drawn figures.** A question that needs a graph, diagram or construction gets a figure drawn and checked before the question is asked.
+- **Grading of your reasoning.** Free-response work is graded every scoring point, point by point, against the official rubric or the tutor's committed rubric. A right answer with missing working or justification earns no point. Multiple-choice reasoning is graded too: a right pick reached by flawed reasoning counts as a miss.
+- **Direct web search.** Every conversation tutor can search the web and read a page inside its reply when a fact may have changed. A switch under Settings → Agent turns this off.
+- **The rest of the fork's work.** Light mode and readability fixes, a running token counter for each session, Teach from your materials (the teacher uses the files and folders you point it at), Test prep mode with an outline and readiness tracking, a visual file and folder picker in the web version, and Windows scripts for setup, autostart and data sync.
 
-**Think out loud.** The thinking fields let you explain your reasoning, uncertainties, and reactions in your own words. This is how the agent gets a detailed picture rather than just a record of right and wrong answers. You can type or use dictation.
+## Screenshots
 
-**Bring your files.** In the desktop app, attach PDFs, photos, or any other file with the paperclip, or drag them in. The file stays where it is: the message carries its path, and the agent reads it from there.
+A teaching session: the tutor explains the limit definition, then checks the reasoning with a question.
 
-The agent can also research questions in the background, create visual explanations, show your own images in the lesson and mark them up with arrows and labels, and build interactive demonstrations.
+![A Cramsesh teaching session, with a quiz question about derivatives](docs/assets/teaching-session.png)
 
-## Knowledge that carries forward
+The knowledge graph: ideas from your sessions, and the reasoning chains that connect them.
 
-What you are taught accumulates as propositions and reasoning chains: individual claims and the premises that lead to them. The graph shows this structure, with links back to the source sessions. You can also import notes.
+![The Cramsesh knowledge graph for limits and derivatives](docs/assets/knowledge-graph.png)
 
-Future teaching sessions can read the graph instead of starting from scratch. Practice sessions can draw their material from it. It stores the ideas and their connections, not ratings of your ability.
+## Download
 
-![LearnHarness knowledge graph](docs/assets/knowledge-graph.png)
+Windows and Linux builds are on [GitHub Releases](https://github.com/Kevin09sun/cramsesh/releases).
 
-## Download and get started
-
-**[Download from learnharness.ai](https://learnharness.ai)** · [GitHub Releases](https://github.com/amosblomqvist/learnharness/releases)
-
-- **macOS (Apple Silicon):** signed and notarized DMG. Drag the app to Applications.
-- **Windows (x64):** run the installer. It is currently unsigned; Windows may show an “unknown publisher” or SmartScreen warning.
+- **Windows (x64):** run the installer. It is unsigned, so Windows may show a SmartScreen warning — choose **More info → Run anyway**.
 - **Linux (x64):** make the AppImage executable and open it, or install the Debian/Ubuntu `.deb`.
+- **macOS:** not available in 1.0.0. A Mac build is coming later.
 
-Choose your models, then start a session with what you want to understand. You can use provider API keys, supported subscription connections in the desktop app, an installed [Claude Code CLI](docs/claude-code.md), or a [custom OpenAI-compatible endpoint](docs/custom-providers.md), including a local model server. Optional dictation and web search use separate service keys. Every tutor can search the web and read a page inside its reply; a web search switch under Settings → Agent turns that off without affecting background research. Web research can use a Tavily, Brave, Exa, Firecrawl, or Ollama key in Settings → Providers → Search; without one a tutor can still read a page it is given, and a PDF on the web goes through background research. Ollama search uses its hosted service, not a local model server.
+Packaged Windows and Linux builds check for updates from the same releases feed and can install them in the app.
 
-See [Getting started](docs/getting-started.md) for model setup, dictation, files, and notes imports, and [context, caching, and costs](docs/compaction-accounting.md) for advanced cache preferences.
+**Former LearnHarness desktop users:** quit and uninstall the old desktop app before launching Cramsesh. Cramsesh has its own app identity; it keeps using an existing LearnHarness profile when it finds one, so your sessions and settings stay where they are.
 
-All three platforms support in-app updates.
+## Run from source
 
-## Your keys, your data
-
-- **Your keys and models.** No LearnHarness subscription or markup. Billing depends on your provider, CLI configuration, subscription, or local setup. The live cost meter estimates known API costs, not subscription, CLI, or custom-endpoint charges.
-- **Local storage.** Your chats, graph, settings, and API keys live on your machine. Learning records are plain files you can inspect.
-- **External services.** Models run through your configured providers. Model requests send the context needed for the task; web lookups, background research and dictation also contact external services. Local storage does not mean offline processing.
-- **Inspectable behavior.** System prompts are visible and editable. The app is open source under the AGPL-3.0 license.
-
-## Development and support
+You need Node.js and npm. CI and release builds use Node 26.
 
 ```bash
 npm ci
@@ -95,12 +60,19 @@ npm run dev        # http://localhost:3000
 npm test           # fixtures and fake providers
 ```
 
-See the [documentation index](docs/README.md) for all guides, [development](docs/development.md) for setup and checks, [architecture](docs/architecture.md) for the runtime, [keyboard shortcuts](docs/keyboard.md), and [desktop builds and releases](docs/desktop-release.md).
+See the [documentation index](docs/README.md) for all guides, [development](docs/development.md) for setup and checks, [getting started](docs/getting-started.md) for model setup, files and notes imports, and [desktop builds and releases](docs/desktop-release.md) for packaging.
 
-Questions, bug reports, and feature requests: [GitHub Issues](https://github.com/amosblomqvist/learnharness/issues).
+## Your keys, your data
+
+- **Your keys and models.** There is no Cramsesh subscription or markup. Use provider API keys, supported subscription connections in the desktop app, an installed [Claude Code CLI](docs/claude-code.md), or a [custom OpenAI-compatible endpoint](docs/custom-providers.md), including a local model server. Billing depends on your provider, CLI configuration, subscription, or local setup.
+- **Local storage.** Your chats, graph, settings and API keys live on your machine. Learning records are plain files you can inspect.
+- **External services.** Models run through your configured providers. Model requests send the context needed for the task; web lookups, background research and dictation also contact external services. Local storage does not mean offline processing.
+- **Inspectable behavior.** System prompts are visible and editable. The app is open source under the AGPL-3.0 license.
+
+## Built on LearnHarness
+
+Built on LearnHarness by Amos Blomqvist. Cramsesh is a fork of [LearnHarness](https://github.com/amosblomqvist/learnharness). Thank you to Amos and to the LearnHarness contributors for the teaching harness, the graph and the sessions this fork is built on. What Cramsesh changed is listed under [What Cramsesh adds](#what-cramsesh-adds).
 
 ## License
 
-[AGPL-3.0](LICENSE)
-
-The app is free and open forever. If we ever charge for anything, it will be for convenience — managed keys, hosting — never for features you can run locally.
+[AGPL-3.0](LICENSE). Cramsesh keeps the original's license, and changes to it are released under the same terms.
