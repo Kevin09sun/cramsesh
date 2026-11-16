@@ -27,29 +27,30 @@
 	outline: none;
 }
 
-/* Palette (owner's hexes): main #141414, raised #1C1C1C, edges #434343.
-   Mono chrome = JetBrains Mono; prose = Source Sans 3; titles = CMU Serif. */
+/* Cramsesh palette (design 2026-11-16): deep ink-blue night, cream text,
+   sunflower highlights. Light mode is cream paper with ink-blue text.
+   Nunito is the one UI/prose/title family; code stays monospace. */
 :root {
 	color-scheme: dark;
 	--radius: 8px;
-	--background: #141414;
-	--foreground: #e6e6e6;
-	--card: #1c1c1c;
-	--card-foreground: #e6e6e6;
-	--popover: #1c1c1c;
-	--popover-foreground: #e6e6e6;
-	--primary: #e6e6e6;
-	--primary-foreground: #141414;
-	--secondary: #1c1c1c;
-	--secondary-foreground: #e6e6e6;
-	--muted: #1c1c1c;
-	--muted-foreground: #8d8d8d;
-	--accent: #2a2a2a;
-	--accent-foreground: #e6e6e6;
+	--background: #14213a;
+	--foreground: #ede6d6;
+	--card: #1a2a47;
+	--card-foreground: #ede6d6;
+	--popover: #182640;
+	--popover-foreground: #ede6d6;
+	--primary: #f2b33d;
+	--primary-foreground: #1f3a5f;
+	--secondary: #1a2a47;
+	--secondary-foreground: #ede6d6;
+	--muted: #1a2a47;
+	--muted-foreground: #bdb6a8;
+	--accent: #2b3f63;
+	--accent-foreground: #ede6d6;
 	--destructive: oklch(0.704 0.191 22.216);
-	--border: #434343;
-	--input: #434343;
-	--ring: #8d8d8d;
+	--border: #2b3f63;
+	--input: #2b3f63;
+	--ring: #f2b33d;
 	/* Emphasis inks default to the REGULAR TEXT COLOR (owner ruling,
 	   appearance wave 2026-09-26 — the old #ee928c/#6fa9d6 factory
 	   emphasis colors are gone). Explicit overrides land via the
@@ -70,24 +71,24 @@
 /* Dark is the default (<html class="dark">); mirror the same values so
    the block stays coherent under Tailwind's variant. */
 .dark {
-	--background: #141414;
-	--foreground: #e6e6e6;
-	--card: #1c1c1c;
-	--card-foreground: #e6e6e6;
-	--popover: #1c1c1c;
-	--popover-foreground: #e6e6e6;
-	--primary: #e6e6e6;
-	--primary-foreground: #141414;
-	--secondary: #1c1c1c;
-	--secondary-foreground: #e6e6e6;
-	--muted: #1c1c1c;
-	--muted-foreground: #8d8d8d;
-	--accent: #2a2a2a;
-	--accent-foreground: #e6e6e6;
+	--background: #14213a;
+	--foreground: #ede6d6;
+	--card: #1a2a47;
+	--card-foreground: #ede6d6;
+	--popover: #182640;
+	--popover-foreground: #ede6d6;
+	--primary: #f2b33d;
+	--primary-foreground: #1f3a5f;
+	--secondary: #1a2a47;
+	--secondary-foreground: #ede6d6;
+	--muted: #1a2a47;
+	--muted-foreground: #bdb6a8;
+	--accent: #2b3f63;
+	--accent-foreground: #ede6d6;
 	--destructive: oklch(0.704 0.191 22.216);
-	--border: #434343;
-	--input: #434343;
-	--ring: #8d8d8d;
+	--border: #2b3f63;
+	--input: #2b3f63;
+	--ring: #f2b33d;
 	/* Same emphasis ruling as the block above: unset = text color. */
 	--lh-ink-strong: var(--foreground);
 	--lh-ink-italic: var(--foreground);
@@ -102,28 +103,28 @@
 	--lh-heading-weight: 900;
 }
 
-/* Light mode (Settings → Appearance). Same structure as the dark palette:
-   raised surfaces and edges step away from the page, here downward. */
+/* Light mode (Settings → Appearance): cream paper, ink-blue text, warm
+   raised surfaces. Same structure as the dark palette. */
 .light {
 	color-scheme: light;
-	--background: #fbfbfa;
-	--foreground: #1f1f1f;
-	--card: #f3f3f1;
-	--card-foreground: #1f1f1f;
-	--popover: #ffffff;
-	--popover-foreground: #1f1f1f;
-	--primary: #1f1f1f;
-	--primary-foreground: #fbfbfa;
-	--secondary: #f3f3f1;
-	--secondary-foreground: #1f1f1f;
-	--muted: #f3f3f1;
-	--muted-foreground: #5f5f5f;
-	--accent: #e8e8e5;
-	--accent-foreground: #1f1f1f;
+	--background: #fbf6ea;
+	--foreground: #1f3a5f;
+	--card: #f4ecd8;
+	--card-foreground: #1f3a5f;
+	--popover: #fffcf4;
+	--popover-foreground: #1f3a5f;
+	--primary: #3d6fb6;
+	--primary-foreground: #fbf6ea;
+	--secondary: #f4ecd8;
+	--secondary-foreground: #1f3a5f;
+	--muted: #f4ecd8;
+	--muted-foreground: #52657d;
+	--accent: #f7e3b0;
+	--accent-foreground: #1f3a5f;
 	--destructive: oklch(0.577 0.245 27.325);
-	--border: #cfcfcb;
-	--input: #cfcfcb;
-	--ring: #7a7a7a;
+	--border: #e3d6b8;
+	--input: #e3d6b8;
+	--ring: #3d6fb6;
 	--lh-ink-strong: var(--foreground);
 	--lh-ink-italic: var(--foreground);
 	--lh-prose-size: 16px;
@@ -157,26 +158,16 @@
 	}
 }
 
-/* CMU Serif bold (titles) — bundled local file, no CDN dependency. */
-@font-face {
-	font-family: "lh-cmu";
-	src: url("/fonts/cmunbx.ttf") format("truetype");
-	font-weight: 700;
-	font-style: normal;
-	font-display: swap;
-}
-
 @theme inline {
-	/* Fonts: chrome = JetBrains Mono, prose = Source Sans 3, titles = CMU
-	   Serif bold. The JetBrains/SourceSans variables attach in app/layout.tsx.
-	   (owner, typography round) The Tailwind defaults are ALIASED to the app
-	   fonts: `font-mono`/`font-sans` utilities would otherwise fall to the
-	   SYSTEM stacks — a fourth font the app never chose — and streamdown's
-	   code-block chrome + mermaid-error + demo-card all use them. */
-	--font-ui: var(--font-jetbrains), ui-monospace, SFMono-Regular, monospace;
-	--font-prose: var(--font-sans3), ui-sans-serif, system-ui, sans-serif;
-	--font-mono: var(--font-jetbrains), ui-monospace, SFMono-Regular, monospace;
-	--font-sans: var(--font-sans3), ui-sans-serif, system-ui, sans-serif;
+	/* Fonts: Nunito everywhere in the UI, prose and titles. The variable
+	   attaches in app/layout.tsx. Code and maths keep their own fonts:
+	   `font-mono` stays a monospace stack (code blocks, kbd, tool cards),
+	   and KaTeX ships its own faces. */
+	--font-ui: var(--font-nunito), ui-sans-serif, system-ui, sans-serif;
+	--font-prose: var(--font-nunito), ui-sans-serif, system-ui, sans-serif;
+	--font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	--font-sans: var(--font-nunito), ui-sans-serif, system-ui, sans-serif;
+	--font-title: var(--font-nunito), ui-sans-serif, system-ui, sans-serif;
 	/* The modular type ladder — each size carries its own line-height.
 	   Component sizes must pull from this ladder. (owner, typography
 	   round 4: the 10px rung is merged into 11 — one pixel apart was a
@@ -184,12 +175,6 @@
 	   legibility floor; quiet labels get their quiet from color +
 	   tracking, not a notch of size. Reading prose = the 16px rung via
 	   --lh-prose-size.) */
-	/* --font-title lives in the NON-inline @theme below: inline tokens get
-	   their literal values baked into the utilities (.font-title{font-family:
-	   lh-cmu,serif}), which made the appearance "session names in serif"
-	   toggle write a runtime --font-title no consumer ever read (owner, fix
-	   wave: toggle looked dead). Non-inline emits :root { --font-title: … }
-	   and the utility reads var(--font-title) — appearance overrides win. */
 	--text-xs: 11px;
 	--text-xs--line-height: 1.4;
 	--text-sm: 12.5px;
@@ -241,7 +226,7 @@ body {
 }
 
 /* Teaching prose (the markdown renderer's container gets .lh-prose):
-   Source Sans 3 with the size/leading tokens; emphasis color bound to
+   Nunito with the size/leading tokens; emphasis color bound to
    the settings-ready tokens. */
 .lh-prose {
 	font-family: var(--font-prose);
@@ -249,12 +234,9 @@ body {
 	line-height: var(--lh-prose-leading);
 }
 
-/* Session-name weight (owner, fix wave round 3): with the serif toggle
-   OFF, --font-title resolves to the prose font — Source Sans 3 is loaded
-   as a VARIABLE font, and without an explicit weight the titles render at
-   400, a whisper next to CMU's bold-only face. Request 900: the variable
-   font takes it, and CMU (a single 700 face) snaps to its nearest
-   available weight — the same rendering it already had. */
+/* Session-name weight: Nunito is loaded as a VARIABLE font, and without
+   an explicit weight the titles render at 400, a whisper next to the old
+   bold-only face. Request 900; the variable font takes it. */
 .font-title {
 	font-weight: 900;
 }
@@ -280,10 +262,10 @@ body {
 
 /* Markdown headings render at the font's BLACK weight (owner ask,
    2026-09-19) — 900, not streamdown's font-semibold 600. The variable
-   Source Sans 3 axis spans 200–900 (next/font loads the full range), so
-   900 draws the real Black cut. Unlayered CSS beats the utility layer;
-   :where keeps specificity zero. Chrome titles (CMU Serif) don't live
-   under .lh-prose and stay untouched. */
+   Nunito axis spans 200–1000 (next/font loads the full range), so 900
+   draws the real Black cut. Unlayered CSS beats the utility layer;
+   :where keeps specificity zero. Chrome titles don't live under
+   .lh-prose and stay untouched. */
 .lh-prose :where(h1, h2, h3, h4, h5, h6) {
 	font-weight: var(--lh-heading-weight, 900);
 }
@@ -617,13 +599,6 @@ body {
 .lh-electron .lh-wco-floating {
 	right: calc(0.5rem + var(--lh-wco-right, 0px));
 	max-width: max(0px, calc(100% - 5.5rem - var(--lh-wco-right, 0px)));
-}
-
-/* --font-title deliberately NOT @theme inline (see comment above): the
-   session-name-serif toggle overrides this var at runtime, so the
-   .font-title utility must read it through var(), not carry a baked copy. */
-@theme {
-	--font-title: "lh-cmu", serif;
 }
 
 /* Card enter (owner round, 2026-10-05): the transcript cards' one-shot

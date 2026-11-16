@@ -56,10 +56,10 @@ describe("DeleteNodeBody — the minimal screen (owner, 2026-09-30)", () => {
 		const html = bodyAt([{ id: "kepler", name: "Kepler's three laws" }]);
 		assert.match(html, /data-testid="delete-node-dialog"/);
 		// (owner, 2026-10-13 polish) the title in the abort-turn look —
-		// text-sm font-semibold (JetBrains Mono via the UI default), red
-		// kept, NO font-title serif; the NAME rides below in JetBrains
-		// Mono at normal text-sm size, NO code-block chrome — same shape
-		// as the session dialog.
+		// text-sm font-semibold (Nunito via the UI default), red kept, NO
+		// font-title display face; the NAME rides below in the mono stack
+		// at normal text-sm size, NO code-block chrome — same shape as the
+		// session dialog.
 		assert.match(html, /Delete node\?/);
 		const title = html.match(/<h2[^>]*>/)?.[0] ?? "";
 		assert.match(title, /text-sm font-semibold text-destructive/);

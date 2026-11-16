@@ -40,6 +40,8 @@ export function resolveAppearance(delta: AppearanceSettings | undefined) {
 		background: delta?.background ?? f.background,
 		fontFamily: delta?.fontFamily ?? f.fontFamily,
 		proseFontSize: delta?.proseFontSize ?? f.proseFontSize,
+		/** RETIRED switch — still resolved so old records parse (Cramsesh
+		 *  rebrand, 2026-11-16); it no longer affects any font. */
 		sessionNameSerif: delta?.sessionNameSerif ?? f.sessionNameSerif,
 		mdRendering: {
 			headingWeight: delta?.mdRendering?.headingWeight ?? f.mdRendering.headingWeight,
@@ -49,11 +51,10 @@ export function resolveAppearance(delta: AppearanceSettings | undefined) {
 	};
 }
 
-/** One channel clamped to 0–255: additive offsets matching today's
- *  hand-picked palette (#141414 → card #1c1c1c (+8) → accent #2a2a2a (+22)
- *  → border #434343 (+47)) — the "per-mode derivation in code" the schema
- *  promises, as the thinnest curve that keeps the palette's relationships.
- *  Light mode walks the same steps downward. */
+/** One channel clamped to 0–255: additive per-channel offsets (+8 card /
+ *  +22 accent / +47 border) — the "per-mode derivation in code" the schema
+ *  promises, as the thinnest curve that keeps a custom background's
+ *  relationships. Light mode walks the same steps downward. */
 function raise(hex: string, add: number): string {
 	const n = hex.length === 4
 		? hex.slice(1).split("").map((c) => parseInt(c + c, 16))
@@ -90,15 +91,15 @@ export function appearanceVars(a: ReturnType<typeof resolveAppearance>): Record<
 	const vars: Record<string, string> = {};
 	if (a.background !== null) Object.assign(vars, derivedPalette(a.background, a.mode));
 	if (a.fontFamily !== null) {
-		vars["--font-prose"] = `"${a.fontFamily}", var(--font-sans3), ui-sans-serif, system-ui, sans-serif`;
+		vars["--font-prose"] = `"${a.fontFamily}", var(--font-nunito), ui-sans-serif, system-ui, sans-serif`;
 	}
 	// The ONE documented reading-size variable (typography round 4): prose,
 	// inputs, and session titles all read it, so one setProperty moves them.
 	vars["--lh-prose-size"] = `${a.proseFontSize}px`;
-	// Session names: CMU Serif by default; the toggle swaps the title font
-	// to the prose family — covers chat.tsx + new-session.tsx titles with
-	// zero component edits (they use the .font-title utility).
-	if (!a.sessionNameSerif) vars["--font-title"] = "var(--font-prose)";
+	// The "session names in serif" switch is RETIRED (Cramsesh rebrand,
+	// 2026-11-16): titles are always Nunito. The stored sessionNameSerif
+	// field is still read into the resolved view so old records parse, but
+	// it no longer writes any CSS variable.
 	// Markdown rendering: heading weight + the emphasis inks (the vars
 	// were built "ready for the settings UI").
 	vars["--lh-heading-weight"] = String(a.mdRendering.headingWeight);
