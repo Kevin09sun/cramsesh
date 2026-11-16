@@ -182,10 +182,7 @@ describe("desktop packaging policy", () => {
 		const needle = `kevin09.sun` + "@";
 		const files = execFileSync("git", ["ls-files", "-z"], { cwd: repoRoot, encoding: "utf8" })
 			.split("\0")
-			.filter(Boolean)
-			// Historical planning docs are not edited and the plan names this
-			// needle; the guard covers everything that ships.
-			.filter((file) => !file.startsWith("docs/superpowers/"));
+			.filter(Boolean);
 		const hits = files.filter((file) => {
 			try {
 				return readFileSync(join(repoRoot, file)).includes(Buffer.from(needle));
