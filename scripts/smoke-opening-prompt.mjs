@@ -21,7 +21,7 @@ fs.writeFileSync(path.join(home, "auth.json"), "{}\n");
 const require = createRequire(import.meta.url);
 const { getFontAxes } = require("next/dist/compiled/@next/font/dist/google/get-font-axes.js");
 const { getGoogleFontsUrl } = require("next/dist/compiled/@next/font/dist/google/get-google-fonts-url.js");
-const fonts = Object.fromEntries(["JetBrains Mono", "Source Sans 3"].map(family => [
+const fonts = Object.fromEntries(["Nunito"].map(family => [
 	getGoogleFontsUrl(family, getFontAxes(family, ["variable"], ["normal"]), "swap"),
 	`@font-face { font-family: '${family}'; src: local('Arial'); font-weight: 100 900; }`,
 ]));
