@@ -1,9 +1,9 @@
 /**
  * Cramsesh brand copy (Task 3): no user-visible "LearnHarness" survives in
- * app, component, server or Electron source. Hidden protocol identifiers are
- * explicitly allowed (they are the keep-unchanged list from the plan); the
- * credit URL is allowed wherever it appears. The root metadata names the
- * product Cramsesh with the verbatim tagline.
+ * app, component, server, Electron or root proxy source. Hidden protocol
+ * identifiers are explicitly allowed (the keep-unchanged list from the plan),
+ * as are the credit URL/phrase and the Task 4/5 old-name allowances. The root
+ * metadata names the product Cramsesh with the verbatim tagline.
  */
 
 import assert from "node:assert/strict";
@@ -15,8 +15,12 @@ import ts from "typescript";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const ROOTS = ["app", "components", "src", "electron"];
+const FILES = ["proxy.ts"];
 const EXTENSIONS = new Set([".ts", ".tsx", ".cjs", ".mjs"]);
 const BRAND = /learn ?harness/i;
+/** Plan-mandated credit (Task 5) and the About page that renders it. */
+const CREDIT = "Built on LearnHarness by Amos Blomqvist";
+const ABOUT = "components/settings/about-section.tsx";
 
 type Hit = { file: string; line: number; value: string };
 
@@ -53,16 +57,18 @@ function brandMentions(file: string, relativePath: string): Hit[] {
 	return hits;
 }
 
-/** The plan's keep-unchanged identifiers (and the credit URL) are not copy.
- *  Only the kept spelling is removed before the remainder is checked, so a
- *  caption that merely shares a literal with an identifier (the path picker's
- *  `LearnHarnessFileDialog`) is still flagged. */
+/** The plan's keep-unchanged identifiers, the credit, and the allowlisted
+ *  old-name slots are not copy. Only the kept spelling is removed before the
+ *  remainder is checked, so a caption that merely shares a literal with an
+ *  identifier (the path picker's `LearnHarnessFileDialog`) is still flagged. */
 function allowed(relativePath: string, value: string): boolean {
 	if (value === "learnharness") return true; // MCP bridge name, ChatGPT namespace, opencode client
 	if (value.startsWith("x-learnharness-")) return true; // x-learnharness-* headers
 	if (value === "application/x-learnharness-source") return true; // source-tree drag type
 	if (value === "__learnharness_custom_provider_binding") return true; // custom-provider auth binding
-	if (value === "LearnHarness" && /^electron\/[^/]*profile-dir[^/]*$/.test(relativePath)) return true; // Task 4 profile fallback
+	if (value.includes(CREDIT)) return true; // plan-mandated credit (Task 5), wording fixed
+	if (relativePath === ABOUT && value === "LearnHarness") return true; // credit link text (Task 5)
+	if (/^electron\/[^/]*profile-dir[^/]*$/.test(relativePath) && (value === "LearnHarness" || value === "LearnHarness-dev")) return true; // Task 4 profile fallback
 	const rest = value
 		.replaceAll("github.com/amosblomqvist/learnharness", "") // credit URL
 		.replaceAll("LearnHarnessFileDialog", ""); // PowerShell dialog class name
@@ -72,13 +78,13 @@ function allowed(relativePath: string, value: string): boolean {
 describe("Cramsesh copy", () => {
 	it("no user-visible LearnHarness survives outside the kept identifiers", () => {
 		const leftovers: string[] = [];
-		for (const directory of ROOTS) {
-			for (const file of sourceFiles(join(root, directory))) {
-				const relativePath = relative(root, file).split(sep).join("/");
-				for (const hit of brandMentions(file, relativePath)) {
-					if (allowed(relativePath, hit.value)) continue;
-					leftovers.push(`${hit.file}:${hit.line}: ${JSON.stringify(hit.value)}`);
-				}
+		const files = ROOTS.flatMap((directory) => sourceFiles(join(root, directory)))
+			.concat(FILES.map((file) => join(root, file)));
+		for (const file of files) {
+			const relativePath = relative(root, file).split(sep).join("/");
+			for (const hit of brandMentions(file, relativePath)) {
+				if (allowed(relativePath, hit.value)) continue;
+				leftovers.push(`${hit.file}:${hit.line}: ${JSON.stringify(hit.value)}`);
 			}
 		}
 		assert.deepEqual(leftovers, [], `user-visible LearnHarness copy:\n${leftovers.join("\n")}`);
@@ -93,5 +99,25 @@ describe("Cramsesh copy", () => {
 			exported[1]!.includes('description: "AP prep made EZ — a study buddy that teaches, quizzes, and checks your thinking."'),
 			"metadata.description is the verbatim tagline",
 		);
+	});
+});
+
+describe("guard allowlist", () => {
+	it("permits the plan-mandated credit phrase anywhere", () => {
+		assert.equal(allowed(ABOUT, CREDIT), true);
+		assert.equal(allowed("components/sidebar.tsx", `LearnHarness? ${CREDIT}.`), true);
+	});
+
+	it("permits only the About page's exact LearnHarness credit link text", () => {
+		assert.equal(allowed(ABOUT, "LearnHarness"), true);
+		assert.equal(allowed(ABOUT, "Learn with LearnHarness"), false, "new About copy is not the credit");
+		assert.equal(allowed("components/settings/other.tsx", "LearnHarness"), false, "exact old name outside About");
+	});
+
+	it("permits the Task 4 profile fallback names but not new copy", () => {
+		assert.equal(allowed("electron/profile-dir.cjs", "LearnHarness"), true);
+		assert.equal(allowed("electron/profile-dir.cjs", "LearnHarness-dev"), true);
+		assert.equal(allowed("electron/profile-dir.cjs", "Choose a folder for LearnHarness"), false);
+		assert.equal(allowed("electron/main.cjs", "LearnHarness"), false, "old name outside profile-dir");
 	});
 });
