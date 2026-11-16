@@ -130,8 +130,6 @@
 	--lh-prose-size: 16px;
 	--lh-prose-leading: 1.5;
 	--lh-heading-weight: 900;
-	/* The logo's ring is white on dark; on light it takes the text color. */
-	--lh-mark-ring: var(--foreground);
 }
 
 /* Light mode readability. Faded text (text-…/70 and friends) was tuned for

@@ -160,12 +160,4 @@ describe("light mode readability", () => {
 		const lightness = Number(regionLabelColor(120, "light").match(/,\s*(\d+)%,\s*[\d.]+\)$/)?.[1]);
 		assert.ok(lightness <= 32, `light label lightness ${lightness}%`);
 	});
-
-	it("the logo's ring follows the theme instead of being fixed white", async () => {
-		const { LhMark } = await import("../components/lh-mark.tsx");
-		const html = renderToStaticMarkup(<LhMark />);
-		assert.doesNotMatch(html, /fill:\s*#fff/);
-		assert.match(html, /var\(--lh-mark-ring/);
-		assert.ok(block(".light")["--lh-mark-ring"], "light palette sets the ring colour");
-	});
 });

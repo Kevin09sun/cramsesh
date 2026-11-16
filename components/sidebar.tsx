@@ -9,7 +9,7 @@ import type { ChatDeleteMode } from "@/src/core";
 import { ClipboardListIcon, DumbbellIcon, PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon, SettingsIcon } from "lucide-react";
 import { ActivitySection } from "@/components/activity-dock";
 import { CoverageMenuBlock } from "@/components/extraction-coverage";
-import { LhMark } from "@/components/lh-mark";
+import { CramseshMark } from "@/components/cramsesh-mark";
 import { BrailleSpinner } from "@/components/braille-spinner";
 import { KeyboardShortcuts } from "@/components/keyboard-shortcuts";
 import { SettingsDialogProvider, useSettingsDialog } from "@/components/settings/settings-dialog.tsx";
@@ -462,6 +462,27 @@ export function SessionDoorLinks({
 
 const KIND_FILTER_KEY = "lh:session-kind-filter";
 
+/** The sidebar's home mark: the Cramsesh mug, still the link to "/" and
+ *  still vertically centered by the header band's items-center. Exported so
+ *  render tests can pin the artwork without mounting the data-driven
+ *  sidebar. The tooltip sits to the RIGHT of the logo carrying its real
+ *  shortcut: ⌘G jumps to the graph view (keyboard-shortcuts routes it to
+ *  "/", the same destination as this logo). Hover mirrors the ghost toggle
+ *  buttons — same size-9 chip geometry, same hover:bg-accent treatment. */
+export function SidebarHomeLink() {
+	return (
+		<Hint label="Home" action="jump-graph" side="right">
+			<Link
+				href="/"
+				aria-label="Home"
+				className="lh-no-drag flex size-9 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50"
+			>
+				<CramseshMark className="size-6" />
+			</Link>
+		</Hint>
+	);
+}
+
 function SessionsSidebar() {
 	const { open, toggle } = useSidebar();
 	const [chats, setChats] = useState<ChatListItem[] | null>(null);
@@ -724,34 +745,12 @@ function SessionsSidebar() {
 			aria-hidden={!open}
 		>
 			<div className="flex h-full w-72 flex-col border-r bg-background">
-				{/* LH wordmark — the owner's header; close toggle sits at the edge.
-				    Merged chrome (2026-09-17): in Electron this band is the
-				    window's drag surface and starts after the traffic lights
+				{/* Brand header — close toggle sits at the edge. Merged chrome
+				    (2026-09-17): in Electron this band is the window's drag
+				    surface and starts after the traffic lights
 				    (.lh-lights-gutter); in the browser those classes are inert. */}
 				<div className="lh-drag lh-lights-gutter flex items-center justify-between px-4 py-3">
-					{/* The owner's mark (2026-09-17) replaces the "LH" text — still the
-					    home link, still vertically centered by the band's items-center.
-					    The 92px .lh-lights-gutter keeps it clear of the traffic lights
-					    with the lights' own edge-inset as the gap. */}
-					{/* Hover mirrors the ghost toggle buttons (owner ask, 2026-09-17):
-					    same size-9 chip geometry, same hover:bg-accent treatment. */}
-					<Hint
-						// Kept (owner, subtlety round 2026-09-25) but to the RIGHT
-						// of the logo, carrying its real shortcut: ⌘G jumps to
-						// the graph view (keyboard-shortcuts routes it to "/",
-						// the same destination as this logo).
-						label="Home"
-						action="jump-graph"
-						side="right"
-					>
-						<Link
-							href="/"
-							aria-label="Home"
-							className="lh-no-drag flex size-9 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50"
-						>
-							<LhMark className="size-6" />
-						</Link>
-					</Hint>
+					<SidebarHomeLink />
 					<Hint label="Close sidebar" action="toggle-sidebar">
 						<Button
 							variant="ghost"
