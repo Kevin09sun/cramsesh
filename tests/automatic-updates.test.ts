@@ -92,6 +92,7 @@ function fixture({ packaged = true, updaterMissing = false } = {}) {
 				return { autoUpdater: updater };
 			}
 			if (id === "node:fs") return {
+				existsSync: () => false,
 				readFileSync: (file: string) => {
 					settingsReads.push(file);
 					if (settings instanceof Error) throw settings;

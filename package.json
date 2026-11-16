@@ -1,14 +1,20 @@
 {
-	"name": "learnharness",
-	"version": "0.5.0",
+	"name": "cramsesh",
+	"version": "1.0.0",
 	"license": "AGPL-3.0-only",
 	"author": {
-		"name": "Amos Blomqvist",
-		"email": "255718537+amosblomqvist@users.noreply.github.com"
+		"name": "Hongyi Sun",
+		"email": "37144566+Kevin09sun@users.noreply.github.com"
 	},
-	"homepage": "https://github.com/amosblomqvist/learnharness",
-	"desktopName": "learnharness.desktop",
-	"description": "An agent harness for learning: adaptive teaching, practice, and a persistent knowledge graph.",
+	"contributors": [
+		{
+			"name": "Amos Blomqvist",
+			"url": "https://github.com/amosblomqvist"
+		}
+	],
+	"homepage": "https://github.com/Kevin09sun/cramsesh",
+	"desktopName": "cramsesh.desktop",
+	"description": "Cramsesh — AP prep made EZ. A study buddy that teaches, quizzes, and checks your thinking.",
 	"type": "module",
 	"private": true,
 	"main": "electron/main.cjs",
@@ -21,7 +27,7 @@
 		"typecheck": "tsc --noEmit",
 		"desktop:dev": "concurrently -k \"next dev\" \"LH_DEV_URL=http://localhost:3000 electron .\"",
 		"dev:fresh": "bash scripts/dev-fresh.sh",
-		"desktop:dist": "rm -rf dist .next/standalone && next build && node scripts/smoke-provider-runtime.mjs && node scripts/build-server.mjs && node scripts/smoke-server.mjs && DEVELOPER_DIR=${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer} APPLE_KEYCHAIN_PROFILE=LH_NOTARY APPLE_TEAM_ID=JS6XN22HY6 electron-builder --mac --arm64"
+		"desktop:dist": "rm -rf dist .next/standalone && next build && node scripts/smoke-provider-runtime.mjs && node scripts/build-server.mjs && node scripts/smoke-server.mjs && electron-builder --mac --arm64 -c.mac.notarize=false -c.mac.identity=null"
 	},
 	"dependencies": {
 		"@earendil-works/pi-agent-core": "1.4.0",

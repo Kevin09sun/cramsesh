@@ -32,6 +32,7 @@ const { createSubscriptions, loadSubscriptionSDK } = require("./subscriptions.cj
 const { attachSubscriptionChild, subscriptionControl } = require("./subscription-ipc.cjs");
 const { desktopAPIHeaders } = require("./desktop-api.cjs");
 const { openWebSubscriptionBrowser } = require("./web-subscription-browser.cjs");
+const { resolveUserDataDir } = require("./profile-dir.cjs");
 const { randomBytes } = require("node:crypto");
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
@@ -45,13 +46,17 @@ const SIDEBAR_AUTOCLOSE = 928;
 
 const PRODUCT_NAME = "Cramsesh";
 
-// APP NAME → userData (owner, 2026-10-10): the Application Support dir is
-// exactly "LearnHarness" in dev AND packaged. Packaged Electron would
-// otherwise derive it from package.json "name" (now lowercase
-// "learnharness"), and productName metadata alone doesn't reach app.name.
-// Must run before the LH_DEV_URL suffix below — dev becomes
-// "LearnHarness-dev".
+// APP NAME → userData (owner, 2026-10-10; rebrand 2026-11-16): packaged
+// Electron derives userData from package.json "name", so set the folder
+// explicitly. Existing installs keep their "LearnHarness"/"LearnHarness-dev"
+// profile when the new folder does not exist yet — a rename must never open
+// an empty profile (resolveUserDataDir is the only place the old names live).
+// Must run before anything reads userData and before the single-instance lock.
 app.setName(PRODUCT_NAME);
+app.setPath(
+	"userData",
+	resolveUserDataDir(app.getPath("appData"), fs.existsSync, Boolean(process.env.LH_DEV_URL)),
+);
 const AUTH_FILE = () => path.join(app.getPath("userData"), "auth.json");
 const DATA_DIR = () => path.join(app.getPath("userData"), "data");
 
@@ -74,8 +79,8 @@ function serverEntry() {
 // the helper prints "BROWSER_SERVICE_CDP <port>" on stdout once the CDP
 // endpoint listens. Lifetime: parent IPC disconnect/death = quit.
 // MUST run before the single-instance lock — a helper is a second
-// instance of this very binary, and before the LH_DEV_URL redirect — the
-// helper owns no user data at all.
+// instance of this very binary. It deliberately owns no user data; the
+// profile path set above is never read on this branch.
 if (process.argv.includes("--browser-service")) {
 	const { waitForBrowserService } = require("./browser-service-readiness.cjs");
 	// Own the helper's entire startup lifetime, including the readiness wait.
@@ -110,14 +115,6 @@ if (process.argv.includes("--browser-service")) {
 		}
 	})();
 } else {
-	// Dev shell (LH_DEV_URL) runs BESIDE the packaged app, not instead of it:
-	// its own userData so (a) the single-instance lock — checked below — doesn't
-	// silently kill it, and (b) it never reads/writes the real app's
-	// localStorage, auth.json, or logs. Must run before the lock check.
-	if (process.env.LH_DEV_URL) {
-		app.setPath("userData", `${app.getPath("userData")}-dev`);
-	}
-
 	// The whole normal boot — lock included — lives in this else: a helper is
 	// a SECOND instance of this very binary on purpose (the running app owns
 	// the lock), so it must never reach this check.
