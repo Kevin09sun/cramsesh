@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { XIcon } from "lucide-react";
+import { createPortal } from "react-dom";
 
 import { photoName } from "@/components/ap/photo-name";
 import { QuestionFigure } from "@/components/ap/question-figure";
@@ -270,6 +271,9 @@ interface FrqSheetProps extends FrqSheetFormProps {
 	 *  the intro, answer boxes and photo attach are replaced by `absent`. */
 	present: boolean;
 	absent?: ReactNode;
+	/** True for a released question: its paper pages and answer boxes can open
+	 *  as a full-screen two-pane workspace (issue #7 — pages left, boxes right). */
+	expandable?: boolean;
 	buildRequest: (answers: { parts: Record<string, string>; photos: string[]; dontKnow: boolean }) => AnswerRequest;
 	toolName: "ap_frq" | "ap_frq_gen";
 }
@@ -284,6 +288,7 @@ function FrqSheet({
 	parts,
 	intro,
 	present,
+	expandable = false,
 	absent,
 	buildRequest,
 	toolName,
@@ -303,6 +308,35 @@ function FrqSheet({
 	const dontKnowRef = useRef(dontKnow);
 	const focusedPart = useRef(0);
 	const choosing = useRef(false);
+
+	// The released question's full-screen workspace (issue #7): the paper's
+	// pages on the left, the answer boxes on the right. It opens when the
+	// question is posed — a rendered paper is meant to be read beside the
+	// boxes, not scrolled through in the dock — and Close returns to the dock
+	// with every typed answer kept, because the state lives here, not in the
+	// portaled DOM.
+	const [stage, setStage] = useState(false);
+	useEffect(() => {
+		// A new question (its title) reopens the workspace; closing it keeps it
+		// closed for the question on screen.
+		if (expandable && present) setStage(true);
+	}, [expandable, present, title]);
+	useEffect(() => {
+		if (!stage) return;
+		const onKeyDown = (event: KeyboardEvent) => {
+			if (event.key !== "Escape" || isDictationActive()) return;
+			const target = event.target as HTMLElement | null;
+			if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
+				// Esc in an answer box stops dictation — the dock's law, never the close.
+				return;
+			}
+			event.preventDefault();
+			event.stopPropagation();
+			setStage(false);
+		};
+		document.addEventListener("keydown", onKeyDown);
+		return () => document.removeEventListener("keydown", onKeyDown);
+	}, [stage]);
 
 	const setPartText = (label: string, value: string) => {
 		textsRef.current = { ...textsRef.current, [label]: value };
@@ -416,6 +450,188 @@ function FrqSheet({
 		onSubmit(buildAnswer(qd, req, toolName));
 	};
 
+	const answerSheet = (
+		<>
+			{parts.map((part, index) => (
+				<div key={part.label} className="mb-3">
+					<div className="mb-1 flex items-baseline gap-2">
+						<span className="text-sm font-medium">({part.label})</span>
+						{part.tag && (
+							<span className="text-xs text-muted-foreground">{part.tag}</span>
+						)}
+					</div>
+					{part.prompt && (
+						<div className="mb-1 text-sm">
+							<ToolContentResponse>{part.prompt}</ToolContentResponse>
+						</div>
+					)}
+					<div
+						className={cn(
+							"rounded-[10px] border border-border/70 bg-background/60 transition-colors focus-within:border-primary/50",
+							dontKnow && "opacity-50",
+						)}
+					>
+						<PathInput
+							value={texts[part.label] ?? ""}
+							onValueChange={(value) => setPartText(part.label, value)}
+							onFocus={() => {
+								focusedPart.current = index;
+							}}
+							onKeyDown={(event) => {
+								// Esc ends dictation (the dock's law), never the question.
+								if (event.key === "Escape" && onEscape) {
+									event.preventDefault();
+									event.stopPropagation();
+									onEscape();
+								}
+							}}
+							allowFilePaths={false}
+							aria-label={
+								part.tag || part.prompt
+									? `(${part.label}) ${part.tag ?? part.prompt}`
+									: `(${part.label})`
+							}
+							aria-disabled={dontKnow}
+							tabIndex={dontKnow ? -1 : undefined}
+							placeholder="Type your answer…"
+							className={cn(
+								"field-sizing-content lh-input max-h-48 min-h-10 w-full resize-none bg-transparent px-2.5 py-2 outline-none placeholder:text-muted-foreground",
+								dontKnow && "pointer-events-none",
+							)}
+						/>
+					</div>
+				</div>
+			))}
+
+			<div className="mb-3">
+				{photos.length > 0 && (
+					<div className="mb-1.5 flex flex-wrap items-center gap-1.5">
+						{photos.map((path) => {
+							const name = photoName(path);
+							return (
+								<span
+									key={path}
+									className={cn(
+										"flex min-w-0 items-center gap-1 rounded-md border bg-muted px-2 py-1 text-xs",
+										dontKnow && "opacity-50",
+									)}
+								>
+									<span className="truncate">{name}</span>
+									<button
+										type="button"
+										aria-label={`Remove photo ${name}`}
+										disabled={dontKnow}
+										onClick={() =>
+											setPhotoList(photosRef.current.filter((candidate) => candidate !== path))
+										}
+										className="shrink-0 text-muted-foreground transition-colors hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+									>
+										<XIcon className="size-3" aria-hidden />
+									</button>
+								</span>
+							);
+						})}
+					</div>
+				)}
+				<Button
+					type="button"
+					variant="outline"
+					size="xs"
+					disabled={dontKnow || photos.length >= MAX_PHOTOS}
+					onClick={() => void attachPhoto()}
+				>
+					Attach photo
+				</Button>
+				{notice && (
+					<p role="status" className="mt-1.5 text-xs text-muted-foreground">
+						{notice}
+					</p>
+				)}
+			</div>
+		</>
+	);
+
+	const actions = (
+		<form
+			className="border-t border-border/60 p-1.5"
+			onSubmit={(event) => {
+				event.preventDefault();
+				submit();
+			}}
+		>
+			<div className="flex flex-col gap-2 p-1">
+				<button
+					type="button"
+					onClick={() => toggleDontKnow()}
+					aria-pressed={dontKnow}
+					className={cn(
+						"flex items-start gap-3 rounded-lg border border-dashed px-3 py-2 text-left text-sm outline-none transition-colors",
+						dontKnow ? "border-primary text-foreground" : "text-muted-foreground hover:bg-accent/50",
+					)}
+				>
+					<span
+						className={cn(
+							"mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full border",
+							dontKnow ? "border-primary bg-primary text-primary-foreground" : "border-muted-foreground/40",
+						)}
+					>
+						{dontKnow && <span className="size-1.5 rounded-full bg-current" />}
+					</span>
+					<span>I don't know</span>
+				</button>
+				<div className="flex items-center justify-end">
+					<Button
+						type="submit"
+						disabled={!canSubmit}
+						className="ml-auto h-9 rounded-[6px] px-3.5 text-sm font-medium"
+					>
+						Submit answer
+					</Button>
+				</div>
+			</div>
+		</form>
+	);
+
+	// The two-pane workspace (issue #7). Pages stack above the boxes on a
+	// narrow window and sit beside them from md up; the answer sheet keeps its
+	// own scroll area and the submit row stays pinned under it.
+	if (stage) {
+		return createPortal(
+			<div
+				role="dialog"
+				aria-modal="true"
+				aria-label={`${title} — question`}
+				data-testid="frq-stage"
+				className="fixed inset-0 z-50 flex flex-col bg-background"
+			>
+				<div className="flex items-center gap-3 border-b border-border/60 px-5 py-2.5">
+					<div className="min-w-0 flex-1">
+						<div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{header}</div>
+						<div className="truncate text-sm font-medium">{title}</div>
+					</div>
+					<Button type="button" variant="outline" size="sm" onClick={() => setStage(false)}>
+						Close
+					</Button>
+				</div>
+				<div className="flex min-h-0 flex-1 flex-col md:flex-row">
+					<div className="min-h-0 flex-1 overflow-y-auto px-5 py-4 md:border-r md:border-border/60">
+						{details && (
+							<div className="mb-3 text-sm text-muted-foreground">
+								<ToolContentResponse>{details}</ToolContentResponse>
+							</div>
+						)}
+						{intro}
+					</div>
+					<div className="flex min-h-0 flex-1 flex-col border-t border-border/60 md:flex-none md:w-[28rem] md:shrink-0 md:border-t-0 lg:w-[32rem]">
+						<div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">{answerSheet}</div>
+						{actions}
+					</div>
+				</div>
+			</div>,
+			document.body,
+		);
+	}
+
 	return (
 		<div data-testid="question-dock">
 			<div
@@ -426,7 +642,18 @@ function FrqSheet({
 				<div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
 					{header}
 				</div>
-				<div className="mb-3 font-medium">{title}</div>
+				<div className="mb-3 flex items-baseline justify-between gap-3">
+					<div className="font-medium">{title}</div>
+					{expandable && present && (
+						<button
+							type="button"
+							onClick={() => setStage(true)}
+							className="shrink-0 text-xs font-medium text-primary underline-offset-4 hover:underline"
+						>
+							Open full screen
+						</button>
+					)}
+				</div>
 				{details && (
 					<div className="mb-3 text-sm text-muted-foreground">
 						<ToolContentResponse>{details}</ToolContentResponse>
@@ -436,147 +663,14 @@ function FrqSheet({
 				{present ? (
 					<>
 						{intro}
-
-						{parts.map((part, index) => (
-							<div key={part.label} className="mb-3">
-								<div className="mb-1 flex items-baseline gap-2">
-									<span className="text-sm font-medium">({part.label})</span>
-									{part.tag && (
-										<span className="text-xs text-muted-foreground">{part.tag}</span>
-									)}
-								</div>
-								{part.prompt && (
-									<div className="mb-1 text-sm">
-										<ToolContentResponse>{part.prompt}</ToolContentResponse>
-									</div>
-								)}
-								<div
-									className={cn(
-										"rounded-[10px] border border-border/70 bg-background/60 transition-colors focus-within:border-primary/50",
-										dontKnow && "opacity-50",
-									)}
-								>
-									<PathInput
-										value={texts[part.label] ?? ""}
-										onValueChange={(value) => setPartText(part.label, value)}
-										onFocus={() => {
-											focusedPart.current = index;
-										}}
-										onKeyDown={(event) => {
-											// Esc ends dictation (the dock's law), never the question.
-											if (event.key === "Escape" && onEscape) {
-												event.preventDefault();
-												event.stopPropagation();
-												onEscape();
-											}
-										}}
-										allowFilePaths={false}
-										aria-label={
-											part.tag || part.prompt
-												? `(${part.label}) ${part.tag ?? part.prompt}`
-												: `(${part.label})`
-										}
-										aria-disabled={dontKnow}
-										tabIndex={dontKnow ? -1 : undefined}
-										placeholder="Type your answer…"
-										className={cn(
-											"field-sizing-content lh-input max-h-48 min-h-10 w-full resize-none bg-transparent px-2.5 py-2 outline-none placeholder:text-muted-foreground",
-											dontKnow && "pointer-events-none",
-										)}
-									/>
-								</div>
-							</div>
-						))}
-
-						<div className="mb-3">
-							{photos.length > 0 && (
-								<div className="mb-1.5 flex flex-wrap items-center gap-1.5">
-									{photos.map((path) => {
-										const name = photoName(path);
-										return (
-											<span
-												key={path}
-												className={cn(
-													"flex min-w-0 items-center gap-1 rounded-md border bg-muted px-2 py-1 text-xs",
-													dontKnow && "opacity-50",
-												)}
-											>
-												<span className="truncate">{name}</span>
-												<button
-													type="button"
-													aria-label={`Remove photo ${name}`}
-													disabled={dontKnow}
-													onClick={() =>
-														setPhotoList(photosRef.current.filter((candidate) => candidate !== path))
-													}
-													className="shrink-0 text-muted-foreground transition-colors hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
-												>
-													<XIcon className="size-3" aria-hidden />
-												</button>
-											</span>
-										);
-									})}
-								</div>
-							)}
-							<Button
-								type="button"
-								variant="outline"
-								size="xs"
-								disabled={dontKnow || photos.length >= MAX_PHOTOS}
-								onClick={() => void attachPhoto()}
-							>
-								Attach photo
-							</Button>
-							{notice && (
-								<p role="status" className="mt-1.5 text-xs text-muted-foreground">
-									{notice}
-								</p>
-							)}
-						</div>
+						{answerSheet}
 					</>
 				) : (
 					absent
 				)}
 			</div>
 
-			<form
-				className="border-t border-border/60 p-1.5"
-				onSubmit={(event) => {
-					event.preventDefault();
-					submit();
-				}}
-			>
-				<div className="flex flex-col gap-2 p-1">
-					<button
-						type="button"
-						onClick={() => toggleDontKnow()}
-						aria-pressed={dontKnow}
-						className={cn(
-							"flex items-start gap-3 rounded-lg border border-dashed px-3 py-2 text-left text-sm outline-none transition-colors",
-							dontKnow ? "border-primary text-foreground" : "text-muted-foreground hover:bg-accent/50",
-						)}
-					>
-						<span
-							className={cn(
-								"mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full border",
-								dontKnow ? "border-primary bg-primary text-primary-foreground" : "border-muted-foreground/40",
-							)}
-						>
-							{dontKnow && <span className="size-1.5 rounded-full bg-current" />}
-						</span>
-						<span>I don't know</span>
-					</button>
-					<div className="flex items-center justify-end">
-						<Button
-							type="submit"
-							disabled={!canSubmit}
-							className="ml-auto h-9 rounded-[6px] px-3.5 text-sm font-medium"
-						>
-							Submit answer
-						</Button>
-					</div>
-				</div>
-			</form>
+			{actions}
 		</div>
 	);
 }
@@ -599,6 +693,7 @@ export function FrqQuestionForm({ apCourseId, question, details, ...form }: FrqQ
 				/>
 			}
 			present={question.present}
+			expandable
 			absent={
 				<div className="mb-3 rounded-lg border border-dashed bg-muted/40 p-3 text-sm">
 					This paper is not on this computer. Download it from the course page.{" "}

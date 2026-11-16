@@ -89,9 +89,11 @@ The card shows no verdict: the app does not mark an option right or wrong, does 
 
 A free-response question is either a real released College Board question from the course's question index or one the tutor writes, modelled on the released ones. Released comes first, then generated: the tutor asks an unused released question for a topic when one exists, and writes one when none fits or all have been used. A released question's card is labelled **AP · released** and shows the question's original paper page as an image, so figures and formatting are exactly the official ones. While the question loads, the card says `Loading the question…`.
 
+A released question opens in a full-screen workspace: the paper's pages on the left, one answer box per part on the right, so the question stays in view while you write. **Close** returns to the conversation with every answer kept; the question stays in the dock, where **Open full screen** reopens the workspace.
+
 A written question's card is labelled **AP · generated** and shows its title, its stem and one answer box per part; it has no original page. The tutor writes the complete solution and the full rubric before the question is shown, and commits them: neither is displayed.
 
-Below the page or the stem there is one answer box per part. Each box is labelled with the part's letter. A released question also shows the topic the part is tagged with in smaller text beside the letter; a written question shows the part's prompt above its box. Type or dictate each answer; dictation goes to the box that last had focus, the first box by default. A part you leave blank earns no points.
+The answer sheet has one box per part — below the page or the stem in the dock, beside it in the workspace. Each box is labelled with the part's letter. A released question also shows the topic the part is tagged with in smaller text beside the letter; a written question shows the part's prompt above its box. Type or dictate each answer; dictation goes to the box that last had focus, the first box by default. A part you leave blank earns no points.
 
 **Attach photo** adds a photo of your written work, up to six; each can be removed before you submit. The tutor sees a photo while it grades and says what it read from the page before grading. The image is not kept in the session: the answer record lists each attached photo by file name as `Photo attached: <name>`, and the tutor's written read-back is what stays with the transcript.
 

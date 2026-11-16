@@ -253,17 +253,24 @@ describe("AP: the live ap_frq dock", () => {
 					/>,
 				);
 			});
-			assert.match(host.textContent ?? "", /2023 FRQ 2/, "the fetched question is posed");
+			// The loaded question opens as the full-screen workspace, which is
+			// portaled into document.body — the host itself is left empty.
+			const stage = document.body.querySelector('[data-testid="frq-stage"]');
+			assert.ok(stage, "the fetched question is posed");
+			assert.match(stage.textContent ?? "", /2023 FRQ 2/, "the fetched question is posed");
 			assert.equal(
-				host.querySelector("img")?.getAttribute("src"),
+				stage.querySelector("img")?.getAttribute("src"),
 				"/api/ap/ap_1/pages/frq-2023.pdf/5",
 				"the course id reaches the page images",
 			);
-			assert.ok(!(host.innerHTML ?? "").includes("/api/ap//pages/"), "never an empty course id");
+			assert.ok(!(stage.innerHTML ?? "").includes("/api/ap//pages/"), "never an empty course id");
 		} finally {
 			globalThis.fetch = stubbed;
 			await act(async () => root.unmount());
 			host.remove();
+			// The workspace is a portal on document.body: unmounting removes it,
+			// but never let a leftover stage pose as another test's question.
+			for (const leftover of document.body.querySelectorAll('[data-testid="frq-stage"]')) leftover.remove();
 		}
 	});
 
@@ -353,5 +360,54 @@ describe("AP: the answered ap_frq card", () => {
 		assert.ok(!html.includes("data-mark"), "no mark glyph");
 		assert.ok(!html.includes("text-red-") && !html.includes("border-red-"), "no red marking");
 		assert.ok(!html.includes("text-green-") && !html.includes("border-green-"), "no green marking");
+	});
+});
+
+describe("AP: the released question's full-screen workspace (issue #7)", () => {
+	it("offers the workspace from the dock and renders the dock layout on the server", () => {
+		const html = renderForm();
+		assert.match(html, /Open full screen/);
+		assert.ok(!html.includes('data-testid="frq-stage"'), "the workspace is a client-side surface");
+		assert.equal((html.match(/data-file-path-input=""/g) ?? []).length, 3, "the dock keeps one box per part");
+	});
+
+	it("opens pages-left / boxes-right when the question is posed, and Close returns to the dock", async () => {
+		const host = document.createElement("div");
+		document.body.append(host);
+		const root = createRoot(host);
+		try {
+			await act(async () => {
+				root.render(
+					<FrqQuestionForm
+						toolCallId="frq1"
+						apCourseId="ap_1"
+						question={question}
+						details={details}
+						onSubmit={() => {}}
+					/>,
+				);
+			});
+			const stage = document.body.querySelector('[data-testid="frq-stage"]');
+			assert.ok(stage, "the workspace opens with the question");
+			assert.equal(stage.getAttribute("role"), "dialog", "it is a modal surface");
+			assert.equal(stage.getAttribute("aria-modal"), "true");
+			assert.match(stage.innerHTML, /\/api\/ap\/ap_1\/pages\/frq-2023\.pdf\/5/, "the paper pages are in the workspace");
+			assert.equal(
+				stage.querySelectorAll('[data-file-path-input=""]').length,
+				3,
+				"one answer box per part sits beside the pages",
+			);
+			assert.match(stage.innerHTML, /Submit answer/);
+			const close = Array.from(stage.querySelectorAll("button")).find((button) => button.textContent === "Close");
+			assert.ok(close, "the workspace can be closed");
+			await act(async () => {
+				(close as HTMLElement).click();
+			});
+			assert.equal(document.body.querySelector('[data-testid="frq-stage"]'), null, "Close leaves the workspace");
+			assert.ok(host.querySelector('[data-testid="question-dock"]'), "the dock is back in the composer");
+		} finally {
+			await act(async () => root.unmount());
+			host.remove();
+		}
 	});
 });
