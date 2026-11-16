@@ -96,6 +96,17 @@ describe("pickNativePaths — the Windows dialog", () => {
 		assert.match(script(calls[1]!), /Multiselect = \$true/);
 	});
 
+	it("shows the invisible topmost owner before the dialog so it cannot open behind the browser", async () => {
+		const calls: { file: string; args: string[] }[] = [];
+		await pickNativePaths("folder", { platform: "win32", run: async (file, args) => { calls.push({ file, args }); return "[]"; } });
+		const args = calls[0]!.args;
+		const script = Buffer.from(args[args.indexOf("-EncodedCommand") + 1]!, "base64").toString("utf16le");
+		const shown = script.indexOf("$owner.Show()");
+		assert.ok(shown >= 0, "the owner form is shown");
+		assert.ok(shown < script.indexOf("ShowDialog($owner)"), "the owner is shown before the dialog");
+		assert.match(script, /\$owner\.Opacity = 0/);
+	});
+
 	it("returns chosen paths, including non-ASCII names", async () => {
 		const outcome = await pickNativePaths("files", { ...win32, run: async () => JSON.stringify(["C:\\Users\\k\\微积分 notes.pdf", "D:\\b.png"]) });
 		assert.deepEqual(outcome, { status: "picked", paths: ["C:\\Users\\k\\微积分 notes.pdf", "D:\\b.png"] });

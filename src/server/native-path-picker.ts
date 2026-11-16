@@ -12,8 +12,10 @@ const HEADERS = { "Cache-Control": "no-store", "X-Content-Type-Options": "nosnif
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 const ROOTED_WINDOWS_PATH = /^(?:[a-z]:[\\/]|\\\\)/i;
 
-/** Fixed per mode: nothing from the request reaches the script. The hidden
- *  topmost owner keeps the dialog above the browser that asked for it. */
+/** Fixed per mode: nothing from the request reaches the script. The topmost
+ *  owner must be SHOWN — invisibly — because a form that has never been
+ *  displayed takes no part in z-order, and the dialog it owns would open
+ *  behind the browser that asked for it. */
 function windowsDialogScript(mode: PathPickerMode): string {
 	const dialog = mode === "folder"
 		? `$dialog = New-Object System.Windows.Forms.FolderBrowserDialog
@@ -29,9 +31,23 @@ $chosen = { @($dialog.FileNames) }`;
 Add-Type -AssemblyName System.Windows.Forms
 $owner = New-Object System.Windows.Forms.Form
 $owner.TopMost = $true
+$owner.ShowInTaskbar = $false
+$owner.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
+$owner.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
+$owner.Width = 1
+$owner.Height = 1
+$owner.Left = -32000
+$owner.Top = -32000
+$owner.Opacity = 0
+$owner.Show()
 ${dialog}
 $paths = @()
-if ($dialog.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) { $paths = & $chosen }
+try {
+	if ($dialog.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) { $paths = & $chosen }
+} finally {
+	$owner.Close()
+	$owner.Dispose()
+}
 ConvertTo-Json -InputObject @($paths) -Compress`;
 }
 
