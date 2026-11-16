@@ -1,6 +1,6 @@
 ---
 name: learnharness
-description: Read and understand a person's local LearnHarness learning data—teaching and practice sessions, answers, confidence, learner thinking, propositions, and reasoning chains. Use when a request benefits from their learning history or asks to explore, connect, or analyze that history.
+description: Read and understand a person's local Cramsesh learning data—teaching and practice sessions, answers, confidence, learner thinking, propositions, and reasoning chains. Use when a request benefits from their learning history or asks to explore, connect, or analyze that history.
 license: AGPL-3.0-only
 compatibility: Python 3.10+ and access to the user's local LearnHarness data folder. Standard library only; no network, running app, or repository checkout required.
 ---
@@ -75,15 +75,17 @@ The default is the normal installed application's data folder:
 
 | OS | Data folder |
 | --- | --- |
-| macOS | `~/Library/Application Support/LearnHarness/data` |
-| Windows | `%APPDATA%\LearnHarness\data` |
-| Linux | `$XDG_CONFIG_HOME/LearnHarness/data`, or `~/.config/LearnHarness/data` |
+| macOS | `~/Library/Application Support/Cramsesh/data` (fallback: `~/Library/Application Support/LearnHarness/data`) |
+| Windows | `%APPDATA%\Cramsesh\data` (fallback: `%APPDATA%\LearnHarness\data`) |
+| Linux | `$XDG_CONFIG_HOME/Cramsesh/data` or `~/.config/Cramsesh/data` (fallback: the same paths under `LearnHarness`) |
 
-This is the directory **containing** `chats/` and `graph/`, not their parent
-`LearnHarness/` profile directory. For a moved installation, backup, development
-copy, or an app configured with `LH_DATA_DIR`, use `--data-dir` explicitly. Readers
-print the selected directory and never create a missing folder or silently switch
-to another copy.
+If only an old `LearnHarness` profile exists (an install that has not opened
+Cramsesh yet), its `data` folder is used instead. This is the directory
+**containing** `chats/` and `graph/`, not their parent `Cramsesh/` profile
+directory. For a moved installation, backup, development copy, or an app
+configured with `LH_DATA_DIR`, use `--data-dir` explicitly. Readers print the
+selected directory and never create a missing folder or silently switch to
+another copy.
 
 ## Small readers
 

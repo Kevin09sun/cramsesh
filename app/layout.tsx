@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { JetBrains_Mono, Source_Sans_3 } from "next/font/google";
+import { Nunito } from "next/font/google";
 import "katex/dist/katex.min.css";
 import "./globals.css";
 import { AppShell, SidebarProvider } from "@/components/sidebar";
@@ -9,20 +9,19 @@ import { AppearanceProvider } from "@/components/settings/appearance";
 import { THEME_BOOT_SCRIPT } from "@/components/settings/theme-boot";
 import UpdateBanner from "@/components/update-banner";
 
-// Chrome = JetBrains Mono, teaching prose = Source Sans 3, titles = CMU
-// Serif (the bundled lh-cmu @font-face in globals.css — no CDN).
-const ui = JetBrains_Mono({ subsets: ["latin"], variable: "--font-jetbrains" });
-const prose = Source_Sans_3({ subsets: ["latin"], variable: "--font-sans3" });
+// One family for chrome, teaching prose and titles: Nunito (code keeps a
+// monospace stack — see the @theme font mapping in globals.css).
+const nunito = Nunito({ subsets: ["latin"], variable: "--font-nunito" });
 
 export const metadata: Metadata = {
-	title: "Learning Harness",
-	description: "A teacher agent with a memory — sessions, quizzes, and a knowledge graph of what you know.",
+	title: "Cramsesh",
+	description: "AP prep made EZ — a study buddy that teaches, quizzes, and checks your thinking.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
 	return (
 		// The boot script may swap dark → light before hydration.
-		<html lang="en" className={`dark ${ui.variable} ${prose.variable}`} suppressHydrationWarning>
+		<html lang="en" className={`dark ${nunito.variable}`} suppressHydrationWarning>
 			<head>
 				<script dangerouslySetInnerHTML={{ __html: THEME_BOOT_SCRIPT }} />
 			</head>

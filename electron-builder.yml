@@ -1,4 +1,6 @@
-# electron-builder config — LearnHarness desktop (macOS arm64; Windows/Linux x64).
+# electron-builder config — Cramsesh desktop (Windows/Linux x64; macOS arm64
+# for local builds only — 1.0.0 ships unsigned Windows and Linux because the
+# owner has no Apple signing account yet).
 #
 # Shape (fact-checked 2026-09-17):
 #   - the app's real server (.next/standalone, curated by
@@ -6,11 +8,11 @@
 #     because native .node/dylib can't dlopen from a read-only archive and
 #     server.js process.chdir()s into its own dir;
 #   - the asar holds only the shell (electron/main.cjs + package.json);
-#   - signed + notarized since 2026-10-08 (Developer ID Application cert in
-#     the login keychain; notary credentials in the LH_NOTARY keychain
-#     profile; the profile + team env vars are baked into desktop:dist).
-appId: com.learnharness.LearnHarness
-productName: LearnHarness
+#   - the mac section below stays for local unsigned builds (desktop:dist
+#     passes -c.mac.notarize=false -c.mac.identity=null); its CI job is
+#     disabled in release.yml until the owner has signing credentials.
+appId: com.cramsesh.Cramsesh
+productName: Cramsesh
 directories:
   output: dist
 # Icons (owner ruling, 2026-10-13) — per-platform sources in build/:
@@ -125,7 +127,7 @@ mac:
   # Laid for the STT milestone (researcher-verified): the TCC mic prompt
   # reads this string; macOS asks regardless of Electron's own handlers.
   extendInfo:
-    NSMicrophoneUsageDescription: "LearnHarness uses the microphone only for speech-to-text input into your sessions."
+    NSMicrophoneUsageDescription: "Cramsesh uses the microphone only for speech-to-text input into your sessions."
   hardenedRuntime: true
   entitlements: build/entitlements.mac.plist
   # Signing + notarization (flipped 2026-10-08): identity auto-detects the
@@ -181,14 +183,15 @@ linux:
   # Both targets update via electron-updater 6.8.9. AppImage replaces its
   # own file; deb uses dpkg/apt and may request administrator permission.
 publish:
-  # Update feed = GitHub Releases (decided 2026-10-08): latest-mac.yml +
-  # zip/blockmap live on releases; electron-updater reads them anonymously.
-  # REQUIRES THE REPO TO BE PUBLIC before 0.3.0 ships — anonymous downloads
-  # from a private repo are impossible, and a token baked into the app
-  # would be a leak. desktop:dist passes no --publish flag, so builds never
-  # upload; publishing happens at release time (GH_TOKEN + --publish).
+  # Update feed = GitHub Releases (decided 2026-10-08): latest.yml +
+  # latest-linux.yml (and latest-mac.yml when the mac job returns) live on
+  # releases; electron-updater reads them anonymously. REQUIRES THE REPO TO
+  # BE PUBLIC before release — anonymous downloads from a private repo are
+  # impossible, and a token baked into the app would be a leak.
+  # desktop:dist passes no --publish flag, so builds never upload; publishing
+  # happens at release time (GH_TOKEN + --publish).
   - provider: github
-    owner: amosblomqvist
-    repo: learnharness
-    # All three CI jobs contribute assets; only the owner publishes it.
+    owner: Kevin09sun
+    repo: cramsesh
+    # Both CI jobs contribute assets; only the owner publishes it.
     releaseType: draft

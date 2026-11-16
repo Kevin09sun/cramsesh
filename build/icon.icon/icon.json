@@ -1,21 +1,13 @@
 {
   "fill" : {
-    "automatic-gradient" : "srgb:0.07843,0.07843,0.07843,1.00000"
+    "solid" : "srgb:0.23922,0.43529,0.71373,1.00000"
   },
   "groups" : [
     {
       "layers" : [
         {
-          "image-name" : "lh_2 2.svg",
-          "name" : "lh_2 2"
-        },
-        {
-          "image-name" : "lh_1 2.svg",
-          "name" : "lh_1 2"
-        },
-        {
-          "image-name" : "lh_0 2.svg",
-          "name" : "lh_0 2"
+          "image-name" : "cramsesh.svg",
+          "name" : "cramsesh"
         }
       ],
       "shadow" : {

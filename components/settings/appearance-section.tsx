@@ -23,7 +23,7 @@
  * it). In a plain dev browser the API is absent → a small curated list
  * + a footer that says exactly that — never a fabricated system list.
  * The custom-family input inside the menu is the manual escape path.
- * Empty/unset keeps meaning Source Sans 3.
+ * Empty/unset keeps meaning Nunito.
  *
  * Emphasis inks (same wave): the factory tokens default to the regular
  * text color now (globals.css); the rows' empty-state labels say "same
@@ -45,7 +45,7 @@ import { CommitInput, SettingsMenuTrigger, SettingsRow, ThinSelect, Toggle } fro
 
 /** The factory reading family — the DEFAULT row's identity (unset =
  *  this). Exported for tests. */
-export const DEFAULT_READING_FONT = "Source Sans 3";
+export const DEFAULT_READING_FONT = "Nunito";
 
 /** The dev-browser fallback list (queryLocalFonts is absent there):
  *  the app's own knowns plus a handful of ubiquitous macOS families,
@@ -54,7 +54,6 @@ export const DEFAULT_READING_FONT = "Source Sans 3";
  *  for tests. */
 export const CURATED_FALLBACK_FONTS: readonly string[] = [
 	"Arial",
-	"CMU Serif",
 	"Courier New",
 	"Georgia",
 	"Helvetica",
@@ -78,8 +77,8 @@ function localFontsApi(): LocalFontsApi | null {
 }
 
 /** Compose the reading-font pick: null (or blank) = the factory
- *  Source Sans 3; otherwise the family verbatim (trimmed — the
- *  sanitizer trims again server-side). Pure — exported for tests. */
+ *  Nunito; otherwise the family verbatim (trimmed — the sanitizer trims
+ *  again server-side). Pure — exported for tests. */
 export function composeFontFamily(
 	appearance: AppearanceSettings | undefined,
 	family: string | null,
@@ -99,6 +98,12 @@ export function AppearanceSection({
 }) {
 	const { appearance: resolved } = useAppearance();
 	const md = appearance?.mdRendering;
+	// The factory background is per-mode (globals.css), so the hint and
+	// placeholder name the CURRENT mode's page colour, never the other one's.
+	// The prop's mode drives the control (like the Mode select below); the
+	// resolved view is the fallback before the record arrives.
+	const mode = appearance?.mode ?? resolved.mode;
+	const defaultBackground = mode === "light" ? "#FBF6EA" : "#14213A";
 
 	// The font dropdown's open state + its enumeration cache. undefined =
 	// not enumerated yet (desktop: click-bound queryLocalFonts pending);
@@ -199,12 +204,12 @@ export function AppearanceSection({
 			</SettingsRow>
 			<SettingsRow
 				label="Background"
-				hint={`Empty = ${resolved.background ?? "#141414"}`}
+				hint={`Empty = ${resolved.background ?? defaultBackground}`}
 				testid="row-background"
 			>
 				<CommitInput
 					value={appearance?.background ?? ""}
-					placeholder="#141414"
+					placeholder={defaultBackground}
 					ariaLabel="background hex"
 					testid="input-background"
 					onCommit={(v) => onSectionChange({ ...appearance, background: v === "" ? null : v })}
@@ -285,13 +290,6 @@ export function AppearanceSection({
 						if (!Number.isFinite(n)) return; // bad input: no write, factory stays
 						onSectionChange({ ...appearance, proseFontSize: Math.min(24, Math.max(12, Math.round(n))) });
 					}}
-				/>
-			</SettingsRow>
-			<SettingsRow label="Session names in serif" testid="row-session-serif">
-				<Toggle
-					checked={appearance?.sessionNameSerif ?? true}
-					label="session names serif"
-					onChange={(on) => onSectionChange({ ...appearance, sessionNameSerif: on })}
 				/>
 			</SettingsRow>
 			<SettingsRow label="Heading weight" hint={`${resolved.mdRendering.headingWeight}`} testid="row-heading-weight">

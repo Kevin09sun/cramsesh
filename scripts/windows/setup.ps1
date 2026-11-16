@@ -15,7 +15,7 @@ if (-not $TasksOnly) {
 	gh auth setup-git
 	if (-not (Test-Path (Join-Path $data '.git'))) {
 		if ((Test-Path $data) -and (Get-ChildItem $data -Force)) { throw "$data has files but is not a git repo. Move them aside first." }
-		$url = (git -C $repo remote get-url origin) -replace '/learnharness(\.git)?$', '/learnharness-data.git'
+		$url = (git -C $repo remote get-url origin) -replace '/(learnharness|cramsesh)(\.git)?$', '/learnharness-data.git'
 		git clone $url $data
 		if ($LASTEXITCODE -ne 0) { throw 'Could not clone the learning data.' }
 	}

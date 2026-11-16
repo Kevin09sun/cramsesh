@@ -26,8 +26,11 @@ import { nativeSubscriptionStream } from "./subscription-stream.ts";
 /** App identity is immutable and shared by Models and every native Agent.
  * Agent's default Pi attribution otherwise overrides the Models identity. */
 export const APP_IDENTITY = Object.freeze({
-	userAgent: Object.freeze({ custom: `learnharness/${packageMetadata.version}` }),
-	attribution: Object.freeze({ name: packageMetadata.name, url: packageMetadata.homepage }),
+	userAgent: Object.freeze({ custom: `cramsesh/${packageMetadata.version}` }),
+	// The provider-facing attribution name is a kept identifier ("learnharness"
+	// in the rebrand's keep-unchanged list) and deliberately decoupled from the
+	// package name; the URL points at the product's own source.
+	attribution: Object.freeze({ name: "learnharness", url: packageMetadata.homepage }),
 });
 
 /**

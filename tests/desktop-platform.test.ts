@@ -1,14 +1,16 @@
 /** Platform window chrome + packaging policy, without launching Electron. */
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runInNewContext } from "node:vm";
 import { describe, it } from "node:test";
 
 const require = createRequire(import.meta.url);
 const mainFile = fileURLToPath(new URL("../electron/main.cjs", import.meta.url));
+const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 const mainSource = readFileSync(mainFile, "utf8");
 const mainRequire = createRequire(mainFile);
 
@@ -51,7 +53,7 @@ describe("desktop window chrome", () => {
 		it(`${platform} uses native-height right-side controls with an Alt-accessible menu`, () => {
 			const options = windowOptions(platform);
 			assert.equal(options.titleBarStyle, "hidden");
-			assert.deepEqual(options.titleBarOverlay, { color: "#141414", symbolColor: "#e5e5e5" });
+			assert.deepEqual(options.titleBarOverlay, { color: "#14213A", symbolColor: "#EDE6D6" });
 			assert.equal(Object.hasOwn(options.titleBarOverlay, "height"), false, "omit height so the OS selects its native default");
 			assert.equal(options.trafficLightPosition, undefined);
 			assert.equal(options.autoHideMenuBar, true);
@@ -99,6 +101,43 @@ describe("desktop window chrome", () => {
 			"chatgpt", "checkForUpdates", "chooseAttachmentFolder", "expandWindow", "getPathForFile", "getUpdateState", "getZoom", "installUpdate", "onOpenSettings", "onUpdateStatus", "onZoom", "platform", "subscriptions",
 		]);
 		assert.deepEqual(Object.keys(bridge.subscriptions as object).sort(), ["cancel", "consent", "disconnect", "login", "onChange", "open", "respond", "retry", "status"]);
+	});
+});
+
+describe("desktop profile wiring", () => {
+	it("sets userData from resolveUserDataDir before taking the single-instance lock", () => {
+		const calls: string[] = [];
+		const appData = join("/fixture", "appData");
+		const legacy = join(appData, "LearnHarness");
+		const electron = {
+			app: {
+				setName() {},
+				getPath: () => appData,
+				setPath: (name: string, value: string) => calls.push(`setPath ${name} ${value}`),
+				requestSingleInstanceLock: () => {
+					calls.push("requestSingleInstanceLock");
+					return false;
+				},
+				quit() {},
+			},
+			BrowserWindow: class {},
+			session: { defaultSession: { setPermissionRequestHandler() {}, setPermissionCheckHandler() {} } },
+		};
+		runInNewContext(mainSource, {
+			// Only the old LearnHarness profile exists, so resolveUserDataDir must choose it.
+			require: (id: string) => {
+				if (id === "electron") return electron;
+				if (id === "node:fs") return { existsSync: (candidate: string) => candidate === legacy };
+				return mainRequire(id);
+			},
+			process: { platform: "win32", argv: [], env: {}, on() {} },
+			__dirname: dirname(mainFile),
+		}, { filename: mainFile });
+		const setPathIndex = calls.findIndex((call) => call.startsWith("setPath userData "));
+		const lockIndex = calls.indexOf("requestSingleInstanceLock");
+		assert.ok(setPathIndex >= 0, "userData is set");
+		assert.ok(calls[setPathIndex]!.endsWith("LearnHarness"), "the existing legacy profile is used");
+		assert.ok(lockIndex > setPathIndex, "userData is set before the single-instance lock");
 	});
 });
 
@@ -161,10 +200,34 @@ describe("desktop packaging policy", () => {
 
 	it("deb has public maintainer metadata and a matching desktop identity", () => {
 		const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
-		assert.equal(pkg.author.name, "Amos Blomqvist");
-		assert.equal(pkg.author.email, "255718537+amosblomqvist@users.noreply.github.com");
-		assert.equal(pkg.homepage, "https://github.com/amosblomqvist/learnharness");
-		assert.equal(pkg.desktopName, "learnharness.desktop");
+		assert.equal(pkg.name, "cramsesh");
+		assert.equal(pkg.version, "1.0.0");
+		assert.equal(pkg.description, "Cramsesh — AP prep made EZ. A study buddy that teaches, quizzes, and checks your thinking.");
+		assert.equal(pkg.author.name, "Hongyi Sun");
+		assert.equal(pkg.author.email, "37144566+Kevin09sun@users.noreply.github.com");
+		assert.deepEqual(pkg.contributors, [{ name: "Amos Blomqvist", url: "https://github.com/amosblomqvist" }]);
+		assert.equal(pkg.homepage, "https://github.com/Kevin09sun/cramsesh");
+		assert.equal(pkg.desktopName, "cramsesh.desktop");
+		assert.equal(config.appId, "com.cramsesh.Cramsesh");
+		assert.equal(config.productName, "Cramsesh");
+		assert.equal(config.publish[0].owner, "Kevin09sun");
+		assert.equal(config.publish[0].repo, "cramsesh");
+	});
+
+	it("never contains the owner's personal email (no-reply address only)", () => {
+		// Built by concatenation so this test file never matches itself.
+		const needle = `kevin09.sun` + "@";
+		const files = execFileSync("git", ["ls-files", "-z"], { cwd: repoRoot, encoding: "utf8" })
+			.split("\0")
+			.filter(Boolean);
+		const hits = files.filter((file) => {
+			try {
+				return readFileSync(join(repoRoot, file)).includes(Buffer.from(needle));
+			} catch {
+				return false;
+			}
+		});
+		assert.deepEqual(hits, [], "the owner's personal email must never be committed");
 	});
 });
 
@@ -269,13 +332,13 @@ describe("desktop release workflow", () => {
 		}
 	});
 
-	it("pairs Icon Composer packaging with macOS 26 and Xcode selection, retaining macOS 15 CI", () => {
-		const mac = packaging.strategy?.matrix.include.find(entry => entry.platform === "mac-arm64");
-		assert.equal(mac?.os, "macos-26", "actool's .icon compiler needs macOS 26 host frameworks, not just newer Xcode");
-		assert.equal(mac?.builder_args, "--mac --arm64");
+	it("keeps the mac packaging setup ready while the 1.0.0 matrix ships Windows/Linux only", () => {
+		const platforms = packaging.strategy?.matrix.include.map(entry => entry.platform);
+		assert.deepEqual(platforms, ["windows-x64", "linux-x64"], "mac is disabled for 1.0.0");
+		assert.equal(platforms?.includes("mac-arm64"), false);
 		assert.equal(packaging["runs-on"], "${{ matrix.os }}");
 		const xcodeIndex = packaging.steps.findIndex(step => step.uses === "maxim-lobanov/setup-xcode@v1");
-		assert.ok(xcodeIndex >= 0);
+		assert.ok(xcodeIndex >= 0, "the Xcode step stays so re-enabling mac is one matrix line");
 		const xcode = packaging.steps[xcodeIndex];
 		assert.equal(xcode?.if, "runner.os == 'macOS'");
 		assert.equal(xcode?.with?.["xcode-version"], "latest-stable");

@@ -3,8 +3,9 @@
  * plus CLI end-to-end runs, all offline against fixtures. The expected asset
  * names asserted here are the ones verified against the INSTALLED
  * app-builder-lib 26.15.3 (see the script header for the derivation):
- * 11 assets — 4 installers (dmg / NSIS exe / AppImage / deb), the mac
- * updater ZIP, its/exe/dmg blockmaps, and the three latest*.yml feeds.
+ * 6 assets — 3 installers (NSIS exe / AppImage / deb), the exe blockmap,
+ * and the two latest*.yml feeds. mac is disabled for 1.0.0 (no Apple
+ * signing account yet).
  */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -24,7 +25,7 @@ import {
 const require = createRequire(import.meta.url);
 const repoRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const script = path.join(repoRoot, "scripts", "verify-release.ts");
-const VERSION = "0.2.0";
+const VERSION = "1.0.0";
 const TAG = `v${VERSION}`;
 
 /** A base64-looking sha512 (the gate checks shape, not the actual digest). */
@@ -34,7 +35,7 @@ function asset(id: number, name: string, overrides: Partial<ReleaseAsset> = {}):
 	return { id, name, size: 5000, state: "uploaded", ...overrides };
 }
 
-/** The complete, healthy 11-asset draft for a version. */
+/** The complete, healthy 6-asset draft for a version. */
 function healthyRelease(version: string, tagForm: "v" | "bare" = "v"): ReleaseRecord {
 	const e = expectedAssets(version);
 	return {
@@ -45,7 +46,7 @@ function healthyRelease(version: string, tagForm: "v" | "bare" = "v"): ReleaseRe
 	};
 }
 
-/** The three update feeds exactly as app-builder-lib writes them. */
+/** The update feeds exactly as app-builder-lib writes them. */
 function healthyFeeds(version: string, release: ReleaseRecord): Record<string, string> {
 	const byName = new Map(release.assets.map((entry) => [entry.name, entry]));
 	const feeds: Record<string, string> = {};
@@ -64,20 +65,16 @@ function healthyFeeds(version: string, release: ReleaseRecord): Record<string, s
 }
 
 describe("release gate — expected asset inventory", () => {
-	it("is exactly the 11 verified builder outputs for the version", () => {
+	it("is exactly the 6 verified builder outputs for the version — no mac artifacts", () => {
 		assert.deepEqual(expectedAssets(VERSION).files, [
-			"LearnHarness-0.2.0-arm64.dmg",
-			"LearnHarness-0.2.0-arm64-mac.zip",
-			"LearnHarness-0.2.0-x64-setup.exe",
-			"LearnHarness-0.2.0-x86_64.AppImage",
-			"LearnHarness-0.2.0-amd64.deb",
-			"LearnHarness-0.2.0-arm64.dmg.blockmap",
-			"LearnHarness-0.2.0-arm64-mac.zip.blockmap",
-			"LearnHarness-0.2.0-x64-setup.exe.blockmap",
-			"latest-mac.yml",
+			"Cramsesh-1.0.0-x64-setup.exe",
+			"Cramsesh-1.0.0-x86_64.AppImage",
+			"Cramsesh-1.0.0-amd64.deb",
+			"Cramsesh-1.0.0-x64-setup.exe.blockmap",
 			"latest.yml",
 			"latest-linux.yml",
 		]);
+		assert.equal(expectedAssets(VERSION).files.includes("latest-mac.yml"), false);
 	});
 
 	it("accepts plain semver versions and nothing else", () => {
@@ -123,7 +120,7 @@ describe("release gate — draft selection (fail-closed, existing tag matching)"
 		const selection = selectDraft([healthyRelease(VERSION, "bare")], TAG, VERSION);
 		assert.ok(selection.ok);
 		assert.equal(selection.warnings.length, 1);
-		assert.match(selection.warnings[0]!, /unprefixed tag "0.2.0"/);
+		assert.match(selection.warnings[0]!, new RegExp(`unprefixed tag "${VERSION}"`));
 		assert.match(selection.warnings[0]!, /SECOND draft/);
 	});
 
@@ -160,10 +157,8 @@ describe("release gate — packaging-config drift guard", () => {
 	const drifts: Array<[string, (config: Record<string, unknown>) => void]> = [
 		["linux artifactName", (config) => { (config.linux as Record<string, unknown>).artifactName = "${name}-${version}-${arch}.${ext}"; }],
 		["win artifactName", (config) => { (config.win as Record<string, unknown>).artifactName = "${productName}-${version}-setup.${ext}"; }],
-		["mac artifactName", (config) => { (config.mac as Record<string, unknown>).artifactName = "${productName}-${version}.${ext}"; }],
 		["top-level artifactName", (config) => { config.artifactName = "${name}-${version}.${ext}"; }],
 		["productName", (config) => { config.productName = "learnharness"; }],
-		["mac targets", (config) => { (config.mac as Record<string, unknown>).target = [{ target: "dmg", arch: ["arm64"] }]; }],
 		["win target", (config) => { (config.win as Record<string, unknown>).target = [{ target: "appx", arch: ["x64"] }]; }],
 		["linux targets", (config) => { (config.linux as Record<string, unknown>).target = [{ target: "AppImage", arch: ["x64"] }]; }],
 		["publish provider", (config) => { config.publish = [{ provider: "github", releaseType: "prerelease" }]; }],
@@ -176,7 +171,7 @@ describe("release gate — packaging-config drift guard", () => {
 			const pkg = label === "package name" ? { ...realPkg, name: "other" } : realPkg;
 			const verdict = verifyConfigAssumptions(config, pkg);
 			assert.ok(!verdict.ok);
-			assert.match(verdict.errors.join("\n"), /expected names no longer hold|would not land in the draft|no longer "learnharness"|productName is /);
+			assert.match(verdict.errors.join("\n"), /expected names no longer hold|would not land in the draft|no longer "cramsesh"|productName is /);
 		});
 	}
 });
@@ -185,11 +180,11 @@ describe("release gate — asset inventory", () => {
 	it("passes a complete draft and names every deviation", () => {
 		assert.ok(verifyAssets(healthyRelease(VERSION), expectedAssets(VERSION)).ok);
 		const release = healthyRelease(VERSION);
-		release.assets = release.assets.filter((entry) => entry.name !== "LearnHarness-0.2.0-x64-setup.exe.blockmap");
-		release.assets.push(asset(9999, "LearnHarness-0.2.0-x64.AppImage"));
-		release.assets.push(asset(9998, "LearnHarness-0.1.0-x64-setup.exe"));
-		release.assets.push(asset(9997, "LearnHarness-0.2.0-arm64.dmg", { size: 0 }));
-		release.assets.push(asset(9996, "LearnHarness-0.2.0-arm64.dmg", { state: "starter" }));
+		release.assets = release.assets.filter((entry) => entry.name !== "Cramsesh-1.0.0-x64-setup.exe.blockmap");
+		release.assets.push(asset(9999, "Cramsesh-1.0.0-x64.AppImage"));
+		release.assets.push(asset(9998, "Cramsesh-0.1.0-x64-setup.exe"));
+		release.assets.push(asset(9997, "Cramsesh-1.0.0-x64-setup.exe", { size: 0 }));
+		release.assets.push(asset(9996, "Cramsesh-1.0.0-x64-setup.exe", { state: "starter" }));
 		const verdict = verifyAssets(release, expectedAssets(VERSION));
 		assert.ok(!verdict.ok);
 		const joined = verdict.errors.join("\n");
@@ -204,8 +199,8 @@ describe("release gate — asset inventory", () => {
 
 describe("release gate — updater reference hygiene", () => {
 	it("accepts bare asset names only", () => {
-		assert.ok(isPlainAssetName("LearnHarness-0.2.0-arm64.dmg"));
-		for (const bad of ["", ".", "..", "../LearnHarness.zip", "dist/LearnHarness.zip", "https://evil.example/app.zip",
+		assert.ok(isPlainAssetName("Cramsesh-1.0.0-x86_64.AppImage"));
+		for (const bad of ["", ".", "..", "../Cramsesh.zip", "dist/Cramsesh.zip", "https://evil.example/app.zip",
 			"http://evil.example/app.zip", "file:///etc/passwd", "C:\\app.zip", "~x/app.zip", "app.zip?q=1", "app.zip#x"]) {
 			assert.equal(isPlainAssetName(bad), false, bad);
 		}
@@ -256,27 +251,13 @@ describe("release gate — update feeds", () => {
 		}, /is not a bare asset name/],
 		["reference to an asset the release does not hold", (feeds) => {
 			const e = expectedAssets(VERSION);
-			feeds["latest.yml"] = feeds["latest.yml"]!.replace(`url: ${e.win.exe}`, "url: LearnHarness-0.1.0-x64-setup.exe");
-		}, /references "LearnHarness-0\.1\.0-x64-setup\.exe" which is not an asset/],
+			feeds["latest.yml"] = feeds["latest.yml"]!.replace(`url: ${e.win.exe}`, "url: Cramsesh-0.1.0-x64-setup.exe");
+		}, /references "Cramsesh-0\.1\.0-x64-setup\.exe" which is not an asset/],
 		["size disagreeing with the uploaded asset", (feeds) => {
 			const e = expectedAssets(VERSION);
 			feeds["latest.yml"] = feeds["latest.yml"]!.replace("size: 5000", "size: 4999");
 			void e;
 		}, /size 4999 ≠ release asset size 5000/],
-		["mac ZIP not first (legacy path/sha512 would mislead the updater)", (feeds) => {
-			const e = expectedAssets(VERSION);
-			feeds["latest-mac.yml"] = feeds["latest-mac.yml"]!.replace(
-				`files:\n  - url: ${e.mac.zip}\n    sha512: ${sha512(e.mac.zip)}\n    size: 5000\n  - url: ${e.mac.dmg}\n    sha512: ${sha512(e.mac.dmg)}\n    size: 5000\n`,
-				`files:\n  - url: ${e.mac.dmg}\n    sha512: ${sha512(e.mac.dmg)}\n    size: 5000\n  - url: ${e.mac.zip}\n    sha512: ${sha512(e.mac.zip)}\n    size: 5000\n`,
-			).replace(`path: ${e.mac.zip}\nsha512: ${sha512(e.mac.zip)}\n`, `path: ${e.mac.dmg}\nsha512: ${sha512(e.mac.dmg)}\n`);
-		}, /files\[0\] must be/],
-		["mac legacy path pointing away from files[0]", (feeds) => {
-			const e = expectedAssets(VERSION);
-			feeds["latest-mac.yml"] = feeds["latest-mac.yml"]!.replace(`path: ${e.mac.zip}`, `path: ${e.mac.dmg}`);
-		}, /top-level path is/],
-		["mac legacy sha512 not matching files[0]", (feeds) => {
-			feeds["latest-mac.yml"] = feeds["latest-mac.yml"]!.replace(`sha512: ${sha512("LearnHarness-0.2.0-arm64-mac.zip")}\nreleaseDate`, `sha512: ${sha512("tampered")}\nreleaseDate`);
-		}, /top-level sha512 does not match/],
 		["missing deb entry in latest-linux.yml", (feeds) => {
 			const e = expectedAssets(VERSION);
 			feeds["latest-linux.yml"] = feeds["latest-linux.yml"]!.replace(
@@ -285,7 +266,8 @@ describe("release gate — update feeds", () => {
 		}, /must reference exactly/],
 		["extra entry in latest.yml", (feeds) => {
 			const e = expectedAssets(VERSION);
-			feeds["latest.yml"] = feeds["latest.yml"]!.replace("path:", `  - url: ${e.mac.zip}\n    sha512: ${sha512(e.mac.zip)}\n    size: 5000\npath:`);
+			feeds["latest.yml"] = feeds["latest.yml"]!.replace("path:", `  - url: Cramsesh-1.0.0-x64.zip\n    sha512: ${sha512("extra")}\n    size: 5000\npath:`);
+			void e;
 		}, /must reference exactly/],
 		["garbage sha512", (feeds) => {
 			const e = expectedAssets(VERSION);
@@ -322,7 +304,7 @@ describe("release gate — workflow wiring", () => {
 	});
 
 	it("exposes the elevated token only to the two API-reading steps", () => {
-		const readers = ["List every release, drafts included", "Download the three update feeds"];
+		const readers = ["List every release, drafts included", "Download the two update feeds"];
 		for (const step of verify.steps) {
 			if (readers.includes(step.name)) assert.equal(step.env?.GH_TOKEN, "${{ github.token }}");
 			else assert.equal(step.env?.GH_TOKEN, undefined, String(step.name ?? step.uses));
@@ -354,17 +336,25 @@ describe("release gate — workflow wiring", () => {
 		}
 	});
 
-	it("download step fetches exactly the three update feeds from the selected draft", () => {
-		const download = verify.steps.find((step: any) => step.name === "Download the three update feeds");
+	it("download step fetches exactly the two update feeds from the selected draft", () => {
+		const download = verify.steps.find((step: any) => step.name === "Download the two update feeds");
 		assert.ok(download);
-		for (const feed of ["latest-mac.yml", "latest.yml", "latest-linux.yml"]) assert.ok(download.run.includes(feed));
+		for (const feed of ["latest.yml", "latest-linux.yml"]) assert.ok(download.run.includes(feed));
+		assert.equal(download.run.includes("latest-mac.yml"), false, "mac is disabled for 1.0.0");
 		assert.match(download.run, /releases\/assets\/\$id/);
+	});
+
+	it("the active packaging matrix has no mac job for 1.0.0", () => {
+		const platforms = workflow.jobs.package.strategy.matrix.include.map((entry: any) => entry.platform);
+		assert.deepEqual(platforms, ["windows-x64", "linux-x64"]);
+		assert.equal(platforms.includes("mac-arm64"), false);
 	});
 });
 
 describe("release gate — CLI (offline, repo config)", () => {
-	// CLI fixtures follow the real package version; pure-core fixtures above
-	// intentionally stay at 0.2.0. A release version bump must not break tests.
+	// CLI fixtures follow the real package version (1.0.0); the pure-core
+	// fixtures above pin 1.0.0 for the exact asset names. A release version
+	// bump updates both.
 	const VERSION = (JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8")) as { version: string }).version;
 	const TAG = `v${VERSION}`;
 	const tsxImport = fileURLToPath(import.meta.resolve("tsx"));
@@ -408,7 +398,7 @@ describe("release gate — CLI (offline, repo config)", () => {
 		try {
 			const result = run(["verify", path.join(root, "releases.json"), path.join(root, "metadata"), "--tag", TAG]);
 			assert.equal(result.status, 0, String(result.stderr));
-			assert.match(result.stdout, /11\/11 expected files present/);
+			assert.match(result.stdout, /6\/6 expected files present/);
 			assert.ok(result.stdout.includes(`OK: draft for ${TAG} is complete`));
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
@@ -419,12 +409,12 @@ describe("release gate — CLI (offline, repo config)", () => {
 		const { root } = workspace();
 		try {
 			const release = healthyRelease(VERSION);
-			release.assets = release.assets.filter((entry) => entry.name !== `LearnHarness-${VERSION}-arm64.dmg.blockmap`);
-			release.assets.push(asset(9999, "LearnHarness-0.1.0-x64-setup.exe"));
+			release.assets = release.assets.filter((entry) => entry.name !== `Cramsesh-${VERSION}-x64-setup.exe.blockmap`);
+			release.assets.push(asset(9999, "Cramsesh-0.1.0-x64-setup.exe"));
 			fs.writeFileSync(path.join(root, "releases.json"), JSON.stringify([release]));
 			const result = run(["verify", path.join(root, "releases.json"), path.join(root, "metadata"), "--tag", TAG]);
 			assert.equal(result.status, 1);
-			assert.match(result.stderr, /arm64\.dmg\.blockmap: missing from the release/);
+			assert.match(result.stderr, /x64-setup\.exe\.blockmap: missing from the release/);
 			assert.match(result.stderr, /0\.1\.0-x64-setup\.exe: unexpected asset/);
 			assert.match(result.stderr, /do not publish/);
 		} finally {
