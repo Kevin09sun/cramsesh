@@ -48,7 +48,7 @@ Windows and Linux builds are on [GitHub Releases](https://github.com/Kevin09sun/
 
 Packaged Windows and Linux builds check for updates from the same releases feed and can install them in the app.
 
-**Former LearnHarness desktop users:** quit and uninstall the old desktop app before launching Cramsesh. Cramsesh has its own app identity; it keeps using an existing LearnHarness profile when it finds one, so your sessions and settings stay where they are.
+**Former LearnHarness desktop users:** quit and uninstall the old desktop app before launching Cramsesh. Cramsesh has its own app identity; it uses an existing LearnHarness profile only when no Cramsesh profile exists yet, so your sessions and settings stay where they are.
 
 ## Run from source
 

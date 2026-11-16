@@ -104,6 +104,43 @@ describe("desktop window chrome", () => {
 	});
 });
 
+describe("desktop profile wiring", () => {
+	it("sets userData from resolveUserDataDir before taking the single-instance lock", () => {
+		const calls: string[] = [];
+		const appData = join("/fixture", "appData");
+		const legacy = join(appData, "LearnHarness");
+		const electron = {
+			app: {
+				setName() {},
+				getPath: () => appData,
+				setPath: (name: string, value: string) => calls.push(`setPath ${name} ${value}`),
+				requestSingleInstanceLock: () => {
+					calls.push("requestSingleInstanceLock");
+					return false;
+				},
+				quit() {},
+			},
+			BrowserWindow: class {},
+			session: { defaultSession: { setPermissionRequestHandler() {}, setPermissionCheckHandler() {} } },
+		};
+		runInNewContext(mainSource, {
+			// Only the old LearnHarness profile exists, so resolveUserDataDir must choose it.
+			require: (id: string) => {
+				if (id === "electron") return electron;
+				if (id === "node:fs") return { existsSync: (candidate: string) => candidate === legacy };
+				return mainRequire(id);
+			},
+			process: { platform: "win32", argv: [], env: {}, on() {} },
+			__dirname: dirname(mainFile),
+		}, { filename: mainFile });
+		const setPathIndex = calls.findIndex((call) => call.startsWith("setPath userData "));
+		const lockIndex = calls.indexOf("requestSingleInstanceLock");
+		assert.ok(setPathIndex >= 0, "userData is set");
+		assert.ok(calls[setPathIndex]!.endsWith("LearnHarness"), "the existing legacy profile is used");
+		assert.ok(lockIndex > setPathIndex, "userData is set before the single-instance lock");
+	});
+});
+
 describe("update preload bridge", () => {
 	it("buffers the menu request, unsubscribes safely, and uses the matching snapshot/check channels", async () => {
 		let bridge!: {

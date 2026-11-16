@@ -21,6 +21,20 @@ class DataError(Exception):
     """An actionable reader error, suitable for stderr without a traceback."""
 
 
+def _profile_dir(base: Path) -> Path:
+    """The desktop profile folder, matching the app's resolveUserDataDir.
+
+    Cramsesh is the normal folder. An install that has not opened the rebranded
+    app yet keeps its old LearnHarness profile, so use that when it is the only
+    one present. Nothing is moved or created.
+    """
+    preferred = base / "Cramsesh"
+    legacy = base / "LearnHarness"
+    if not preferred.is_dir() and legacy.is_dir():
+        return legacy
+    return preferred
+
+
 def data_root(override: str | None = None) -> Path:
     """Resolve an explicit data directory or the normal desktop location.
 
@@ -30,18 +44,18 @@ def data_root(override: str | None = None) -> Path:
     if override is not None:
         root = Path(override).expanduser()
     elif sys.platform == "darwin":
-        root = Path.home() / "Library" / "Application Support" / "LearnHarness" / "data"
+        root = _profile_dir(Path.home() / "Library" / "Application Support") / "data"
     elif sys.platform == "win32":
         roaming = os.environ.get("APPDATA")
         if not roaming:
             raise DataError("APPDATA is not set; specify the learning data folder with --data-dir.")
-        root = Path(roaming) / "LearnHarness" / "data"
+        root = _profile_dir(Path(roaming)) / "data"
     elif sys.platform.startswith("linux"):
         configured = os.environ.get("XDG_CONFIG_HOME")
         base = Path(configured) if configured else Path.home() / ".config"
         if configured and not base.is_absolute():
             raise DataError("XDG_CONFIG_HOME is relative; specify an absolute --data-dir instead.")
-        root = base / "LearnHarness" / "data"
+        root = _profile_dir(base) / "data"
     else:
         raise DataError("Unknown desktop data location on this OS; specify --data-dir.")
     try:

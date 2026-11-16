@@ -113,7 +113,7 @@
 	--card-foreground: #1f3a5f;
 	--popover: #fffcf4;
 	--popover-foreground: #1f3a5f;
-	--primary: #3d6fb6;
+	--primary: #345e9a;
 	--primary-foreground: #fbf6ea;
 	--secondary: #f4ecd8;
 	--secondary-foreground: #1f3a5f;
@@ -124,7 +124,7 @@
 	--destructive: oklch(0.577 0.245 27.325);
 	--border: #e3d6b8;
 	--input: #e3d6b8;
-	--ring: #3d6fb6;
+	--ring: #345e9a;
 	--lh-ink-strong: var(--foreground);
 	--lh-ink-italic: var(--foreground);
 	--lh-prose-size: 16px;

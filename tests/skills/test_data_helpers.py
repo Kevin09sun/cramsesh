@@ -62,6 +62,24 @@ class DataHelpersTest(unittest.TestCase):
         with patch.object(_data.sys, "platform", "win32"), patch.dict(os.environ, {"APPDATA": str(self.base / "roaming")}):
             self.assertEqual(_data.data_root(), expected.resolve())
 
+    def test_prefers_cramsesh_profile_when_both_exist(self):
+        roaming = self.base / "roaming"
+        (roaming / "LearnHarness" / "data").mkdir(parents=True)
+        current = roaming / "Cramsesh" / "data"
+        current.mkdir(parents=True)
+        with patch.object(_data.sys, "platform", "win32"), patch.dict(os.environ, {"APPDATA": str(roaming)}):
+            self.assertEqual(_data.data_root(), current.resolve())
+
+    def test_defaults_to_cramsesh_profile_when_neither_exists(self):
+        roaming = self.base / "roaming"
+        roaming.mkdir()
+        with patch.object(_data.sys, "platform", "win32"), patch.dict(os.environ, {"APPDATA": str(roaming)}):
+            with self.assertRaises(_data.DataError) as raised:
+                _data.data_root()
+        self.assertIn("Cramsesh", str(raised.exception))
+        self.assertNotIn("LearnHarness", str(raised.exception))
+        self.assertFalse((roaming / "Cramsesh").exists())
+
     def test_windows_missing_appdata_requires_explicit_root(self):
         with patch.object(_data.sys, "platform", "win32"), patch.dict(os.environ, {}, clear=True):
             with self.assertRaisesRegex(_data.DataError, "--data-dir"):

@@ -45,4 +45,11 @@ describe("desktop profile folder", () => {
 	it("dev defaults to Cramsesh-dev when neither folder exists", () => {
 		assert.equal(resolveUserDataDir(AD, among(), true), path.join(AD, "Cramsesh-dev"));
 	});
+
+	it("dev prefers Cramsesh-dev when both dev folders exist", () => {
+		assert.equal(
+			resolveUserDataDir(AD, among("LearnHarness-dev", "Cramsesh-dev"), true),
+			path.join(AD, "Cramsesh-dev"),
+		);
+	});
 });

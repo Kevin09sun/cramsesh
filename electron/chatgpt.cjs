@@ -1,6 +1,6 @@
 "use strict";
 
-// LearnHarness-owned public-client OAuth. Never import pi's bundled login.
+// Cramsesh-owned public-client OAuth. Never import pi's bundled login.
 // This module is main-process-only; dependencies are injectable for scratch tests.
 const crypto = require("node:crypto");
 const http = require("node:http");

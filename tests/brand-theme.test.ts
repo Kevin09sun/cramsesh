@@ -40,6 +40,15 @@ function contrast(a: string, b: string): number {
 	return (hi! + 0.05) / (lo! + 0.05);
 }
 
+/** Composite `hex` over `background` at `alpha`, as `bg-primary/15` does. */
+function blend(hex: string, background: string, alpha: number): string {
+	const channel = (value: string, index: number) => parseInt(value.slice(index, index + 2), 16);
+	return `#${[1, 3, 5]
+		.map((index) => Math.round(channel(hex, index) * alpha + channel(background, index) * (1 - alpha)))
+		.map((value) => value.toString(16).padStart(2, "0"))
+		.join("")}`;
+}
+
 const TOKENS = [
 	"--background",
 	"--foreground",
@@ -63,7 +72,7 @@ describe("Cramsesh palette", () => {
 		const dark = block(".dark");
 
 		assert.equal(light["--background"], "#fbf6ea", "light page is cream");
-		assert.equal(light["--primary"], "#3d6fb6", "light primary is bright blue");
+		assert.equal(light["--primary"], "#345e9a", "light primary is the darker ink blue (4.5:1 as text)");
 		for (const selector of [":root", ".dark"] as const) {
 			const tokens = selector === ":root" ? root : dark;
 			assert.equal(tokens["--background"], "#14213a", `${selector} page is ink blue`);
@@ -107,6 +116,27 @@ describe("Cramsesh palette", () => {
 			);
 			assert.ok(contrast(tokens["--ring"]!, tokens["--background"]!) >= 3, `${mode} focus ring`);
 		}
+	});
+
+	it("light primary text meets 4.5:1 on every light surface and its tint", () => {
+		const light = block(".light");
+		const primary = light["--primary"]!;
+		const surfaces = {
+			background: light["--background"]!,
+			card: light["--card"]!,
+			popover: light["--popover"]!,
+			secondary: light["--secondary"]!,
+			muted: light["--muted"]!,
+			accent: light["--accent"]!,
+		};
+		for (const [surface, value] of Object.entries(surfaces)) {
+			const ratio = contrast(primary, value);
+			assert.ok(ratio >= 4.5, `light primary text on ${surface}: ${ratio.toFixed(2)}:1`);
+		}
+		const chip = blend(primary, surfaces.card, 0.15);
+		const chipRatio = contrast(primary, chip);
+		assert.ok(chipRatio >= 4.5, `light primary text on bg-primary/15 over card: ${chipRatio.toFixed(2)}:1`);
+		assert.ok(contrast(light["--primary-foreground"]!, primary) >= 4.5, "light primary button label");
 	});
 });
 
