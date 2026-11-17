@@ -36,6 +36,31 @@ export async function POST(req: Request) {
 		apLearn?: unknown;
 	};
 	const title = typeof body.title === "string" ? body.title : "";
+	// Linked Learn sessions (session folders): a Learn button names an existing,
+	// confirmed course plus the topic or unit it was opened on. The session is
+	// an ordinary teach session — a kind on the same body is an honest 400.
+	// Validate BEFORE the kind branches so a rejected Learn body never reaches
+	// a branch that creates something (a testprep body creates its test there).
+	let ap: { courseId: string; sitting?: ApSitting; learn?: ApLearnScope } | undefined;
+	if (body.apLearn !== undefined) {
+		if (body.kind !== undefined) {
+			return Response.json({ error: "A Learn session carries no kind." }, { status: 400 });
+		}
+		const learn = parseApLearnScope(body.apLearn);
+		if (!learn) return Response.json({ error: "Invalid AP learn scope." }, { status: 400 });
+		const requestedApCourseId = typeof body.apCourseId === "string" ? body.apCourseId.trim() : "";
+		if (requestedApCourseId === "") {
+			return Response.json({ error: "A Learn session names an existing AP course." }, { status: 400 });
+		}
+		const course = stores.apCourseStore.get(requestedApCourseId);
+		if (!course) return Response.json({ error: "Unknown AP course" }, { status: 404 });
+		if (!course.planConfirmed) {
+			return Response.json({ error: "The course's units and topics are not confirmed yet." }, { status: 400 });
+		}
+		const problem = sittingScopeProblem(course, learn);
+		if (problem !== null) return Response.json({ error: problem }, { status: 400 });
+		ap = { courseId: course.id, learn };
+	}
 	// Practice sessions (owner, 2026-10-04): kind "practice" marks the
 	// record — the practice agent + its tools from turn 1, no extraction.
 	// Test prep sessions (2026-11-10) name a test: either a new one
@@ -59,29 +84,7 @@ export async function POST(req: Request) {
 	// (the course's setup session — no sitting) or an existing one by id
 	// (optionally with the sitting it asks about). Validate in that order and
 	// create the course record only after every check passes.
-	let ap: { courseId: string; sitting?: ApSitting; learn?: ApLearnScope } | undefined;
-	// Linked Learn sessions (session folders): a Learn button names an existing,
-	// confirmed course plus the topic or unit it was opened on. The session is
-	// an ordinary teach session — a kind on the same body is an honest 400.
-	if (body.apLearn !== undefined) {
-		if (body.kind !== undefined) {
-			return Response.json({ error: "A Learn session carries no kind." }, { status: 400 });
-		}
-		const learn = parseApLearnScope(body.apLearn);
-		if (!learn) return Response.json({ error: "Invalid AP learn scope." }, { status: 400 });
-		const requestedApCourseId = typeof body.apCourseId === "string" ? body.apCourseId.trim() : "";
-		if (requestedApCourseId === "") {
-			return Response.json({ error: "A Learn session names an existing AP course." }, { status: 400 });
-		}
-		const course = stores.apCourseStore.get(requestedApCourseId);
-		if (!course) return Response.json({ error: "Unknown AP course" }, { status: 404 });
-		if (!course.planConfirmed) {
-			return Response.json({ error: "The course's units and topics are not confirmed yet." }, { status: 400 });
-		}
-		const problem = sittingScopeProblem(course, learn);
-		if (problem !== null) return Response.json({ error: problem }, { status: 400 });
-		ap = { courseId: course.id, learn };
-	} else if (body.kind === "ap") {
+	if (body.kind === "ap") {
 		const apCourseTitle = typeof body.apCourseTitle === "string" ? body.apCourseTitle.trim() : "";
 		const requestedApCourseId = typeof body.apCourseId === "string" ? body.apCourseId.trim() : "";
 		if ((apCourseTitle !== "") === (requestedApCourseId !== "")) {

@@ -24,6 +24,7 @@ delete process.env.LH_DESKTOP_API_SECRET;
 
 const { chatStore } = await import("../src/store/chats.ts");
 const { apCourseStore } = await import("../src/store/ap-courses.ts");
+const { testStore } = await import("../src/store/tests.ts");
 
 type ChatsRoute = typeof import("../app/api/chats/route.ts");
 let route: ChatsRoute;
@@ -195,6 +196,20 @@ describe("POST /api/chats (kind: ap)", () => {
 			const res = await post({ title: "Teach me", apCourseId: course.id, apLearn });
 			assert.equal(res.status, 400, JSON.stringify(apLearn));
 		}
+	});
+
+	it("refuses a Learn body with a kind before any test record is created", async () => {
+		const course = courseWithUnit("AP Calculus BC", true);
+		const countBefore = testStore.list().length;
+		const res = await post({
+			title: "Orphan",
+			kind: "testprep",
+			testTitle: "Orphan",
+			apCourseId: course.id,
+			apLearn: { type: "topic", topicId: course.topicId },
+		});
+		assert.equal(res.status, 400);
+		assert.equal(testStore.list().length, countBefore, "the rejected request created no test record");
 	});
 
 	it("refuses apLearn on a course whose plan is not confirmed", async () => {
