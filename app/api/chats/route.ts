@@ -1,7 +1,7 @@
 import { chainsForSelection, formatChainLine, parseApLearnScope, parseApSitting, sittingScopeProblem, type ApLearnScope, type ApSitting } from "@/src/core";
 import { newGraphContextMessage, type GraphContextPick } from "@/src/core";
 import { chatTokens, compactionInFlight, createChat, isTurnRunning, listChats, readSettingsRecord, stores, titleFromPrompt } from "@/src/server";
-import type { ChatListItem } from "@/src/core";
+import type { ChatListItem, FolderNames } from "@/src/core";
 
 /** The session picker's list: record-derived summaries (phase, pending
  *  question) + live liveness — a running turn marks the session busy
@@ -20,7 +20,13 @@ export async function GET() {
 		compacting: compactionInFlight(c.id),
 		tokens: chatTokens(c.id, jobsByChat.get(c.id) ?? []) ?? undefined,
 	}));
-	return Response.json({ chats });
+	// Sidebar folders (2026-11-17): the record id → title map the shell labels
+	// per-test / per-course folders with. Chats keep their exact shape.
+	const folderNames: FolderNames = {
+		tests: Object.fromEntries(stores.testStore.list().map((t) => [t.id, t.title])),
+		ap: Object.fromEntries(stores.apCourseStore.list().map((c) => [c.id, c.title])),
+	};
+	return Response.json({ chats, folderNames });
 }
 
 export async function POST(req: Request) {
