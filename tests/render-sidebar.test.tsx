@@ -123,19 +123,22 @@ describe("SessionRow", () => {
 	});
 });
 
-describe("Session doors (AP prep, 2026-11-13)", () => {
-	it("the AP link opens /ap directly after the Tests link", () => {
+describe("Session doors (session folders, 2026-11-17)", () => {
+	it("Tests and AP are create buttons, directly after Practice; the old links are gone", () => {
 		const html = renderToStaticMarkup(
-			<SessionDoorLinks onNewTeaching={() => {}} onNewPractice={() => {}} />,
+			<SessionDoorLinks onNewTeaching={() => {}} onNewPractice={() => {}} onNewTests={() => {}} onNewAp={() => {}} />,
 		);
 		const ids = [...html.matchAll(/data-testid="([^"]+)"/g)].map((match) => match[1]);
-		const tests = ids.indexOf("tests-link");
-		assert.ok(tests !== -1, "the Tests door stays");
-		assert.equal(ids[tests + 1], "ap-link", "AP sits directly after Tests");
-		const apTag = html.match(/<a[^>]*data-testid="ap-link"[^>]*>/)?.[0] ?? "";
-		assert.match(apTag, /href="\/ap"/);
+		assert.deepEqual(ids, ["new-session", "new-session-practice", "new-session-tests", "new-session-ap"]);
+		for (const id of ["new-session-tests", "new-session-ap"]) {
+			const tag = html.match(new RegExp(`<[a-z]+[^>]*data-testid="${id}"[^>]*>`))?.[0] ?? "";
+			assert.match(tag, /^<button /, `${id} is a button`);
+			assert.match(tag, /type="button"/);
+		}
+		assert.doesNotMatch(html, /tests-link/);
+		assert.doesNotMatch(html, /ap-link/);
+		assert.doesNotMatch(html, /href=/, "no door is a link any more");
 		assert.match(html, />\s*AP\s*</);
-		assert.match(html, /view your AP courses/);
 	});
 });
 
