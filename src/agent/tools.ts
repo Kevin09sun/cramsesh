@@ -26,6 +26,7 @@ import { findTool } from "./tools/find.ts";
 import { grepTool } from "./tools/grep.ts";
 import { createShowImageTool } from "./tools/show-image.ts";
 import { tutorWebTools } from "./tools/web.ts";
+import { apLearnTools, type ApLearnToolContext } from "./tools/ap-learn.ts";
 import { healToolRecord } from "./tools/heal.ts";
 import type { GraphStore } from "../core/ports.ts";
 
@@ -424,6 +425,10 @@ export interface TeacherToolContext extends PlanToolContext {
 	 *  resolves null per call, so both tools register — web_fetch works,
 	 *  web_search reports search not set up. */
 	search?: () => SearchProvider | null;
+	/** A linked AP Learn session (2026-11-17): present = the scoped
+	 *  ap_record_result is registered so graded checks move the course's
+	 *  progress; absent = an ordinary teach session, no AP tool. */
+	apLearn?: ApLearnToolContext;
 }
 
 /**
@@ -492,6 +497,9 @@ export function createTeacherTools(
 			// search key both still register — the provider resolves null per
 			// call (web_fetch works, web_search says it is unset).
 			...tutorWebTools(ctx.search, enabled),
+			// Linked AP Learn session only: not a toggle — filterEnabledTools
+			// drops only names explicitly false, and no setting names it.
+			...(ctx.apLearn ? apLearnTools(ctx.apLearn) : {}),
 		},
 		withoutMechanics(enabled),
 		),
