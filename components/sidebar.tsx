@@ -18,7 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { fuzzyScore, groupSessions, openFolderKeys, parseOpenKeys, walkOrder, type FolderNames } from "@/src/core";
-import { SessionFolderTree } from "@/components/session-folders";
+import { SessionFolderTree, withCurrentFolderOpen } from "@/components/session-folders";
 import { SessionStarter } from "@/components/start-session";
 import { useServerEvent, useServerResync } from "@/components/server-events";
 import type { ChatListItem } from "@/src/core";
@@ -473,6 +473,14 @@ const KIND_FILTER_KEY = "lh:session-kind-filter";
 const FOLDERS_OPEN_KEY = "lh:session-folders-open";
 const NO_FOLDER_NAMES: FolderNames = { tests: {}, ap: {} };
 
+function persistOpenKeys(keys: ReadonlySet<string>): void {
+	try {
+		window.localStorage.setItem(FOLDERS_OPEN_KEY, JSON.stringify([...keys]));
+	} catch {
+		// storage unavailable: the open state still applies for this page life
+	}
+}
+
 /** The sidebar's home mark: the Cramsesh mug, still the link to "/" and
  *  still vertically centered by the header band's items-center. Exported so
  *  render tests can pin the artwork without mounting the data-driven
@@ -510,18 +518,15 @@ function SessionsSidebar() {
 			// storage unavailable: every folder starts closed, sections open
 		}
 	}, []);
-	/* Toggling writes the STORED set (never the effective one): a search's
-	   open-everything and the current chat's auto-open stay derived. */
+	/* Toggling writes the STORED set. A search's open-everything stays
+	   derived, so while searching toggles are disabled and persist nothing
+	   (the tree's toggleDisabled; the guard sits at the call site). */
 	const toggleFolder = useCallback((key: string) => {
 		setStoredOpen((prev) => {
 			const next = new Set(prev);
 			if (next.has(key)) next.delete(key);
 			else next.add(key);
-			try {
-				window.localStorage.setItem(FOLDERS_OPEN_KEY, JSON.stringify([...next]));
-			} catch {
-				// storage unavailable: the toggle still applies for this page life
-			}
+			persistOpenKeys(next);
 			return next;
 		});
 	}, []);
@@ -584,11 +589,35 @@ function SessionsSidebar() {
 	}, [chats, query, kindFilter, folderNames]);
 
 	const currentChatId = pathname?.startsWith("/chat/") ? pathname.slice("/chat/".length) || null : null;
+	/* The current folder auto-opens ONCE per navigation (controller ruling,
+	   2026-11-17): its key joins the STORED set, so the user can close it
+	   and it re-opens only on the next navigation into that folder. The
+	   ref waits until the chat is in the snapshot (a brand-new session
+	   arrives a fetch later). */
+	const autoOpenedRef = useRef<string | null>(null);
+	useEffect(() => {
+		if (currentChatId === null) {
+			autoOpenedRef.current = null;
+			return;
+		}
+		if (!tree || autoOpenedRef.current === currentChatId) return;
+		const inFolder = [...tree.tests, ...tree.ap].some((f) => f.sessions.some((s) => s.id === currentChatId));
+		if (!inFolder && !tree.flat.some((s) => s.id === currentChatId)) return;
+		autoOpenedRef.current = currentChatId;
+		if (!inFolder) return;
+		setStoredOpen((prev) => {
+			const next = withCurrentFolderOpen(prev, tree, currentChatId);
+			if (next.size === prev.size) return prev;
+			persistOpenKeys(next);
+			return next;
+		});
+	}, [tree, currentChatId]);
 	/* The EFFECTIVE open set drives both the render and the keyboard walk —
-	   what shows is exactly what the arrow keys visit. */
+	   what shows is exactly what the arrow keys visit. The current chat is
+	   NOT force-opened here; the one-time stored auto-open above did it. */
 	const openKeys = useMemo(
-		() => (tree ? openFolderKeys(tree, storedOpen, { searching, currentChatId }) : new Set<string>()),
-		[tree, storedOpen, searching, currentChatId],
+		() => (tree ? openFolderKeys(tree, storedOpen, { searching, currentChatId: null }) : new Set<string>()),
+		[tree, storedOpen, searching],
 	);
 	const walk = useMemo(() => (tree ? walkOrder(tree, openKeys) : null), [tree, openKeys]);
 
@@ -965,7 +994,10 @@ function SessionsSidebar() {
 							<SessionFolderTree
 								tree={tree}
 								open={openKeys}
-								onToggle={toggleFolder}
+								onToggle={(key) => {
+									if (!searching) toggleFolder(key);
+								}}
+								toggleDisabled={searching}
 								activeId={currentChatId}
 								kbdId={kbdId}
 								onNewTestSession={(testId) => void newTestSession(testId)}

@@ -10,7 +10,7 @@ import React from "react";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { SessionFolderTree } from "../components/session-folders.tsx";
+import { SessionFolderTree, withCurrentFolderOpen } from "../components/session-folders.tsx";
 import { groupSessions, type SessionTree } from "../src/core/session-folders.ts";
 import type { ChatListItem } from "../src/core/contracts.ts";
 
@@ -121,5 +121,56 @@ describe("SessionFolderTree", () => {
 		assert.doesNotMatch(html, /data-testid="folder-tests:/);
 		assert.doesNotMatch(html, /Session s1/);
 		assert.ok(html.includes('data-testid="folder-ap:c1"'), "the other section is unaffected");
+	});
+});
+
+describe("SessionFolderTree while searching (toggleDisabled)", () => {
+	it("folder toggles and section chevrons render disabled", () => {
+		const html = renderToStaticMarkup(
+			<SessionFolderTree
+				tree={TREE}
+				open={new Set(["tests:t1", "tests:unfiled", "ap:c1", "ap:unfiled"])}
+				onToggle={() => {}}
+				activeId={null}
+				kbdId={null}
+				onNewTestSession={() => {}}
+				toggleDisabled
+			/>,
+		);
+		for (const id of ["folder-collapse-tests", "folder-collapse-ap", "folder-tests:t1", "folder-tests:unfiled", "folder-ap:c1", "folder-ap:unfiled"]) {
+			const tag = tagFor(html, id);
+			assert.match(tag, /^<button /, id);
+			assert.match(tag, / disabled=""/, `${id} is disabled`);
+			assert.match(tag, /aria-disabled="true"/, `${id} is aria-disabled`);
+		}
+		assert.doesNotMatch(tagFor(html, "folder-new-tests:t1"), / disabled=""|aria-disabled="true"/, "the + stays usable");
+	});
+
+	it("outside a search the toggles are enabled", () => {
+		const html = render(TREE);
+		for (const id of ["folder-collapse-tests", "folder-tests:t1"]) {
+			assert.doesNotMatch(tagFor(html, id), / disabled=""|aria-disabled="true"/, id);
+		}
+	});
+});
+
+describe("withCurrentFolderOpen — the one-time auto-open", () => {
+	it("adds the current chat's folder key to the stored set", () => {
+		const stored = new Set(["collapsed:ap"]);
+		const next = withCurrentFolderOpen(stored, TREE, "s2");
+		assert.deepEqual([...next].sort(), ["collapsed:ap", "tests:t1"]);
+		assert.deepEqual([...stored], ["collapsed:ap"], "the input is not mutated");
+		assert.deepEqual([...withCurrentFolderOpen(new Set(), TREE, "s5")], ["ap:unfiled"]);
+	});
+
+	it("returns the same contents when the key is already present", () => {
+		const next = withCurrentFolderOpen(new Set(["tests:t1"]), TREE, "s1");
+		assert.deepEqual([...next], ["tests:t1"]);
+	});
+
+	it("returns the same contents for a flat-list chat, an unknown chat, or no chat", () => {
+		for (const id of ["s6", "nope", null]) {
+			assert.deepEqual([...withCurrentFolderOpen(new Set(["ap:c1"]), TREE, id)], ["ap:c1"], String(id));
+		}
 	});
 });

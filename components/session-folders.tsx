@@ -21,10 +21,27 @@ const SECTIONS: readonly { section: FolderSection; label: string; href: string }
 	{ section: "ap", label: "AP", href: "/ap" },
 ];
 
+/** The one-time auto-open (controller ruling, 2026-11-17): navigating into
+ *  a session that sits in a folder adds that folder's key to the STORED set,
+ *  once per navigation, so the user can still close it. Pure — returns a new
+ *  set with the same contents when the chat is in no folder (flat, unknown,
+ *  or null) or the key is already stored. */
+export function withCurrentFolderOpen(
+	stored: ReadonlySet<string>,
+	tree: SessionTree,
+	currentChatId: string | null,
+): Set<string> {
+	const next = new Set(stored);
+	if (currentChatId === null) return next;
+	const folder = [...tree.tests, ...tree.ap].find((f) => f.sessions.some((s) => s.id === currentChatId));
+	if (folder) next.add(folder.key);
+	return next;
+}
+
 const HEADING_CLASS =
 	"text-xs uppercase tracking-widest text-muted-foreground/70 transition-colors hover:text-foreground";
 const ICON_BUTTON_CLASS =
-	"flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground";
+	"flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-default disabled:hover:bg-transparent disabled:hover:text-muted-foreground";
 
 export function SessionFolderTree({
 	tree,
@@ -34,6 +51,7 @@ export function SessionFolderTree({
 	kbdId,
 	onNewTestSession,
 	renderRow,
+	toggleDisabled = false,
 }: {
 	tree: SessionTree;
 	open: ReadonlySet<string>;
@@ -44,6 +62,9 @@ export function SessionFolderTree({
 	/** The sidebar supplies its own row (navigation, context menu, inline
 	 *  rename); the default is a plain SessionRow for the render seam. */
 	renderRow?: (chat: ChatListItem) => React.ReactNode;
+	/** While searching, every folder shows open and the open state is not
+	 *  the user's to change: folder toggles and section chevrons disable. */
+	toggleDisabled?: boolean;
 }) {
 	const row =
 		renderRow ??
@@ -69,7 +90,11 @@ export function SessionFolderTree({
 								data-testid={`folder-collapse-${section}`}
 								aria-expanded={sectionOpen}
 								aria-label={`${sectionOpen ? "Collapse" : "Expand"} ${label}`}
-								onClick={() => onToggle(collapseKey)}
+								disabled={toggleDisabled}
+								aria-disabled={toggleDisabled}
+								onClick={() => {
+									if (!toggleDisabled) onToggle(collapseKey);
+								}}
 								className={ICON_BUTTON_CLASS}
 							>
 								<ChevronRightIcon className={cn("size-3 transition-transform", sectionOpen && "rotate-90")} />
@@ -87,6 +112,7 @@ export function SessionFolderTree({
 									onToggle={onToggle}
 									onNewTestSession={onNewTestSession}
 									row={row}
+									toggleDisabled={toggleDisabled}
 								/>
 							))}
 					</div>
@@ -102,12 +128,14 @@ function FolderBlock({
 	onToggle,
 	onNewTestSession,
 	row,
+	toggleDisabled,
 }: {
 	folder: SessionFolder;
 	isOpen: boolean;
 	onToggle(key: string): void;
 	onNewTestSession(testId: string): void;
 	row: (chat: ChatListItem) => React.ReactNode;
+	toggleDisabled: boolean;
 }) {
 	const id = folder.id;
 	const plusTestid = `folder-new-${folder.key}`;
@@ -118,8 +146,12 @@ function FolderBlock({
 					type="button"
 					data-testid={`folder-${folder.key}`}
 					aria-expanded={isOpen}
-					onClick={() => onToggle(folder.key)}
-					className="flex min-w-0 flex-1 items-center gap-1.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-accent"
+					disabled={toggleDisabled}
+					aria-disabled={toggleDisabled}
+					onClick={() => {
+						if (!toggleDisabled) onToggle(folder.key);
+					}}
+					className="flex min-w-0 flex-1 items-center gap-1.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-accent disabled:cursor-default disabled:hover:bg-transparent"
 				>
 					<ChevronRightIcon
 						className={cn("size-3 shrink-0 text-muted-foreground transition-transform", isOpen && "rotate-90")}
