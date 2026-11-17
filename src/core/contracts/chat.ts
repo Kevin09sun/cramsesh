@@ -10,7 +10,7 @@ import type { LhMessage } from "../native-messages.ts";
 import type { Phase3 } from "../phases.ts";
 import type { PlanNodeStatus, PlanTree } from "./plan.ts";
 import type { EmissionStats } from "./graph.ts";
-import type { ApSitting } from "../ap.ts";
+import type { ApLearnScope, ApSitting } from "../ap.ts";
 
 // ─── Chat records (the session store's on-disk format) ───────────────────────
 
@@ -49,6 +49,10 @@ export interface ChatRecord {
 	/** AP practice sittings: the scope and kind this sitting asks about;
 	 *  absent on the course's setup session. */
 	apSitting?: ApSitting;
+	/** Linked Learn sessions: the topic or unit the learner opened it on.
+	 *  With apCourseId set and no kind, this session reads as teach but is
+	 *  filed under its course. */
+	apLearn?: ApLearnScope;
 	/** The session's plan tree (vision §2) — written by plan tools via saveTree. */
 	tree?: PlanTree;
 	/** Append-only usage log (observability, 2026-09): one entry per model
@@ -284,6 +288,9 @@ export interface ChatSummary {
 	/** AP practice sittings: the sitting's scope and kind (absent on the
 	 *  course's setup session and on other kinds). */
 	apSitting?: ApSitting;
+	/** Linked Learn sessions: the topic or unit this session was opened on
+	 *  (absent on non-Learn sessions). */
+	apLearn?: ApLearnScope;
 	messageCount: number;
 	/** The session's current phase, derived from the stored plan tree. */
 	phase: Phase3;

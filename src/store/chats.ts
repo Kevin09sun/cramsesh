@@ -15,7 +15,7 @@ import { emit } from "../core/events.ts";
 import type { ChatStore } from "../core/ports.ts";
 import type { ChatRecord, ChatSettings, ChatSummary, ExtractionRunUsage, ImageSnapshot, PlanTree, TurnUsage } from "../core/contracts.ts";
 import { CURRENT_CHAT_VERSION } from "../core/contracts.ts";
-import type { ApSitting } from "../core/ap.ts";
+import type { ApLearnScope, ApSitting } from "../core/ap.ts";
 import type { LhMessage } from "../core/native-messages.ts";
 import { activeProblemOf, danglingQuestionOf } from "../core/native-messages.ts";
 import { phaseAt3Lh } from "../core/phases.ts";
@@ -39,7 +39,7 @@ function createChat(
 	title: string,
 	kind?: "practice" | "testprep" | "ap",
 	testId?: string,
-	ap?: { courseId: string; sitting?: ApSitting },
+	ap?: { courseId: string; sitting?: ApSitting; learn?: ApLearnScope },
 ): ChatRecord {
 	const now = new Date().toISOString();
 	const record: ChatRecord = {
@@ -60,6 +60,12 @@ function createChat(
 					apCourseId: ap.courseId,
 					...(ap.sitting === undefined ? {} : { apSitting: ap.sitting }),
 				}
+			: {}),
+		// Linked Learn sessions (owner, session folders): an ordinary teach
+		// session (kind stays absent) that names its course and the topic or
+		// unit it was opened on, so course folders can file it later.
+		...(kind === undefined && ap?.learn !== undefined
+			? { apCourseId: ap.courseId, apLearn: ap.learn }
 			: {}),
 	};
 	fs.mkdirSync(PATHS.chats, { recursive: true });

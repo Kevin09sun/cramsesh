@@ -386,8 +386,39 @@ test("Learn creates a Teach session whose title is the learn prompt", async () =
 			source: "p. 5",
 			cedPath: "/papers/ced.pdf",
 		}),
+		apCourseId: "ap_1",
+		apLearn: { type: "topic", topicId: "topic_1" },
 	});
 	assert.deepEqual(navigated, ["/chat/chat_teach"]);
+});
+
+test("Learn on a unit creates a Teach session linked to the unit's scope", async () => {
+	const seen: Array<{ url: string; method: string; body: unknown }> = [];
+	const navigated: string[] = [];
+	globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+		const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+		const body = init?.body === undefined ? undefined : JSON.parse(String(init.body));
+		seen.push({ url, method: init?.method ?? "GET", body });
+		if (url === "/api/chats" && init?.method === "POST") return Response.json({ id: "chat_unit" });
+		throw new Error(`unexpected request ${url}`);
+	}) as typeof fetch;
+
+	await mountCourse({ navigate: (target) => navigated.push(target) });
+
+	await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="learn-unit-unit_1"]')!.click());
+
+	const post = seen.find((request) => request.url === "/api/chats");
+	assert.ok(post, "unit Learn creates a session");
+	assert.deepEqual(post!.body, {
+		title: learnPrompt({
+			courseTitle: "AP Calculus BC",
+			unitTitle: "Unit 1 Limits",
+			cedPath: "/papers/ced.pdf",
+		}),
+		apCourseId: "ap_1",
+		apLearn: { type: "unit", unitId: "unit_1" },
+	});
+	assert.deepEqual(navigated, ["/chat/chat_unit"]);
 });
 
 test("with indexed questions Free-response starts a frq sitting and Mixed a mixed sitting", async () => {

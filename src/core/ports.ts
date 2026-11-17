@@ -28,7 +28,7 @@ import type {
 	NotesSource,
 } from "./contracts.ts";
 import type { UserSettings } from "./settings.ts";
-import type { ApSitting } from "./ap.ts";
+import type { ApLearnScope, ApSitting } from "./ap.ts";
 
 // ─── ChatStore — the session record's home (data/chats) ─────────────────────
 
@@ -37,12 +37,14 @@ export interface ChatStore {
 	/** Create a session record; kind "practice" | "testprep" | "ap" marks a
 	 *  non-teach session (absent = teach, the default). testprep also
 	 *  carries the linked test record's id; ap carries its course and,
-	 *  when it is a practice sitting, the sitting. */
+	 *  when it is a practice sitting, the sitting; a teach record with a
+	 *  learn scope carries its course and the topic or unit it was opened
+	 *  on (a linked Learn session). */
 	createChat(
 		title: string,
 		kind?: "practice" | "testprep" | "ap",
 		testId?: string,
-		ap?: { courseId: string; sitting?: ApSitting },
+		ap?: { courseId: string; sitting?: ApSitting; learn?: ApLearnScope },
 	): ChatRecord;
 	/** The full record, or null if unknown id / corrupt file. */
 	getChat(id: string): ChatRecord | null;
