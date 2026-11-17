@@ -36,7 +36,7 @@ export function AboutSection({
 					</a>
 				</p>
 				<p>
-					<a href={`${homepage}/blob/custom/LICENSE`} target="_blank" rel="noreferrer" className={LINK} data-testid="about-license">
+					<a href={`${homepage}/blob/main/LICENSE`} target="_blank" rel="noreferrer" className={LINK} data-testid="about-license">
 						Licensed under AGPL-3.0
 					</a>
 				</p>

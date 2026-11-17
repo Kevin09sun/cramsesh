@@ -57,7 +57,7 @@ describe("AboutSection", () => {
 		const hrefs = [...html.matchAll(/href="([^"]+)"/g)].map((m) => m[1]);
 		assert.deepEqual(hrefs, [
 			"https://github.com/amosblomqvist/learnharness",
-			`${HOMEPAGE}/blob/custom/LICENSE`,
+			`${HOMEPAGE}/blob/main/LICENSE`,
 			HOMEPAGE,
 		]);
 		const anchors = [...html.matchAll(/<a [^>]*>/g)].map((m) => m[0]);
