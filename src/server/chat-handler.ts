@@ -22,6 +22,7 @@ import { chatGPTStreamError } from "../agent/chatgpt-stream.ts";
 import { SubscriptionRequestCycle, type SubscriptionDispatchLifecycle } from "../agent/subscription-request-cycle.ts";
 import { reconstructRequestCause } from "../core/native-messages.ts";
 import { parseApSitting, type ApSitting } from "../core/index.ts";
+import { extractionTriggerTokens } from "../core/extraction-trigger.ts";
 import { createJobRunner } from "../agent/subagents/runner.ts";
 import { createExtractionPipeline } from "../agent/subagents/extraction.ts";
 import type { ModelRole } from "../../config.ts";
@@ -750,8 +751,11 @@ export async function handleChatInput(
 				if ((!requestCycle || requestCycle.dispatched) && record.kind !== "practice" && extractionEnabled(effective.graph)) {
 					// Fresh per-turn read of the graph section's chunk budget
 					// (extraction-UX redesign, 2026-09-24): the trigger compares
-					// against it and the pipeline's batches share it.
-					triggerExtraction(stores, extraction, chatId, effective.graph.extractionChunkTokens);
+					// against it and the pipeline's batches share it. Study chats
+					// (Test prep, AP, linked Learn) trigger at the smaller study
+					// budget (study-chat extraction, 2026-11-17) — batching is
+					// unchanged.
+					triggerExtraction(stores, extraction, chatId, extractionTriggerTokens(record, effective.graph.extractionChunkTokens));
 				}
 				// PARKED DISMISSAL (owner, 2026-10-04): a dismissal that arrived
 				// mid-turn was parked by the dismiss route (202); now that
