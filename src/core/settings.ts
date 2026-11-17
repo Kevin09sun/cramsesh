@@ -523,8 +523,8 @@ export const FACTORY_SETTINGS: FactorySettings = {
 	general: { autoUpdate: true },
 	dictation: { language: "en" },
 	appearance: {
-		mode: "dark",
-		background: null, // the dark default (#14213A) lives in the mode's derivation curve
+		mode: "light",
+		background: null, // the mode's default (#FBF6EA / #14213A) lives in its derivation curve
 		fontFamily: null, // Nunito
 		proseFontSize: 16,
 		sessionNameSerif: true,

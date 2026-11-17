@@ -82,15 +82,18 @@ describe("applyThemeMode", () => {
 
 describe("THEME_BOOT_SCRIPT (runs before first paint)", () => {
 	function run(stored: string | null | Error) {
-		const root = fakeRoot(["dark"]);
+		const root = fakeRoot(["light"]);
 		const localStorage = { getItem: () => { if (stored instanceof Error) throw stored; return stored; } };
 		new Function("document", "localStorage", THEME_BOOT_SCRIPT)({ documentElement: root }, localStorage);
 		return [...root.classes];
 	}
-	it("applies a remembered light mode", () => assert.deepEqual(run("light"), ["light"]));
-	it("leaves dark alone when nothing is remembered", () => assert.deepEqual(run(null), ["dark"]));
-	it("ignores garbage values", () => assert.deepEqual(run("purple"), ["dark"]));
-	it("survives blocked storage", () => assert.deepEqual(run(new Error("denied")), ["dark"]));
+	it("boot script switches to dark only when the stored preference is dark", () => {
+		assert.deepEqual(run("dark"), ["dark"]);
+		assert.deepEqual(run("light"), ["light"]);
+		assert.deepEqual(run(null), ["light"]);
+		assert.deepEqual(run(new Error("denied")), ["light"]);
+	});
+	it("ignores garbage values", () => assert.deepEqual(run("purple"), ["light"]));
 });
 
 describe("custom background follows the mode", () => {

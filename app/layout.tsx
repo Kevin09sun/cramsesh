@@ -20,8 +20,8 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
 	return (
-		// The boot script may swap dark → light before hydration.
-		<html lang="en" className={`dark ${nunito.variable}`} suppressHydrationWarning>
+		// The boot script may swap light → dark before hydration.
+		<html lang="en" className={`light ${nunito.variable}`} suppressHydrationWarning>
 			<head>
 				<script dangerouslySetInnerHTML={{ __html: THEME_BOOT_SCRIPT }} />
 			</head>
