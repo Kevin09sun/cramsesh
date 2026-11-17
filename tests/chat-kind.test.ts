@@ -246,6 +246,28 @@ describe("ap sessions (2026-11-13)", () => {
 		assert.equal("testId" in listed!, false);
 	});
 
+	it("createChat with a learn scope (teach kind) persists apCourseId + apLearn on the record and the list", () => {
+		const learn = { type: "topic" as const, topicId: "t1" };
+		const chat = chatStore.createChat("Teach me", undefined, undefined, { courseId: "c", learn });
+		assert.equal("kind" in chat, false, "a linked Learn session reads as teach");
+		assert.equal(chat.apCourseId, "c");
+		assert.deepEqual(chat.apLearn, learn);
+		const stored = chatStore.getChat(chat.id);
+		assert.equal(stored?.apCourseId, "c");
+		assert.deepEqual(stored?.apLearn, learn);
+		assert.equal("apSitting" in stored!, false);
+		const listed = chatStore.listChats().find((c) => c.id === chat.id);
+		assert.equal(listed?.apCourseId, "c");
+		assert.deepEqual(listed?.apLearn, learn);
+	});
+
+	it("createChat with a unit learn scope persists the unit scope", () => {
+		const learn = { type: "unit" as const, unitId: "u1" };
+		const chat = chatStore.createChat("Teach me", undefined, undefined, { courseId: "c2", learn });
+		assert.equal(chat.apCourseId, "c2");
+		assert.deepEqual(chat.apLearn, learn);
+	});
+
 	it("kinds other than ap never carry the AP fields", () => {
 		const teach = chatStore.createChat("teach");
 		const practice = chatStore.createChat("practice", "practice");

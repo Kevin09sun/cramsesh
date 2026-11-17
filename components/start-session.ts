@@ -1,4 +1,4 @@
-import type { ApSitting } from "@/src/core";
+import type { ApLearnScope, ApSitting } from "@/src/core";
 import { clearOpeningPrompt, OPENING_PROMPT_FAILURE, stashOpeningPrompt } from "./opening-prompt";
 
 interface SessionCreation {
@@ -14,6 +14,9 @@ interface SessionCreation {
 	apCourseTitle?: string;
 	apCourseId?: string;
 	apSitting?: ApSitting;
+	/** A linked Learn session (kind absent) names the topic or unit it was
+	 *  opened on, so the course page's sessions can be filed by scope. */
+	apLearn?: ApLearnScope;
 }
 
 /** Per source-composer instance. Retain a successful creation if storage

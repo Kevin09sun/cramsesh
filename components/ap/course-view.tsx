@@ -11,7 +11,7 @@ import { SessionStarter } from "@/components/start-session";
 import { PlanEditor } from "@/components/test-prep/plan-editor";
 import { Button } from "@/components/ui/button";
 import { AP_ADDED_TOPIC_SOURCE, apPaperPair, fillAddedTopicSources, quoteFilePath, readiness, readinessPercent } from "@/src/core";
-import type { ApCourseRecord, ApDocument, ApSittingScope, PlanDraftSection, PointStatus } from "@/src/core";
+import type { ApCourseRecord, ApDocument, ApLearnScope, ApSittingScope, PlanDraftSection, PointStatus } from "@/src/core";
 
 /**
  * The AP course page body (AP prep, 2026-11-13).
@@ -226,7 +226,10 @@ export function CourseView({
 		}
 	}
 
-	async function learn(input: { unitTitle: string; topicText?: string; source?: string }): Promise<void> {
+	async function learn(
+		scope: ApLearnScope,
+		input: { unitTitle: string; topicText?: string; source?: string },
+	): Promise<void> {
 		setStarting(true);
 		setError(null);
 		try {
@@ -235,7 +238,7 @@ export function CourseView({
 				...input,
 				...(cedPath === undefined ? {} : { cedPath }),
 			});
-			go(await starter.start({ title }, fetch));
+			go(await starter.start({ title, apCourseId: course.id, apLearn: scope }, fetch));
 		} catch {
 			setStarting(false);
 			setError(OPENING_PROMPT_FAILURE);
@@ -356,7 +359,7 @@ export function CourseView({
 											data-testid={`learn-unit-${section.id}`}
 											disabled={starting}
 											onClick={() =>
-												void learn({
+												void learn({ type: "unit", unitId: section.id }, {
 													unitTitle: section.title,
 												})
 											}
@@ -406,7 +409,7 @@ export function CourseView({
 															data-testid={`learn-topic-${point.id}`}
 															disabled={starting}
 															onClick={() =>
-																void learn({
+																void learn({ type: "topic", topicId: point.id }, {
 																	unitTitle: section.title,
 																	topicText: point.text,
 																	source: point.source,

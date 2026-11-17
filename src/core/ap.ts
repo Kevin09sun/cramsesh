@@ -31,6 +31,11 @@ export type ApSittingScope =
 	| { type: "unit"; unitId: string }
 	| { type: "weak" };
 
+/** The scope a linked Learn session was started on: one topic or one unit.
+ *  A Learn session is an ordinary teach session (no kind) whose course link
+ *  and scope let later tasks file it and record graded checks. */
+export type ApLearnScope = { type: "topic"; topicId: string } | { type: "unit"; unitId: string };
+
 export type ApSittingKind = "mcq" | "frq" | "mixed";
 
 export interface ApSitting {
@@ -125,6 +130,28 @@ export function parseApSitting(value: unknown): ApSitting | null {
 			const topicId = scope.topicId;
 			if (typeof topicId !== "string" || topicId === "") return null;
 			return { scope: { type: "topic", topicId }, kind };
+		}
+		default:
+			return null;
+	}
+}
+
+/** Validate a Learn scope, returning a fresh object with only known fields.
+ *  Only the topic and unit shapes exist — a Learn session is never weak. */
+export function parseApLearnScope(value: unknown): ApLearnScope | null {
+	if (typeof value !== "object" || value === null) return null;
+	const scope = value as Record<string, unknown>;
+
+	switch (scope.type) {
+		case "unit": {
+			const unitId = scope.unitId;
+			if (typeof unitId !== "string" || unitId === "") return null;
+			return { type: "unit", unitId };
+		}
+		case "topic": {
+			const topicId = scope.topicId;
+			if (typeof topicId !== "string" || topicId === "") return null;
+			return { type: "topic", topicId };
 		}
 		default:
 			return null;
