@@ -148,8 +148,9 @@ function finishChatDeletion(chatId: string, mode: ChatDeleteMode): Extract<ChatD
 }
 
 function finishChatRecordDeletion(chatId: string): number {
-	// Read the record before it is gone: an AP sitting's answers live in its
-	// course (apCourseId is the link), and deletion forgets them there.
+	// Read the record before it is gone: an AP sitting's answers, and a
+	// linked Learn session's graded checks, live in its course (apCourseId
+	// is the link), and deletion forgets them there.
 	// A missing course (deleted or unreadable) is not an error — the session
 	// deletion still stands.
 	const record = stores.chatStore.getChat(chatId);
@@ -157,7 +158,7 @@ function finishChatRecordDeletion(chatId: string): number {
 	if (stores.chatStore.deleteChat(chatId)) {
 		discardChatDeliveries(chatId);
 		clearTurnFailure(chatId);
-		if (record?.kind === "ap" && record.apCourseId) {
+		if (record?.apCourseId) {
 			// The chat record is already gone: a locked or unwritable course
 			// file must not turn a completed deletion into an error.
 			try {

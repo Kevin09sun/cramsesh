@@ -234,7 +234,7 @@ function pct(solid: number, total: number): string {
 	return `${readinessPercent(solid, total)}%`;
 }
 
-function locateTopic(course: ApCourseRecord, topicId: string) {
+export function locateTopic(course: ApCourseRecord, topicId: string) {
 	for (const unit of course.sections) {
 		const topic = unit.points.find((candidate) => candidate.id === topicId);
 		if (topic) return { unit, topic };
@@ -1703,7 +1703,7 @@ function apRetagPartTool(ctx: ApToolContext): AgentTool<typeof apRetagPartInputO
 
 // ─── ap_record_result ───────────────────────────────────────────────────────
 
-const apRecordResultInputObject = Type.Object({
+export const apRecordResultInputObject = Type.Object({
 	topicId: Type.String({
 		description: "REQUIRED — the topic this outcome belongs to; validated against the confirmed list and the sitting's scope.",
 	}),

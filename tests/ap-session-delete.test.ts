@@ -154,4 +154,52 @@ describe("AP session deletion forgets the session's answers (AP prep stage 1, 20
 			console.error = originalError;
 		}
 	});
+
+	it("deleting a linked Learn teach chat forgets its answers the same way", async () => {
+		const { courseId, topicId } = confirmedCourse("Learn session forgotten");
+		const sitting = apChat("A sitting", courseId);
+		const learn = chatStore.createChat("Learn topic", undefined, undefined, {
+			courseId,
+			learn: { type: "topic", topicId },
+		}).id;
+		assert.equal(chatStore.getChat(learn)?.kind, undefined, "a Learn session is a teach chat");
+		assert.equal(chatStore.getChat(learn)?.apCourseId, courseId);
+
+		apCourseStore.recordResult(courseId, topicId, "correct", sitting);
+		apCourseStore.recordResult(courseId, topicId, "wrong", learn);
+		assert.equal(onlyPoint(courseId).status, "gap", "the Learn chat's graded answer is the live verdict");
+
+		const forgotten: Array<[string, string]> = [];
+		const originalForget = apCourseStore.forgetChat;
+		apCourseStore.forgetChat = (id: string, chatId: string) => {
+			forgotten.push([id, chatId]);
+			return originalForget.call(apCourseStore, id, chatId);
+		};
+		try {
+			const outcome = await deleteChatSession(learn, "preserve-graph");
+			assert.equal(outcome.ok, true);
+		} finally {
+			apCourseStore.forgetChat = originalForget;
+		}
+		assert.deepEqual(forgotten, [[courseId, learn]], "forgetChat(courseId, chatId) ran for the Learn chat");
+		assert.equal(onlyPoint(courseId).status, "solid", "the sitting's answer alone replays to solid");
+		assert.deepEqual(onlyPoint(courseId).history.map((attempt) => attempt.chatId), [sitting]);
+	});
+
+	it("deleting a plain teach chat does not touch any course", async () => {
+		const chat = chatStore.createChat("Plain teach").id;
+		const forgotten: unknown[] = [];
+		const originalForget = apCourseStore.forgetChat;
+		apCourseStore.forgetChat = (...args: Parameters<typeof originalForget>) => {
+			forgotten.push(args);
+			return originalForget.apply(apCourseStore, args);
+		};
+		try {
+			const outcome = await deleteChatSession(chat, "preserve-graph");
+			assert.equal(outcome.ok, true);
+		} finally {
+			apCourseStore.forgetChat = originalForget;
+		}
+		assert.deepEqual(forgotten, [], "no course forget for a chat with no course link");
+	});
 });

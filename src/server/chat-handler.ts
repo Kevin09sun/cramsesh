@@ -16,6 +16,7 @@ import {
 	skippedFrqFrom,
 	viewedFiguresFrom,
 } from "../agent/tools/ap.ts";
+import { apLearnInstruction, type ApLearnToolContext } from "../agent/tools/ap-learn.ts";
 import { connectionBackgroundAllowed as subscriptionBackgroundAllowed, connectionScopeCurrent, isSubscriptionProvider } from "../agent/subscription-connections.ts";
 import { nativeSubscriptionError } from "../agent/subscription-stream.ts";
 import { chatGPTStreamError } from "../agent/chatgpt-stream.ts";
@@ -23,6 +24,7 @@ import { SubscriptionRequestCycle, type SubscriptionDispatchLifecycle } from "..
 import { reconstructRequestCause } from "../core/native-messages.ts";
 import { parseApSitting, type ApSitting } from "../core/index.ts";
 import { extractionTriggerTokens } from "../core/extraction-trigger.ts";
+import type { ApLearnScope } from "../core/ap.ts";
 import { createJobRunner } from "../agent/subagents/runner.ts";
 import { createExtractionPipeline } from "../agent/subagents/extraction.ts";
 import type { ModelRole } from "../../config.ts";
@@ -101,6 +103,31 @@ import type {CallUsage} from "../core/contracts.ts";
  * already in progress when the opt-in is switched off. */
 function connectionBackgroundAllowed(provider: string): boolean {
 	return subscriptionBackgroundAllowed(provider) && (provider !== CLAUDE_CODE_PROVIDER || providerKeyPresent(provider));
+}
+
+/** A linked AP Learn session's teacher wiring (2026-11-17): the scoped
+ *  ap_record_result context plus the appended grading instruction listing
+ *  the in-scope topics (one topic, or every topic in the unit). Null for an
+ *  unlinked chat, and silently null when the course is missing. */
+function apLearnWiring(
+	record: { apCourseId?: string; apLearn?: ApLearnScope },
+	chatId: string,
+): { ctx: ApLearnToolContext; instruction: string } | null {
+	if (!record.apCourseId || !record.apLearn) return null;
+	const course = stores.apCourseStore.get(record.apCourseId);
+	if (!course) return null;
+	const scope = record.apLearn;
+	const topics =
+		scope.type === "topic"
+			? course.sections.flatMap((section) => section.points.filter((point) => point.id === scope.topicId))
+			: (course.sections.find((section) => section.id === scope.unitId)?.points ?? []);
+	return {
+		ctx: { chatId, courseId: record.apCourseId, scope, courses: stores.apCourseStore },
+		instruction: apLearnInstruction(
+			course.title,
+			topics.map((point) => ({ id: point.id, text: point.text })),
+		),
+	};
 }
 
 function settlementErrorText(error: unknown): string {
@@ -519,6 +546,10 @@ export async function handleChatInput(
 		// prompt fresh per turn, swapping in any enabled override segments.
 		promptSwitches: effective.agent.prompts,
 	};
+	// A linked AP Learn session (2026-11-17): the teacher grades its checks
+	// into the course — the scoped ap_record_result plus its instruction.
+	// Teach branch only; a missing course skips both silently.
+	const learnWiring = teaching ? apLearnWiring(record, chatId) : null;
 	// PRACTICE BRANCH (owner design, 2026-10-04): a kind:"practice"
 	// session builds the practitioner from turn 1 — no prober→teacher
 	// split, no plan/question/job tools; the whole registry is
@@ -638,8 +669,9 @@ export async function handleChatInput(
 						// Direct web tools (2026-11-12): the live provider seam,
 						// behind the settings `web` switch.
 						search: searchProvider,
+						...(learnWiring ? { apLearn: learnWiring.ctx } : {}),
 					},
-					agentOpts,
+					learnWiring ? { ...agentOpts, appendInstructions: [learnWiring.instruction] } : agentOpts,
 				)
 			: createProberAgent(
 					{
