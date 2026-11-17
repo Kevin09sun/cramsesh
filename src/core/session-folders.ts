@@ -96,7 +96,10 @@ function unfiledLast(folders: SessionFolder[]): SessionFolder[] {
 }
 
 /** The folders to render open: the stored set (folders and section-collapse
- *  keys) plus the current chat's folder; a search opens every folder. */
+ *  keys) plus the current chat's folder; a search opens every folder AND
+ *  neutralizes the persisted section collapses — a match in a collapsed
+ *  section must be shown and walked. The stored set is untouched, so the
+ *  user's collapse returns when search clears. */
 export function openFolderKeys(
 	tree: SessionTree,
 	stored: ReadonlySet<string>,
@@ -104,6 +107,8 @@ export function openFolderKeys(
 ): Set<string> {
 	const open = new Set(stored);
 	if (opts.searching) {
+		open.delete(COLLAPSED_TESTS);
+		open.delete(COLLAPSED_AP);
 		for (const folder of [...tree.tests, ...tree.ap]) open.add(folder.key);
 	} else if (opts.currentChatId !== null) {
 		const id = opts.currentChatId;

@@ -162,6 +162,32 @@ describe("openFolderKeys", () => {
 
 		assert.deepEqual([...open].sort(), ["ap:c1", "ap:unfiled", "tests:tA", "tests:unfiled"]);
 	});
+
+	it("neutralizes persisted section collapses while searching, so matches are walked", () => {
+		const tree = groupSessions([chat({ id: "a1", kind: "ap", apCourseId: "c1" })], names({}, { c1: "C" }));
+		const stored = new Set(["collapsed:ap", "ap:c1"]);
+
+		const open = openFolderKeys(tree, stored, { searching: true, currentChatId: null });
+
+		assert.equal(open.has("collapsed:ap"), false);
+		assert.deepEqual(
+			walkOrder(tree, open).map((c) => c.id),
+			["a1"],
+		);
+		assert.ok(stored.has("collapsed:ap"), "the stored set is untouched");
+	});
+
+	it("keeps a persisted section collapse when not searching", () => {
+		const tree = groupSessions([chat({ id: "a1", kind: "ap", apCourseId: "c1" })], names({}, { c1: "C" }));
+		const open = openFolderKeys(tree, new Set(["collapsed:ap"]), { searching: false, currentChatId: null });
+		assert.ok(open.has("collapsed:ap"));
+	});
+
+	it("opens the Unfiled folder holding the current chat", () => {
+		const tree = groupSessions([chat({ id: "au", kind: "ap" })], names());
+		const open = openFolderKeys(tree, new Set(), { searching: false, currentChatId: "au" });
+		assert.ok(open.has("ap:unfiled"));
+	});
 });
 
 describe("walkOrder", () => {
