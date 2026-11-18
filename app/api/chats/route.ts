@@ -23,6 +23,19 @@ export async function GET() {
 	return Response.json({ chats });
 }
 
+/** Continued sittings (owner, 2026-11-18): a test prep session opened on an
+ *  EXISTING test is named by its sitting number, not by its opening prompt
+ *  (the client still sends "Continue." as the prompt). N = the test's
+ *  existing chats + 1, bumped past any "Session N" title already taken —
+ *  deletions leave gaps, and a reused number would collide in the box. */
+function continuedSittingTitle(testId: string): string {
+	const sittings = listChats().filter((chat) => chat.testId === testId);
+	const taken = new Set(sittings.map((chat) => chat.title));
+	let n = sittings.length + 1;
+	while (taken.has(`Session ${n}`)) n += 1;
+	return `Session ${n}`;
+}
+
 export async function POST(req: Request) {
 	const body = (await req.json().catch(() => ({}))) as {
 		title?: unknown;
@@ -67,6 +80,10 @@ export async function POST(req: Request) {
 	// (testTitle, created here) or an existing record (testId). Exactly one
 	// is required — anything else is an honest 400.
 	let testId: string | undefined;
+	// A sitting continued on an existing test gets the numbered title
+	// (continuedSittingTitle); a brand-new test's first sitting keeps the
+	// prompt-derived name below.
+	let continuedSitting = false;
 	if (body.kind === "testprep") {
 		const testTitle = typeof body.testTitle === "string" ? body.testTitle.trim() : "";
 		const requestedTestId = typeof body.testId === "string" ? body.testId.trim() : "";
@@ -76,6 +93,7 @@ export async function POST(req: Request) {
 		if (requestedTestId !== "") {
 			if (!stores.testStore.get(requestedTestId)) return Response.json({ error: "Unknown test" }, { status: 404 });
 			testId = requestedTestId;
+			continuedSitting = true;
 		} else {
 			testId = stores.testStore.create(testTitle).id;
 		}
@@ -117,7 +135,9 @@ export async function POST(req: Request) {
 				: body.kind === "ap"
 					? ("ap" as const)
 					: undefined;
-	const chat = createChat(titleFromPrompt(title || "Untitled session"), kind, testId, ap);
+	const storedTitle =
+		continuedSitting && testId !== undefined ? continuedSittingTitle(testId) : titleFromPrompt(title || "Untitled session");
+	const chat = createChat(storedTitle, kind, testId, ap);
 	// PER-SESSION MODELS (owner, 2026-09-28): a session owns its model +
 	// thinking level from birth — stamped verbatim from the STRONG slot,
 	// the new-session default. From here the strong slot never reaches

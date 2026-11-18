@@ -188,17 +188,32 @@ describe("test prep sessions (2026-11-10)", () => {
 		assert.equal(testStore.get(testId)?.title, "Bio midterm");
 		assert.equal(chatStore.getChat(id)?.kind, "testprep");
 		assert.equal(chatStore.getChat(id)?.testId, testId);
+		assert.equal(chatStore.getChat(id)?.title, "Bio midterm", "a new test's first sitting keeps the prompt-derived title");
 	});
 
-	it("POST /api/chats links an existing test from testId without creating another", async () => {
+	it("POST /api/chats links an existing test from testId without creating another, naming it Session 2", async () => {
 		const existing = testStore.create("Existing test");
 		const countBefore = testStore.list().length;
-		const res = await post({ title: "Continue", kind: "testprep", testId: existing.id });
+		// One sitting already exists for this test (normally titleFromPrompt(testTitle)).
+		chatStore.createChat("Session 1", "testprep", existing.id);
+		const res = await post({ title: "Continue.", kind: "testprep", testId: existing.id });
 		assert.equal(res.status, 200);
-		const { id, testId } = (await res.json()) as { id: string; testId: string };
+		const { id, testId, title } = (await res.json()) as { id: string; testId: string; title: string };
 		assert.equal(testId, existing.id);
+		assert.equal(title, "Session 2", "a continued sitting is numbered by the test's sitting count");
+		assert.equal(chatStore.getChat(id)?.title, "Session 2");
 		assert.equal(chatStore.getChat(id)?.testId, existing.id);
 		assert.equal(testStore.list().length, countBefore);
+	});
+
+	it("POST /api/chats bumps past a taken Session N (a deletion left a gap)", async () => {
+		const existing = testStore.create("Collision test");
+		chatStore.createChat("Session 2", "testprep", existing.id);
+		const res = await post({ title: "Continue.", kind: "testprep", testId: existing.id });
+		assert.equal(res.status, 200);
+		const { id, title } = (await res.json()) as { id: string; title: string };
+		assert.equal(title, "Session 3", "the number already taken by this test is skipped");
+		assert.equal(chatStore.getChat(id)?.title, "Session 3");
 	});
 
 	it("POST /api/chats refuses an unknown testId with a 404 JSON error", async () => {
