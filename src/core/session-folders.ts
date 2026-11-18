@@ -95,6 +95,24 @@ function unfiledLast(folders: SessionFolder[]): SessionFolder[] {
 	return unfiled ? [...folders.filter((f) => f !== unfiled), unfiled] : folders;
 }
 
+/** The sidebar list's empty-state decision (final review, 2026-11-17).
+ *  Folder rows live in the tree, not the flat list, so "No sessions yet."
+ *  is only true when there are NO folders AND no flat rows — a user whose
+ *  sessions are all Tests/AP sees the tree, never the empty copy. While
+ *  searching, "no folders and no flat rows" means the search matched
+ *  nothing; with no folders to show and no rows to render, nothing extra
+ *  is needed below a populated tree. */
+export function sidebarEmptyState(
+	tree: SessionTree,
+	flatShown: boolean,
+	searching: boolean,
+): "none" | "no-sessions" | "no-match" {
+	if (flatShown) return "none";
+	const hasFolders = tree.tests.length + tree.ap.length > 0;
+	if (searching) return hasFolders ? "none" : "no-match";
+	return hasFolders ? "none" : "no-sessions";
+}
+
 /** The folders to render open: the stored set (folders and section-collapse
  *  keys) plus the current chat's folder; a search opens every folder AND
  *  neutralizes the persisted section collapses — a match in a collapsed

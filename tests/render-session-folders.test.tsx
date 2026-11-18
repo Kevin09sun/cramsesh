@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { SessionFolderTree, withCurrentFolderOpen } from "../components/session-folders.tsx";
-import { groupSessions, type SessionTree } from "../src/core/session-folders.ts";
+import { groupSessions, sidebarEmptyState, type SessionTree } from "../src/core/session-folders.ts";
 import type { ChatListItem } from "../src/core/contracts.ts";
 
 function chat(overrides: Partial<ChatListItem> & { id: string }): ChatListItem {
@@ -172,5 +172,29 @@ describe("withCurrentFolderOpen — the one-time auto-open", () => {
 		for (const id of ["s6", "nope", null]) {
 			assert.deepEqual([...withCurrentFolderOpen(new Set(["ap:c1"]), TREE, id)], ["ap:c1"], String(id));
 		}
+	});
+});
+
+describe("sidebarEmptyState — the empty copy never sits under a populated tree", () => {
+	const EMPTY = groupSessions([], { tests: {}, ap: {} });
+
+	it("a populated folder tree with an empty flat list shows nothing extra", () => {
+		assert.equal(sidebarEmptyState(TREE, false, false), "none");
+		assert.equal(sidebarEmptyState(TREE, TREE.flat.length > 0, false), "none");
+	});
+
+	it("no folders and no flat rows is the no-sessions state", () => {
+		assert.equal(sidebarEmptyState(EMPTY, false, false), "no-sessions");
+	});
+
+	it("a populated flat list always renders rows (never empty copy)", () => {
+		for (const searching of [false, true]) {
+			assert.equal(sidebarEmptyState(EMPTY, true, searching), "none", String(searching));
+		}
+	});
+
+	it("searching with nothing anywhere says no match, folder or flat", () => {
+		assert.equal(sidebarEmptyState(EMPTY, false, true), "no-match");
+		assert.equal(sidebarEmptyState(TREE, false, true), "none", "folder matches are rows");
 	});
 });

@@ -393,7 +393,7 @@ export interface MdRenderingSettings {
 
 /** Appearance settings — mode, colors, type, markdown emphasis. */
 export interface AppearanceSettings {
-	/** "dark" | "light" (default dark). */
+	/** "dark" | "light" (default light). */
 	mode?: "dark" | "light";
 	/** The one user-chosen color; everything else derives per-mode in code.
 	 *  null = the mode's default background. */

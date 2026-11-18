@@ -221,7 +221,7 @@ function useThemeMode(): "dark" | "light" {
 	return useSyncExternalStore(
 		subscribeThemeClass,
 		() => (document.documentElement.classList.contains("light") ? "light" : "dark"),
-		() => "dark",
+		() => "light",
 	);
 }
 

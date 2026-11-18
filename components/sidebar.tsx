@@ -17,7 +17,7 @@ import { Hint } from "@/components/ui/hint";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { fuzzyScore, groupSessions, openFolderKeys, parseOpenKeys, walkOrder, type FolderNames } from "@/src/core";
+import { fuzzyScore, groupSessions, openFolderKeys, parseOpenKeys, sidebarEmptyState, walkOrder, type FolderNames } from "@/src/core";
 import { SessionFolderTree, withCurrentFolderOpen } from "@/components/session-folders";
 import { SessionStarter } from "@/components/start-session";
 import { useServerEvent, useServerResync } from "@/components/server-events";
@@ -1003,13 +1003,19 @@ function SessionsSidebar() {
 								onNewTestSession={(testId) => void newTestSession(testId)}
 								renderRow={renderRow}
 							/>
-							{tree.flat.length > 0 ? (
-								tree.flat.map(renderRow)
-							) : !searching ? (
-								<div className="px-2 py-4 text-xs text-muted-foreground">No sessions yet.</div>
-							) : walk.length === 0 ? (
-								<div className="px-2 py-4 text-xs text-muted-foreground">No sessions match.</div>
-							) : null}
+							{(() => {
+								// The tree owns folder rows, so the flat list being
+								// empty is NOT an empty sidebar (final review).
+								const empty = sidebarEmptyState(tree, tree.flat.length > 0, searching);
+								if (empty !== "none") {
+									return (
+										<div className="px-2 py-4 text-xs text-muted-foreground">
+											{empty === "no-match" ? "No sessions match." : "No sessions yet."}
+										</div>
+									);
+								}
+								return tree.flat.map(renderRow);
+							})()}
 						</>
 					)}
 				</div>
