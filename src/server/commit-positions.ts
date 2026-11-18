@@ -19,7 +19,7 @@
  * (minted from the chain ledger), so persisting them is sound.
  */
 import type { Position } from "../core/contracts.ts";
-import { deriveView, getGraph } from "../core/graph.ts";
+import { deriveView, getGraph, studyGroupOf } from "../core/graph.ts";
 import { settleGraphLayout } from "../core/layout-settle.ts";
 import { stores } from "./stores.ts";
 
@@ -64,7 +64,7 @@ export function commitPositions(input: unknown): Record<string, Position> {
 	// comparison broke once args counted as persistable).
 	for (const id of known) {
 		if (!(id in positions)) {
-			settleGraphLayout(stores.graphStore);
+			settleGraphLayout(stores.graphStore, studyGroupOf(stores.chatStore));
 			break;
 		}
 	}

@@ -68,12 +68,44 @@ import { MIN_CLUSTER_SIZE } from "./clusters.ts";
 import { formatChainLine } from "./chains.ts";
 import { attachImpToCommunities, birthSessionOf, birthSessionPartition } from "./session-clusters.ts";
 import { sourceFileLabel } from "./source-label.ts";
+import { studyGroupKey } from "./study-sessions.ts";
 import type { ChatStore, GraphStore } from "./ports.ts";
 
 /** The storage ports every graph operation needs, passed explicitly. */
 export interface GraphDeps {
 	chatStore: ChatStore;
 	graphStore: GraphStore;
+	/** Test / course titles by id: the labels of study-group regions
+	 *  ("test:<id>" / "course:<id>", 2026-11-17). Absent: "Untitled ...". */
+	studyTitles?: { tests: Readonly<Record<string, string>>; courses: Readonly<Record<string, string>> };
+}
+
+/**
+ * The study-group mapping (2026-11-17): a birth session's region key.
+ * Sessions linked to one test or course share a region:
+ * `studyGroupKey(chat)` ("test:<id>" / "course:<id>"). Every other chat,
+ * a notes source id ("src_..."), and a missing chat map to themselves.
+ * Memoised per returned function: build one per snapshot / settle. Shared
+ * by graphSnapshot and settleGraphLayout so the rendered regions and the
+ * centroid pull agree.
+ */
+export function studyGroupOf(chatStore: Pick<ChatStore, "getChat">): (birthId: string) => string {
+	const memo = new Map<string, string>();
+	return (birthId) => {
+		const hit = memo.get(birthId);
+		if (hit !== undefined) return hit;
+		const chat = birthId.startsWith("src_") ? null : chatStore.getChat(birthId);
+		const group = (chat ? studyGroupKey(chat) : null) ?? birthId;
+		memo.set(birthId, group);
+		return group;
+	};
+}
+
+/** A study-group region's label, or undefined when `id` is not a group key. */
+function studyGroupLabel(id: string, titles: GraphDeps["studyTitles"]): string | undefined {
+	if (id.startsWith("test:")) return titles?.tests[id.slice("test:".length)] ?? "Untitled test";
+	if (id.startsWith("course:")) return titles?.courses[id.slice("course:".length)] ?? "Untitled course";
+	return undefined;
 }
 
 /** "n_" + 12 hex chars (contracts.ts GraphNode.id — store-assigned). */
@@ -563,10 +595,16 @@ export function graphSnapshot(deps: GraphDeps, sourceNames: Readonly<Record<stri
 	// but renders unlabeled — honest, never guessed.
 	// PROPOSITIONS ONLY (owner, 2026-09-30): derived implication nodes
 	// never partition — the stored world clusters, its image follows.
-	const communities = birthSessionPartition(graph.nodes);
+	// STUDY GROUPS (2026-11-17): sessions linked to one test or course share
+	// ONE region labelled with the test / course title; the hull rule counts
+	// the grouped community.
+	const groupOf = studyGroupOf(deps.chatStore);
+	const communities = birthSessionPartition(graph.nodes, groupOf);
 	const clusters: Cluster[] = communities
 		.filter((community) => community.members.length >= MIN_CLUSTER_SIZE)
 		.map((community) => {
+			const group = studyGroupLabel(community.id, deps.studyTitles);
+			if (group !== undefined) return { id: community.id, label: group, members: community.members };
 			// Display names never replace the original provenance path.
 			const file = fileSources[community.id];
 			return {
@@ -581,7 +619,7 @@ export function graphSnapshot(deps: GraphDeps, sourceNames: Readonly<Record<stri
 	// never resurrects a hull (the filter counts propositions). Both
 	// cluster-membership consumers — the sim's centroid pull and the
 	// canvas's region rasterization — read it through this one list.
-	attachImpToCommunities(clusters, graph.nodes, graph.chains);
+	attachImpToCommunities(clusters, graph.nodes, graph.chains, groupOf);
 
 	// Resting layout (Option A): the positions ledger, when the settle has
 	// ever run. Absent on a fresh graph — the view falls back to its own
