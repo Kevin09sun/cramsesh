@@ -20,7 +20,7 @@ import { afterEach, test } from "node:test";
 import { createRoot, type Root } from "react-dom/client";
 import { parseHTML } from "linkedom";
 import { ReadinessView } from "../components/test-prep/readiness-view.tsx";
-import type { TestRecord } from "../src/core/index.ts";
+import type { ChatSummary, TestRecord } from "../src/core/index.ts";
 
 const dom = parseHTML("<html><body></body></html>");
 Object.assign(globalThis, {
@@ -30,6 +30,8 @@ Object.assign(globalThis, {
 	HTMLElement: dom.window.HTMLElement,
 	CustomEvent: dom.window.CustomEvent,
 	IS_REACT_ACT_ENVIRONMENT: true,
+	// next/link's idle-callback fallback reads `self` (the Sessions rows are Links).
+	self: globalThis,
 });
 
 // SessionStarter stashes the opening message before navigating; the same-tab
@@ -104,7 +106,9 @@ interface SeenRequest {
 }
 
 /** Mounts against a mock API, returning every request and the navigation. */
-async function mount(options: { navigate?: (target: string) => void; test?: TestRecord } = {}) {
+async function mount(
+	options: { navigate?: (target: string) => void; test?: TestRecord; sessions?: ChatSummary[] } = {},
+) {
 	const seen: SeenRequest[] = [];
 	const navigated: string[] = [];
 	const navigate = options.navigate ?? ((target: string) => navigated.push(target));
@@ -127,7 +131,7 @@ async function mount(options: { navigate?: (target: string) => void; test?: Test
 	document.body.append(host);
 	root = createRoot(host);
 	await act(async () => {
-		root!.render(<ReadinessView test={current} navigate={navigate} />);
+		root!.render(<ReadinessView test={current} sessions={options.sessions ?? []} navigate={navigate} />);
 	});
 	return { seen, navigated };
 }
@@ -222,4 +226,53 @@ test("Continue creates the next testprep sitting with 'Continue.' as its first m
 	assert.ok(post, "the continue action creates a session");
 	assert.deepEqual(post!.body, { title: "Continue.", kind: "testprep", testId: "test_1" });
 	assert.deepEqual(navigated, ["/chat/chat_new"], "it lands on the new sitting");
+});
+
+// ─── Sessions block (study boxes, 2026-11-17) ───────────────────────────────
+
+function session(id: string, title: string): ChatSummary {
+	return {
+		id,
+		title,
+		createdAt: "2026-11-16T12:00:00.000Z",
+		updatedAt: "2026-11-16T12:00:00.000Z",
+		kind: "testprep",
+		testId: "test_1",
+		messageCount: 2,
+		phase: "probe",
+		pendingQuestion: false,
+		pendingProblem: false,
+	};
+}
+
+test("the readiness page lists the test's sessions below the sections and offers New session", async () => {
+	await mount({ sessions: [session("chat_2", "Second sitting"), session("chat_1", "First sitting")] });
+
+	const block = document.querySelector('[data-testid="study-sessions"]');
+	assert.ok(block, "the Sessions block renders");
+	const rows = [...block!.querySelectorAll("a")].map((row) => row.getAttribute("href"));
+	assert.deepEqual(rows, ["/chat/chat_2", "/chat/chat_1"]);
+	const button = document.querySelector('[data-testid="new-test-session"]');
+	assert.ok(button, "the New session button renders");
+	assert.match(button!.textContent ?? "", /New session/);
+	assert.ok(document.querySelector('[data-testid="continue-test"]'), "Continue where I left off stays");
+
+	const sections = document.querySelector('[data-testid="readiness-sections"]')!;
+	assert.ok(
+		sections.compareDocumentPosition(block!) & 4,
+		"the Sessions block sits below the readiness sections",
+	);
+});
+
+test("New session starts the next testprep sitting through the Continue path", async () => {
+	const { seen, navigated } = await mount();
+
+	await act(async () =>
+		document.querySelector<HTMLButtonElement>('[data-testid="new-test-session"]')!.click(),
+	);
+
+	const post = seen.find((request) => request.method === "POST" && request.url === "/api/chats");
+	assert.ok(post, "New session creates a session");
+	assert.deepEqual(post!.body, { title: "Continue.", kind: "testprep", testId: "test_1" });
+	assert.deepEqual(navigated, ["/chat/chat_new"]);
 });

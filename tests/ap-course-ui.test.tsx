@@ -35,7 +35,7 @@ import { ToolCallCard } from "../components/artifacts/tool-call-card.tsx";
 import { toolActivityLabel } from "../src/core/pending.ts";
 import { sittingLabel } from "../src/core/index.ts";
 import { AP_ADDED_TOPIC_SOURCE } from "../src/core/ap.ts";
-import type { ApCourseRecord, ApDocument, LhViewMessage } from "../src/core/index.ts";
+import type { ApCourseRecord, ApDocument, ChatSummary, LhViewMessage } from "../src/core/index.ts";
 
 const dom = parseHTML("<html><body></body></html>");
 Object.assign(globalThis, {
@@ -45,6 +45,8 @@ Object.assign(globalThis, {
 	HTMLElement: dom.window.HTMLElement,
 	CustomEvent: dom.window.CustomEvent,
 	IS_REACT_ACT_ENVIRONMENT: true,
+	// next/link's idle-callback fallback reads `self` (the Sessions rows are Links).
+	self: globalThis,
 });
 
 // SessionStarter stashes the opening message before navigating; the same-tab
@@ -149,6 +151,7 @@ async function mountCourse(options: {
 	documents?: Array<ApDocument & { present: boolean; questions?: number }>;
 	indexedQuestions?: number;
 	navigate?: (target: string) => void;
+	sessions?: ChatSummary[];
 } = {}) {
 	host = document.createElement("div");
 	document.body.append(host);
@@ -160,6 +163,7 @@ async function mountCourse(options: {
 				documents={options.documents ?? documentStates()}
 				indexedQuestions={options.indexedQuestions ?? 0}
 				cedPath="/papers/ced.pdf"
+				sessions={options.sessions ?? []}
 				navigate={options.navigate ?? (() => {})}
 			/>,
 		);
@@ -536,6 +540,65 @@ test("Find released papers creates a session whose title and first message are t
 test("Find released papers is absent before the list is confirmed", async () => {
 	await mountCourse({ course: apRecord({ planConfirmed: false }) });
 	assert.equal(document.querySelector('[data-testid="find-released-papers"]'), null);
+});
+
+// ─── Sessions block (study boxes, 2026-11-17) ───────────────────────────────
+
+function courseSession(id: string, title: string): ChatSummary {
+	return {
+		id,
+		title,
+		createdAt: "2026-11-16T12:00:00.000Z",
+		updatedAt: "2026-11-16T12:00:00.000Z",
+		kind: "ap",
+		apCourseId: "ap_1",
+		messageCount: 2,
+		phase: "probe",
+		pendingQuestion: false,
+		pendingProblem: false,
+	};
+}
+
+test("the course page lists its sessions between the units and the documents, with New session", async () => {
+	await mountCourse({ sessions: [courseSession("chat_2", "Unit 1 sitting"), courseSession("chat_1", "Setup")] });
+
+	const block = document.querySelector('[data-testid="study-sessions"]');
+	assert.ok(block, "the Sessions block renders");
+	const rows = [...block!.querySelectorAll("a")].map((row) => row.getAttribute("href"));
+	assert.deepEqual(rows, ["/chat/chat_2", "/chat/chat_1"]);
+	assert.match(block!.textContent ?? "", /Unit 1 sitting/);
+	const button = document.querySelector<HTMLButtonElement>('[data-testid="new-course-session"]');
+	assert.ok(button, "the New session button renders");
+	assert.match(button!.textContent ?? "", /New session/);
+	assert.equal(button!.disabled, false);
+
+	const units = document.querySelector('[data-testid="course-units"]')!;
+	const documentsBlock = document.querySelector('[data-testid="course-documents"]')!;
+	assert.ok(units.compareDocumentPosition(block!) & 4, "below the units");
+	assert.ok(block!.compareDocumentPosition(documentsBlock) & 4, "above the documents");
+});
+
+test("New session scrolls smoothly to the units", async () => {
+	await mountCourse();
+
+	const units = document.querySelector('[data-testid="course-units"]') as HTMLElement & {
+		scrollIntoView: (options?: unknown) => void;
+	};
+	const calls: unknown[] = [];
+	units.scrollIntoView = (options?: unknown) => {
+		calls.push(options);
+	};
+	await act(async () =>
+		document.querySelector<HTMLButtonElement>('[data-testid="new-course-session"]')!.click(),
+	);
+	assert.deepEqual(calls, [{ behavior: "smooth", block: "start" }]);
+});
+
+test("New session is disabled before the units and topics are confirmed", async () => {
+	await mountCourse({ course: apRecord({ planConfirmed: false }) });
+	const button = document.querySelector<HTMLButtonElement>('[data-testid="new-course-session"]');
+	assert.ok(button);
+	assert.equal(button!.disabled, true);
 });
 
 // ─── UnitsReviewCard ────────────────────────────────────────────────────────

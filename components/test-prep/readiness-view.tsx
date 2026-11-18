@@ -7,10 +7,11 @@ import { useState } from "react";
 import { OPENING_PROMPT_FAILURE } from "@/components/opening-prompt";
 import { SidebarToggle } from "@/components/sidebar";
 import { SessionStarter } from "@/components/start-session";
+import { StudySessionList } from "@/components/study-session-list";
 import { PlanEditor } from "@/components/test-prep/plan-editor";
 import { Button } from "@/components/ui/button";
 import { readiness, readinessPercent } from "@/src/core";
-import type { PlanDraftSection, PointStatus, TestRecord } from "@/src/core";
+import type { ChatSummary, PlanDraftSection, PointStatus, TestRecord } from "@/src/core";
 
 /**
  * The readiness view (test prep, 2026-11-10) — option B of the approved
@@ -69,9 +70,12 @@ export async function continueSession(
 
 export function ReadinessView({
 	test: initialTest,
+	sessions,
 	navigate,
 }: {
 	test: TestRecord;
+	/** This test's sessions, newest first (sessionsForTest over listChats). */
+	sessions: ChatSummary[];
 	/** Where to go after starting the next sitting. Production supplies the
 	 *  app router; the shell seam keeps the view renderable without one. */
 	navigate?: (target: string) => void;
@@ -274,13 +278,23 @@ export function ReadinessView({
 					No plan yet — the agent proposes one in your first sitting.
 				</p>
 			)}
+
+			<StudySessionList
+				sessions={sessions}
+				newSession={{
+					label: "New session",
+					testId: "new-test-session",
+					disabled: starting,
+					onClick: () => void start(),
+				}}
+			/>
 		</div>
 	);
 }
 
 /** The routed readiness page body: the app router is the only Next coupling,
  *  kept out of ReadinessView so the view renders in tests and previews. */
-export function ReadinessPage({ test }: { test: TestRecord }) {
+export function ReadinessPage({ test, sessions }: { test: TestRecord; sessions: ChatSummary[] }) {
 	const router = useRouter();
 	return (
 		<div className="relative flex h-dvh flex-col">
@@ -295,7 +309,7 @@ export function ReadinessPage({ test }: { test: TestRecord }) {
 			</header>
 			<main className="min-h-0 flex-1 overflow-y-auto">
 				<div className="mx-auto w-full max-w-3xl px-6 py-8">
-					<ReadinessView test={test} navigate={(target) => router.push(target)} />
+					<ReadinessView test={test} sessions={sessions} navigate={(target) => router.push(target)} />
 				</div>
 			</main>
 		</div>

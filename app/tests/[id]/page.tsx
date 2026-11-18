@@ -1,7 +1,8 @@
 import { notFound } from "next/navigation";
 
 import { ReadinessPage } from "@/components/test-prep/readiness-view";
-import { stores } from "@/src/server";
+import { sessionsForTest } from "@/src/core";
+import { listChats, stores } from "@/src/server";
 
 /**
  * /tests/[id] — one test's readiness page (test prep, 2026-11-10).
@@ -22,5 +23,5 @@ export default async function TestReadinessPage({
 	const { id } = await params;
 	const test = stores.testStore.get(id);
 	if (!test) notFound();
-	return <ReadinessPage test={test} />;
+	return <ReadinessPage test={test} sessions={sessionsForTest(listChats(), id)} />;
 }

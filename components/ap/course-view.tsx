@@ -8,10 +8,11 @@ import { StartSitting } from "@/components/ap/start-sitting";
 import { OPENING_PROMPT_FAILURE } from "@/components/opening-prompt";
 import { SidebarToggle } from "@/components/sidebar";
 import { SessionStarter } from "@/components/start-session";
+import { StudySessionList } from "@/components/study-session-list";
 import { PlanEditor } from "@/components/test-prep/plan-editor";
 import { Button } from "@/components/ui/button";
 import { AP_ADDED_TOPIC_SOURCE, apPaperPair, fillAddedTopicSources, quoteFilePath, readiness, readinessPercent } from "@/src/core";
-import type { ApCourseRecord, ApDocument, ApLearnScope, ApSittingScope, PlanDraftSection, PointStatus } from "@/src/core";
+import type { ApCourseRecord, ApDocument, ApLearnScope, ApSittingScope, ChatSummary, PlanDraftSection, PointStatus } from "@/src/core";
 
 /**
  * The AP course page body (AP prep, 2026-11-13).
@@ -137,12 +138,15 @@ export function CourseView({
 	documents: initialDocuments,
 	indexedQuestions,
 	cedPath,
+	sessions,
 	navigate,
 }: {
 	course: ApCourseRecord;
 	documents: CourseDocument[];
 	/** How many released questions the course's synced index holds. */
 	indexedQuestions: number;
+	/** This course's sessions, newest first (sessionsForCourse over listChats). */
+	sessions: ChatSummary[];
 	/** The confirmed course description's absolute path, when it is present. */
 	cedPath?: string;
 	/** Where to go after starting a session; production supplies the router. */
@@ -448,6 +452,22 @@ export function CourseView({
 				</div>
 			)}
 
+			<StudySessionList
+				sessions={sessions}
+				newSession={{
+					label: "New session",
+					testId: "new-course-session",
+					// A new session starts from a unit or topic's Learn/Practise, so
+					// the button takes the learner to the units — which offer nothing
+					// to start until they are confirmed.
+					disabled: !course.planConfirmed,
+					onClick: () =>
+						document
+							.querySelector('[data-testid="course-units"]')
+							?.scrollIntoView({ behavior: "smooth", block: "start" }),
+				}}
+			/>
+
 			{documents.length > 0 && (
 				<div data-testid="course-documents" className="rounded-xl border bg-card p-4">
 					<div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
@@ -516,11 +536,13 @@ export function CoursePage({
 	documents,
 	indexedQuestions,
 	cedPath,
+	sessions,
 }: {
 	course: ApCourseRecord;
 	documents: CourseDocument[];
 	indexedQuestions: number;
 	cedPath?: string;
+	sessions: ChatSummary[];
 }) {
 	const router = useRouter();
 	return (
@@ -541,6 +563,7 @@ export function CoursePage({
 						documents={documents}
 						indexedQuestions={indexedQuestions}
 						{...(cedPath === undefined ? {} : { cedPath })}
+						sessions={sessions}
 						navigate={(target) => router.push(target)}
 					/>
 				</div>

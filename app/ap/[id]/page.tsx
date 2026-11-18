@@ -1,8 +1,8 @@
 import { notFound } from "next/navigation";
 
 import { CoursePage, type CourseDocument } from "@/components/ap/course-view";
-import type { ApDocument, ApQuestionIndex } from "@/src/core";
-import { apPaperPath, apPaperPresent, stores } from "@/src/server";
+import { sessionsForCourse, type ApDocument, type ApQuestionIndex } from "@/src/core";
+import { apPaperPath, apPaperPresent, listChats, stores } from "@/src/server";
 
 /**
  * /ap/[id] — one AP course page (AP prep, 2026-11-13).
@@ -73,6 +73,7 @@ export default async function ApCoursePage({
 			documents={documents}
 			indexedQuestions={index?.questions.length ?? 0}
 			{...(cedPath === undefined ? {} : { cedPath })}
+			sessions={sessionsForCourse(listChats(), id)}
 		/>
 	);
 }

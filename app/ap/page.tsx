@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { SidebarToggle } from "@/components/sidebar";
+import { NewCourseLink } from "@/components/study-session-list";
 import { readinessPercent } from "@/src/core";
 import { stores } from "@/src/server";
 
@@ -26,6 +27,9 @@ export default function ApCoursesPage() {
 			<header className="flex h-15 shrink-0 items-center gap-2 border-b border-border px-3">
 				<SidebarToggle />
 				<h1 className="font-title text-xl tracking-tight">AP</h1>
+				<div className="ml-auto">
+					<NewCourseLink />
+				</div>
 			</header>
 			<main className="min-h-0 flex-1 overflow-y-auto">
 				<div className="mx-auto w-full max-w-3xl px-6 py-8">
