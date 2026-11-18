@@ -80,9 +80,6 @@ export * from "./settings-resolution.ts";
 export * from "./search.ts"; // search port (search wave, 2026-09-20)
 export * from "./session-find.ts";
 export * from "./session-navigation.ts";
-// session-folders.ts (2026-11-17): the sidebar's pure grouping core —
-// per-test / per-course folders, open sets and walk order. Browser-safe.
-export * from "./session-folders.ts";
 // study-sessions.ts (2026-11-17): whether a chat is a Test prep / AP session
 // and which test/course box it belongs to (sidebar hiding, box session lists,
 // graph grouping). Browser-safe.

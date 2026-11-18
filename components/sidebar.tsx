@@ -17,9 +17,7 @@ import { Hint } from "@/components/ui/hint";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { fuzzyScore, groupSessions, openFolderKeys, parseOpenKeys, sidebarEmptyState, walkOrder, type FolderNames } from "@/src/core";
-import { SessionFolderTree, withCurrentFolderOpen } from "@/components/session-folders";
-import { SessionStarter } from "@/components/start-session";
+import { sidebarSessions } from "@/src/core";
 import { useServerEvent, useServerResync } from "@/components/server-events";
 import type { ChatListItem } from "@/src/core";
 import { formatTokens, tokenBreakdown } from "@/components/usage-format";
@@ -403,20 +401,16 @@ export function RenameRow({ chat, onCommit, onCancel }: { chat: ChatListItem; on
  *  snapshot, persisted in localStorage, defaulting to All. */
 export type SessionKindFilter = "teach" | "all" | "practice";
 
-/** The doors above the session list (pure — the render seam): four create
- *  buttons. Tests and AP joined Teaching and Practice as session starters
- *  (session folders, 2026-11-17); their record lists moved to the folder
- *  tree's section headings. */
+/** The doors above the session list (pure — the render seam): the two
+ *  create buttons, then one link per prep surface. Tests and AP open their
+ *  pages again (study boxes, 2026-11-17): their sessions live in the test
+ *  and course boxes there, not in the sidebar. */
 export function SessionDoorLinks({
 	onNewTeaching,
 	onNewPractice,
-	onNewTests,
-	onNewAp,
 }: {
 	onNewTeaching: () => void;
 	onNewPractice: () => void;
-	onNewTests: () => void;
-	onNewAp: () => void;
 }) {
 	return (
 		<div className="mx-3 mb-2 flex flex-col gap-1.5">
@@ -440,26 +434,16 @@ export function SessionDoorLinks({
 				Practice
 				<span className="sr-only">create a new practice session</span>
 			</button>
-			<button
-				type="button"
-				data-testid="new-session-tests"
-				onClick={onNewTests}
-				className={DOOR_CLASS}
-			>
+			<Link href="/tests" data-testid="tests-link" className={DOOR_CLASS}>
 				<ClipboardListIcon className="size-3" />
 				Tests
-				<span className="sr-only">create a new test prep session</span>
-			</button>
-			<button
-				type="button"
-				data-testid="new-session-ap"
-				onClick={onNewAp}
-				className={DOOR_CLASS}
-			>
+				<span className="sr-only">view your tests</span>
+			</Link>
+			<Link href="/ap" data-testid="ap-link" className={DOOR_CLASS}>
 				<ClipboardListIcon className="size-3" />
 				AP
-				<span className="sr-only">create a new AP session</span>
-			</button>
+				<span className="sr-only">view your AP courses</span>
+			</Link>
 		</div>
 	);
 }
@@ -468,19 +452,6 @@ const DOOR_CLASS =
 	"flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider text-muted-foreground transition-colors hover:bg-accent hover:text-foreground";
 
 const KIND_FILTER_KEY = "lh:session-kind-filter";
-/** The folder tree's stored open set (session folders, 2026-11-17): folder
- *  keys plus the collapsed:tests / collapsed:ap section keys, JSON array. */
-const FOLDERS_OPEN_KEY = "lh:session-folders-open";
-const NO_FOLDER_NAMES: FolderNames = { tests: {}, ap: {} };
-
-function persistOpenKeys(keys: ReadonlySet<string>): void {
-	try {
-		window.localStorage.setItem(FOLDERS_OPEN_KEY, JSON.stringify([...keys]));
-	} catch {
-		// storage unavailable: the open state still applies for this page life
-	}
-}
-
 /** The sidebar's home mark: the Cramsesh mug, still the link to "/" and
  *  still vertically centered by the header band's items-center. Exported so
  *  render tests can pin the artwork without mounting the data-driven
@@ -507,28 +478,9 @@ function SessionsSidebar() {
 	const [chats, setChats] = useState<ChatListItem[] | null>(null);
 	const [query, setQuery] = useState("");
 	const [kindFilter, setKindFilter] = useState<SessionKindFilter>("all");
-	const [folderNames, setFolderNames] = useState<FolderNames>(NO_FOLDER_NAMES);
-	const [storedOpen, setStoredOpen] = useState<ReadonlySet<string>>(() => new Set());
 	useEffect(() => {
 		const stored = window.localStorage.getItem(KIND_FILTER_KEY);
 		if (stored === "teach" || stored === "all" || stored === "practice") setKindFilter(stored);
-		try {
-			setStoredOpen(parseOpenKeys(window.localStorage.getItem(FOLDERS_OPEN_KEY)));
-		} catch {
-			// storage unavailable: every folder starts closed, sections open
-		}
-	}, []);
-	/* Toggling writes the STORED set. A search's open-everything stays
-	   derived, so while searching toggles are disabled and persist nothing
-	   (the tree's toggleDisabled; the guard sits at the call site). */
-	const toggleFolder = useCallback((key: string) => {
-		setStoredOpen((prev) => {
-			const next = new Set(prev);
-			if (next.has(key)) next.delete(key);
-			else next.add(key);
-			persistOpenKeys(next);
-			return next;
-		});
 	}, []);
 	const setFilter = useCallback((f: SessionKindFilter) => {
 		setKindFilter(f);
@@ -546,80 +498,17 @@ function SessionsSidebar() {
 		router.push("/chat/new");
 	}, [router]);
 
-	/* A Tests folder's + (session folders, 2026-11-17): the readiness page's
-	   Continue, from the sidebar — POST the next sitting, then navigate. A
-	   fresh starter per click: a retained one would reopen the last
-	   sitting instead of creating the next. */
-	const startingTestRef = useRef(false);
-	const newTestSession = useCallback(
-		async (testId: string) => {
-			if (startingTestRef.current) return;
-			startingTestRef.current = true;
-			try {
-				router.push(await new SessionStarter().start({ title: "Continue.", kind: "testprep", testId }, fetch));
-			} catch (err) {
-				console.error("starting a test session failed:", err);
-			} finally {
-				startingTestRef.current = false;
-			}
-		},
-		[router],
-	);
-
 	/* FUZZY (owner round 8, 2026-10-05): subsequence match ranked by
 	 * fuzzyScore — prefix beats word-boundary beats scattered. Empty query
-	 * keeps the natural list order (scores are all 0, sort is stable).
-	 * Session folders (2026-11-17): the search runs over ALL chats, the
-	 * result is grouped into the Tests/AP tree, and the kind filter scopes
-	 * only the flat list. */
-	const searching = query.trim() !== "";
-	const tree = useMemo(() => {
-		if (!chats) return null;
-		const q = query.trim();
-		const searched = !q
-			? chats
-			: chats
-					.map((c) => ({ c, score: fuzzyScore(q, c.title) }))
-					.filter((r): r is { c: ChatListItem; score: number } => r.score !== null)
-					.sort((a, b) => b.score - a.score)
-					.map((r) => r.c);
-		const grouped = groupSessions(searched, folderNames);
-		if (kindFilter === "all") return grouped;
-		return { ...grouped, flat: grouped.flat.filter((c) => (c.kind ?? "teach") === kindFilter) };
-	}, [chats, query, kindFilter, folderNames]);
+	 * keeps the natural list order. Study boxes (2026-11-17): Test prep / AP
+	 * sessions live in their boxes, so the list hides them — except while
+	 * searching, where they always pass the kind filter (sidebarSessions). */
+	const shown = useMemo(
+		() => (chats ? sidebarSessions(chats, { query, kindFilter }) : null),
+		[chats, query, kindFilter],
+	);
 
 	const currentChatId = pathname?.startsWith("/chat/") ? pathname.slice("/chat/".length) || null : null;
-	/* The current folder auto-opens ONCE per navigation (controller ruling,
-	   2026-11-17): its key joins the STORED set, so the user can close it
-	   and it re-opens only on the next navigation into that folder. The
-	   ref waits until the chat is in the snapshot (a brand-new session
-	   arrives a fetch later). */
-	const autoOpenedRef = useRef<string | null>(null);
-	useEffect(() => {
-		if (currentChatId === null) {
-			autoOpenedRef.current = null;
-			return;
-		}
-		if (!tree || autoOpenedRef.current === currentChatId) return;
-		const inFolder = [...tree.tests, ...tree.ap].some((f) => f.sessions.some((s) => s.id === currentChatId));
-		if (!inFolder && !tree.flat.some((s) => s.id === currentChatId)) return;
-		autoOpenedRef.current = currentChatId;
-		if (!inFolder) return;
-		setStoredOpen((prev) => {
-			const next = withCurrentFolderOpen(prev, tree, currentChatId);
-			if (next.size === prev.size) return prev;
-			persistOpenKeys(next);
-			return next;
-		});
-	}, [tree, currentChatId]);
-	/* The EFFECTIVE open set drives both the render and the keyboard walk —
-	   what shows is exactly what the arrow keys visit. The current chat is
-	   NOT force-opened here; the one-time stored auto-open above did it. */
-	const openKeys = useMemo(
-		() => (tree ? openFolderKeys(tree, storedOpen, { searching, currentChatId: null }) : new Set<string>()),
-		[tree, storedOpen, searching],
-	);
-	const walk = useMemo(() => (tree ? walkOrder(tree, openKeys) : null), [tree, openKeys]);
 
 	const refreshInFlightRef = useRef(false);
 	const refresh = useCallback(async () => {
@@ -630,9 +519,8 @@ function SessionsSidebar() {
 		refreshInFlightRef.current = true;
 		try {
 			const res = await fetch("/api/chats", { cache: "no-store" });
-			const d = (await res.json()) as { chats: ChatListItem[]; folderNames?: Partial<FolderNames> };
+			const d = (await res.json()) as { chats: ChatListItem[] };
 			setChats(d.chats);
-			setFolderNames({ tests: d.folderNames?.tests ?? {}, ap: d.folderNames?.ap ?? {} });
 		} catch {
 			// a transient failure keeps the last snapshot
 			setChats((prev) => prev ?? []);
@@ -720,10 +608,8 @@ function SessionsSidebar() {
 	   walked row, or the FIRST match when nothing is walked (owner,
 	   2026-10-10 — the quick-open pattern: ⌘⇧F, type, Enter, done). The
 	   Alt+↑/↓/↵ global cycle was RETIRED the same round: barely used,
-	   felt laggy. The selection is a row index into `walk` — the open
-	   folders' sessions, then the flat list (session folders, 2026-11-17)
-	   — so the walk follows whatever the query, kind filter and open
-	   folders leave. Mouse and keyboard
+	   felt laggy. The selection is a row index into `shown`, so the walk
+	   follows whatever the query + kind filter leave. Mouse and keyboard
 	   coexist: hovering doesn't claim, a click or an open clears the
 	   selection. */
 	const [kbdIndex, setKbdIndex] = useState<number | null>(null);
@@ -823,8 +709,7 @@ function SessionsSidebar() {
 		return () => window.removeEventListener("lh:kbd-sessions-search", onFocusSearch);
 	}, [open, toggle]);
 
-	// Keep the kbd-selected row in view. Folder toggles and + buttons share
-	// the container, so the row is found by its kbd testid, not by index.
+	// Keep the kbd-selected row in view, found by its kbd testid.
 	useEffect(() => {
 		if (kbdIndex === null) return;
 		listRef.current?.querySelector('[data-testid="session-row-kbd"]')?.scrollIntoView({ block: "nearest" });
@@ -837,10 +722,8 @@ function SessionsSidebar() {
 		// freshness (S6) — no interval, nothing standing.
 	}, [open, pathname, refresh]);
 
-	const kbdId = walk !== null && kbdIndex !== null ? (walk[kbdIndex]?.id ?? null) : null;
-	/* One row renderer for the tree and the flat list: navigation, the
-	   context menu and inline rename behave the same wherever a session
-	   sits. */
+	const kbdId = shown !== null && kbdIndex !== null ? (shown[kbdIndex]?.id ?? null) : null;
+	/* One row renderer: navigation, the context menu and inline rename. */
 	const renderRow = (c: ChatListItem) =>
 		renamingId === c.id ? (
 			<RenameRow
@@ -888,15 +771,14 @@ function SessionsSidebar() {
 					</Hint>
 				</div>
 
-				{/* Two doors, STACKED (owner round 8, 2026-10-05 — was a
+				{/* The doors, STACKED (owner round 8, 2026-10-05 — was a
 				    half/half row): full-width rows read cleaner and give the
-				    labels room; teaching keeps the original draft route,
-				    practice carries its mode. */}
+				    labels room. Teaching keeps the original draft route,
+				    practice carries its mode; Tests and AP link to their
+				    pages (study boxes, 2026-11-17). */}
 				<SessionDoorLinks
 					onNewTeaching={() => void newSession()}
 					onNewPractice={() => router.push("/chat/new?mode=practice")}
-					onNewTests={() => router.push("/chat/new?mode=testprep")}
-					onNewAp={() => router.push("/chat/new?mode=ap")}
 				/>
 
 				<div className="mx-3 mb-2 flex items-center gap-2">
@@ -931,7 +813,7 @@ function SessionsSidebar() {
 								}
 								// Modified keys belong to the surface (⇧↵ etc.).
 								if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
-								const n = walk?.length ?? 0;
+								const n = shown?.length ?? 0;
 								if (n === 0) return;
 								if (e.key === "ArrowDown" || e.key === "ArrowUp") {
 									// The rows move, not the caret.
@@ -943,7 +825,7 @@ function SessionsSidebar() {
 									return;
 								}
 								if (e.key === "Enter") {
-									const target = walk![kbdIndex !== null && kbdIndex < n ? kbdIndex : 0];
+									const target = shown![kbdIndex !== null && kbdIndex < n ? kbdIndex : 0];
 									if (!target) return;
 									e.preventDefault();
 									router.push(`/chat/${target.id}`);
@@ -987,36 +869,14 @@ function SessionsSidebar() {
 				</div>
 
 				<div ref={listRef} className="flex-1 overflow-y-auto p-2">
-					{tree === null || walk === null ? (
+					{shown === null ? (
 						<div className="px-2 py-4 text-xs text-muted-foreground">Loading…</div>
+					) : shown.length === 0 ? (
+						<div className="px-2 py-4 text-xs text-muted-foreground">
+							{query.trim() ? "No sessions match." : "No sessions yet."}
+						</div>
 					) : (
-						<>
-							<SessionFolderTree
-								tree={tree}
-								open={openKeys}
-								onToggle={(key) => {
-									if (!searching) toggleFolder(key);
-								}}
-								toggleDisabled={searching}
-								activeId={currentChatId}
-								kbdId={kbdId}
-								onNewTestSession={(testId) => void newTestSession(testId)}
-								renderRow={renderRow}
-							/>
-							{(() => {
-								// The tree owns folder rows, so the flat list being
-								// empty is NOT an empty sidebar (final review).
-								const empty = sidebarEmptyState(tree, tree.flat.length > 0, searching);
-								if (empty !== "none") {
-									return (
-										<div className="px-2 py-4 text-xs text-muted-foreground">
-											{empty === "no-match" ? "No sessions match." : "No sessions yet."}
-										</div>
-									);
-								}
-								return tree.flat.map(renderRow);
-							})()}
-						</>
+						shown.map(renderRow)
 					)}
 				</div>
 
