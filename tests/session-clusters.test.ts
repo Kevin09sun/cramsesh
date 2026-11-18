@@ -17,6 +17,7 @@ import {
 	graphSessionIndex,
 	graphSessionPropositions,
 	graphSnapshot,
+	studyGroupOf,
 	type GraphDeps,
 } from "../src/core/graph.ts";
 import {
@@ -44,9 +45,10 @@ const node = (id: string, name: string, provenance: Array<{ chatId: string; mess
 function fakeStores(
 	nodes: GraphNode[],
 	over: {
-		chats?: Array<Pick<ChatSummary, "id" | "title" | "createdAt" | "updatedAt">>;
+		chats?: Array<Pick<ChatSummary, "id" | "title" | "createdAt" | "updatedAt"> & Partial<Pick<ChatSummary, "kind" | "testId" | "apCourseId">>>;
 		sources?: Array<Pick<NotesSource, "id" | "filePath" | "importedAt">>;
 		chains?: GraphChain[];
+		studyTitles?: GraphDeps["studyTitles"];
 	} = {},
 ): GraphDeps {
 	const chains: GraphChain[] = over.chains ?? [];
@@ -66,7 +68,7 @@ function fakeStores(
 		getChat: (id: string) =>
 			((over.chats ?? []).find((c) => c.id === id) as unknown as ChatSummary) ?? undefined,
 	} as unknown as ChatStore;
-	return { chatStore, graphStore };
+	return over.studyTitles === undefined ? { chatStore, graphStore } : { chatStore, graphStore, studyTitles: over.studyTitles };
 }
 
 // ─── the partition ──────────────────────────────────────────────────────────
@@ -351,5 +353,129 @@ describe("graphSnapshot imp-node cluster assignment (physics arc, 2026-09-30)", 
 			),
 		);
 		assert.equal(snap.clusters.length, 0, "two propositions + a bundle is still not a hull");
+	});
+});
+
+// ─── study groups: one region per test or course (2026-11-17) ───────────────
+
+/** A groupOf that folds chatA + chatB into "test:t1"; everything else is
+ *  its own group (the identity default). */
+const groupAB = (birth: string): string => (birth === "chatA" || birth === "chatB" ? "test:t1" : birth);
+
+describe("birthSessionPartition with a groupOf", () => {
+	it("births mapped to one group form ONE community holding all their members", () => {
+		const nodes = [
+			node("a1", "A1", [pt("chatA")]),
+			node("a2", "A2", [pt("chatA")]),
+			node("b1", "B1", [pt("chatB")]),
+			node("c1", "C1", [pt("chatC")]),
+		];
+		assert.deepEqual(birthSessionPartition(nodes, groupAB), [
+			{ id: "test:t1", members: ["a1", "a2", "b1"] },
+			{ id: "chatC", members: ["c1"] },
+		]);
+	});
+
+	it("no groupOf → the per-session output is unchanged", () => {
+		const nodes = [node("a1", "A1", [pt("chatA")]), node("b1", "B1", [pt("chatB")])];
+		assert.deepEqual(birthSessionPartition(nodes), [
+			{ id: "chatA", members: ["a1"] },
+			{ id: "chatB", members: ["b1"] },
+		]);
+	});
+});
+
+describe("attachImpToCommunities with a groupOf", () => {
+	it("a chain whose premises were born in chatA and chatB joins the grouped community", () => {
+		const props = [node("p1", "P1", [pt("chatA")]), node("p2", "P2", [pt("chatB")]), node("p3", "P3", [pt("chatA")])];
+		const communities = birthSessionPartition(props, groupAB);
+		attachImpToCommunities(
+			communities,
+			props,
+			[attachable({ id: "arg_t", premises: ["p1", "p2"], conclusion: "p3", provenance: [pt("chatB")], createdAt: "2026-11-17T00:00:00.000Z" })],
+			groupAB,
+		);
+		assert.deepEqual(communities, [{ id: "test:t1", members: ["arg_t", "p1", "p2", "p3"] }]);
+	});
+});
+
+describe("graphSnapshot study-group regions", () => {
+	const at = "2026-11-17T00:00:00.000Z";
+	const two = (prefix: string, chatId: string): GraphNode[] => [
+		node(`${prefix}1`, `${prefix}1`, [pt(chatId)]),
+		node(`${prefix}2`, `${prefix}2`, [pt(chatId)]),
+	];
+
+	it("two testprep chats on one test → ONE region labelled with the test title (the 3+ hull rule applies after grouping)", () => {
+		const snap = graphSnapshot(
+			fakeStores([...two("a", "chatA"), ...two("b", "chatB")], {
+				chats: [
+					{ id: "chatA", title: "MDM4U1 Chapter 3 Test Prep", createdAt: at, updatedAt: at, kind: "testprep", testId: "t1" },
+					{ id: "chatB", title: "Continue.", createdAt: at, updatedAt: at, kind: "testprep", testId: "t1" },
+				],
+				studyTitles: { tests: { t1: "MDM4U1 Chapter 3 Test" }, courses: {} },
+			}),
+		);
+		assert.deepEqual(snap.clusters, [{ id: "test:t1", label: "MDM4U1 Chapter 3 Test", members: ["a1", "a2", "b1", "b2"] }]);
+		assert.deepEqual(snap.nodeSessions["a1"], ["chatA"], "per-node provenance stays per session");
+	});
+
+	it("an unknown test title reads \"Untitled test\"; an unknown course \"Untitled course\"", () => {
+		const snap = graphSnapshot(
+			fakeStores([...two("a", "chatA"), ...two("b", "chatB"), ...two("c", "chatC"), ...two("d", "chatD")], {
+				chats: [
+					{ id: "chatA", title: "A", createdAt: at, updatedAt: at, kind: "testprep", testId: "t9" },
+					{ id: "chatB", title: "B", createdAt: at, updatedAt: at, kind: "testprep", testId: "t9" },
+					{ id: "chatC", title: "C", createdAt: at, updatedAt: at, kind: "ap", apCourseId: "c9" },
+					{ id: "chatD", title: "D", createdAt: at, updatedAt: at, apCourseId: "c9" },
+				],
+			}),
+		);
+		const byId = new Map(snap.clusters.map((c) => [c.id, c.label]));
+		assert.equal(byId.get("test:t9"), "Untitled test");
+		assert.equal(byId.get("course:c9"), "Untitled course");
+		assert.equal(snap.clusters.length, 2);
+	});
+
+	it("a teach chat stays its own region under its chat title; a testprep chat without a testId stays under its chat id", () => {
+		const snap = graphSnapshot(
+			fakeStores([...two("a", "chatT"), node("a3", "a3", [pt("chatT")]), ...two("b", "chatP"), node("b3", "b3", [pt("chatP")])], {
+				chats: [
+					{ id: "chatT", title: "Teach me vectors", createdAt: at, updatedAt: at, kind: "teach" },
+					{ id: "chatP", title: "Loose prep", createdAt: at, updatedAt: at, kind: "testprep" },
+				],
+				studyTitles: { tests: { t1: "Some test" }, courses: {} },
+			}),
+		);
+		const byId = new Map(snap.clusters.map((c) => [c.id, c.label]));
+		assert.equal(byId.get("chatT"), "Teach me vectors");
+		assert.equal(byId.get("chatP"), "Loose prep");
+		assert.equal(snap.clusters.length, 2);
+	});
+});
+
+describe("studyGroupOf (shared by the snapshot and the settle)", () => {
+	it("maps linked chats to their group; teach, notes sources and missing chats map to themselves; memoised", () => {
+		const calls: string[] = [];
+		const records: Record<string, Partial<ChatSummary>> = {
+			p: { kind: "testprep", testId: "t1" },
+			ap: { kind: "ap", apCourseId: "c1" },
+			learn: { apCourseId: "c1" },
+			teach: { kind: "teach" },
+		};
+		const groupOf = studyGroupOf({
+			getChat: (id: string) => {
+				calls.push(id);
+				return (records[id] ?? null) as never;
+			},
+		});
+		assert.equal(groupOf("p"), "test:t1");
+		assert.equal(groupOf("ap"), "course:c1");
+		assert.equal(groupOf("learn"), "course:c1");
+		assert.equal(groupOf("teach"), "teach");
+		assert.equal(groupOf("gone"), "gone");
+		assert.equal(groupOf("src_abc"), "src_abc");
+		assert.equal(groupOf("p"), "test:t1");
+		assert.deepEqual(calls, ["p", "ap", "learn", "teach", "gone"], "src_ ids skip the chat store; repeats hit the memo");
 	});
 });

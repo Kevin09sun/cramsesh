@@ -4,7 +4,6 @@ import type { GraphSnapshot } from "../core/contracts.ts";
 import type { GraphCostSummary } from "../core/cost-summary.ts";
 import { graphCostSummary } from "../core/cost-summary.ts";
 import { graphSnapshot } from "../core/graph.ts";
-import { birthSessionPartition } from "../core/session-clusters.ts";
 import {
 	deleteNodeTraces,
 	type NodeDeletionStats,
@@ -22,7 +21,11 @@ import { callCost } from "./pricing.ts";
 export function graphView(): GraphSnapshot {
 	const organization = stores.sourceOrganizationStore.read();
 	const names = Object.fromEntries(Object.entries(organization.placements).flatMap(([id, p]) => p.name === undefined ? [] : [[id, p.name]]));
-	return graphSnapshot(stores, names);
+	const studyTitles = {
+		tests: Object.fromEntries(stores.testStore.list().map((test) => [test.id, test.title])),
+		courses: Object.fromEntries(stores.apCourseStore.list().map((course) => [course.id, course.title])),
+	};
+	return graphSnapshot({ ...stores, studyTitles }, names);
 }
 
 /** The graph view's cost surface (GET /api/graph/costs — the 2026-09 cost

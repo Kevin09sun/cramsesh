@@ -57,8 +57,16 @@ export function birthSessionOf(node: Pick<GraphNode, "provenance">): string | nu
  * returns the groups size-desc with members sorted (deterministic output:
  * ties break by session id ascending). A node with no provenance is left
  * unclustered — it belongs to no session the graph can name.
+ *
+ * STUDY GROUPS (2026-11-17): `groupOf` maps a birth session to the region
+ * it renders in — sessions linked to one test or course share one region
+ * ("test:<id>" / "course:<id>"). The default is the identity: one region
+ * per birth session, exactly as before.
  */
-export function birthSessionPartition(nodes: readonly GraphNode[]): BirthSessionCluster[] {
+export function birthSessionPartition(
+	nodes: readonly GraphNode[],
+	groupOf: (birthId: string) => string = (birthId) => birthId,
+): BirthSessionCluster[] {
 	const members = new Map<string, string[]>();
 	const seen = new Set<string>();
 	for (const node of nodes) {
@@ -66,9 +74,10 @@ export function birthSessionPartition(nodes: readonly GraphNode[]): BirthSession
 		seen.add(node.id);
 		const birth = birthSessionOf(node);
 		if (birth === null) continue;
-		const bucket = members.get(birth);
+		const group = groupOf(birth);
+		const bucket = members.get(group);
 		if (bucket) bucket.push(node.id);
-		else members.set(birth, [node.id]);
+		else members.set(group, [node.id]);
 	}
 	return [...members.entries()]
 		.map(([id, list]) => ({ id, members: [...list].sort() }))
@@ -115,13 +124,23 @@ export function attachImpToCommunities(
 	communities: Array<{ id: string; members: string[] }>,
 	propositions: ReadonlyArray<Pick<GraphNode, "id" | "provenance">>,
 	chains: ReadonlyArray<Pick<GraphChain, "id" | "premises" | "conclusion" | "provenance">>,
+	groupOf: (birthId: string) => string = (birthId) => birthId,
 ): void {
-	const birthById = new Map(propositions.map((node) => [node.id, birthSessionOf(node)]));
+	// Births map through groupOf (study groups, 2026-11-17) so an imp node
+	// joins the GROUPED community its premises landed in.
+	const birthById = new Map(propositions.map((node) => {
+		const birth = birthSessionOf(node);
+		return [node.id, birth === null ? null : groupOf(birth)];
+	}));
 	const live = new Set(propositions.map((node) => node.id));
 	for (const chain of chains) {
 		if (chain.premises.length < 2) continue;
 		if (!live.has(chain.conclusion) || !chain.premises.every((p) => live.has(p))) continue;
-		const key = impClusterKey(chain, (id) => birthById.get(id) ?? null);
+		// The tie fallback is the chain's own birth — group it too, so every
+		// candidate key is already a community id (groupOf runs once per birth).
+		const own = chain.provenance[0];
+		const grouped = own === undefined ? [] : [{ ...own, chatId: groupOf(own.chatId) }];
+		const key = impClusterKey({ premises: chain.premises, provenance: grouped }, (id) => birthById.get(id) ?? null);
 		const community = key === null ? undefined : communities.find((c) => c.id === key);
 		if (!community) continue;
 		community.members.push(chain.id);
