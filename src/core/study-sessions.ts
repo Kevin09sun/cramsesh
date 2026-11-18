@@ -11,6 +11,7 @@
  */
 
 import type { ChatSummary } from "./contracts.ts";
+import { fuzzyScore } from "./fuzzy.ts";
 
 /** The fields the helpers read. `kind` is optional here even though
  *  ChatSummary normalizes it: pre-practice records carry no kind, and
@@ -44,4 +45,25 @@ export function sessionsForTest<T extends StudyFields>(chats: readonly T[], test
  *  plus the linked teach Learn chat filed under it. */
 export function sessionsForCourse<T extends StudyFields>(chats: readonly T[], courseId: string): T[] {
 	return chats.filter((chat) => isStudySession(chat) && chat.apCourseId === courseId);
+}
+
+/** The sidebar's session list. Study sessions live in their boxes, so with
+ *  no query they are dropped and the kind filter applies as before (absent
+ *  kind reads as teach). A query searches everything: study sessions always
+ *  pass the kind filter (they have no Teaching/Practice home), other chats
+ *  still meet it, and the survivors are ranked by fuzzyScore — best first,
+ *  input order between equal scores. */
+export function sidebarSessions<T extends StudyFields & { title: string }>(
+	chats: readonly T[],
+	opts: { query: string; kindFilter: "teach" | "practice" | "all" },
+): T[] {
+	const q = opts.query.trim();
+	const passesKind = (chat: T) => opts.kindFilter === "all" || (chat.kind ?? "teach") === opts.kindFilter;
+	if (!q) return chats.filter((chat) => !isStudySession(chat) && passesKind(chat));
+	return chats
+		.filter((chat) => isStudySession(chat) || passesKind(chat))
+		.map((chat) => ({ chat, score: fuzzyScore(q, chat.title) }))
+		.filter((r): r is { chat: T; score: number } => r.score !== null)
+		.sort((a, b) => b.score - a.score)
+		.map((r) => r.chat);
 }

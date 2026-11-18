@@ -123,21 +123,19 @@ describe("SessionRow", () => {
 	});
 });
 
-describe("Session doors (session folders, 2026-11-17)", () => {
-	it("Tests and AP are create buttons, directly after Practice; the old links are gone", () => {
-		const html = renderToStaticMarkup(
-			<SessionDoorLinks onNewTeaching={() => {}} onNewPractice={() => {}} onNewTests={() => {}} onNewAp={() => {}} />,
-		);
+describe("Session doors (study boxes, 2026-11-17)", () => {
+	it("Teaching and Practice create; Tests and AP link to their pages", () => {
+		const html = renderToStaticMarkup(<SessionDoorLinks onNewTeaching={() => {}} onNewPractice={() => {}} />);
 		const ids = [...html.matchAll(/data-testid="([^"]+)"/g)].map((match) => match[1]);
-		assert.deepEqual(ids, ["new-session", "new-session-practice", "new-session-tests", "new-session-ap"]);
-		for (const id of ["new-session-tests", "new-session-ap"]) {
+		assert.deepEqual(ids, ["new-session", "new-session-practice", "tests-link", "ap-link"]);
+		for (const [id, href] of [["tests-link", "/tests"], ["ap-link", "/ap"]] as const) {
 			const tag = html.match(new RegExp(`<[a-z]+[^>]*data-testid="${id}"[^>]*>`))?.[0] ?? "";
-			assert.match(tag, /^<button /, `${id} is a button`);
-			assert.match(tag, /type="button"/);
+			assert.match(tag, /^<a /, `${id} is a link`);
+			assert.match(tag, new RegExp(`href="${href}"`));
 		}
-		assert.doesNotMatch(html, /tests-link/);
-		assert.doesNotMatch(html, /ap-link/);
-		assert.doesNotMatch(html, /href=/, "no door is a link any more");
+		assert.doesNotMatch(html, /new-session-tests/);
+		assert.doesNotMatch(html, /new-session-ap/);
+		assert.match(html, />\s*Tests\s*</);
 		assert.match(html, />\s*AP\s*</);
 	});
 });
