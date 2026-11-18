@@ -72,6 +72,7 @@ export function ReadinessView({
 	test: initialTest,
 	sessions,
 	navigate,
+	onSessionsChanged,
 }: {
 	test: TestRecord;
 	/** This test's sessions, newest first (sessionsForTest over listChats). */
@@ -79,6 +80,9 @@ export function ReadinessView({
 	/** Where to go after starting the next sitting. Production supplies the
 	 *  app router; the shell seam keeps the view renderable without one. */
 	navigate?: (target: string) => void;
+	/** After a session is renamed or deleted from the Sessions block —
+	 *  production refreshes the server-rendered page (router.refresh()). */
+	onSessionsChanged?: () => void;
 }) {
 	const [test, setTest] = useState<TestRecord>(initialTest);
 	const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
@@ -281,6 +285,7 @@ export function ReadinessView({
 
 			<StudySessionList
 				sessions={sessions}
+				onSessionsChanged={onSessionsChanged}
 				newSession={{
 					label: "New session",
 					testId: "new-test-session",
@@ -309,7 +314,12 @@ export function ReadinessPage({ test, sessions }: { test: TestRecord; sessions: 
 			</header>
 			<main className="min-h-0 flex-1 overflow-y-auto">
 				<div className="mx-auto w-full max-w-3xl px-6 py-8">
-					<ReadinessView test={test} sessions={sessions} navigate={(target) => router.push(target)} />
+					<ReadinessView
+						test={test}
+						sessions={sessions}
+						navigate={(target) => router.push(target)}
+						onSessionsChanged={() => router.refresh()}
+					/>
 				</div>
 			</main>
 		</div>

@@ -140,6 +140,7 @@ export function CourseView({
 	cedPath,
 	sessions,
 	navigate,
+	onSessionsChanged,
 }: {
 	course: ApCourseRecord;
 	documents: CourseDocument[];
@@ -151,6 +152,9 @@ export function CourseView({
 	cedPath?: string;
 	/** Where to go after starting a session; production supplies the router. */
 	navigate?: (target: string) => void;
+	/** After a session is renamed or deleted from the Sessions block —
+	 *  production refreshes the server-rendered page (router.refresh()). */
+	onSessionsChanged?: () => void;
 }) {
 	const [course, setCourse] = useState(initialCourse);
 	const [documents, setDocuments] = useState(initialDocuments);
@@ -454,6 +458,7 @@ export function CourseView({
 
 			<StudySessionList
 				sessions={sessions}
+				onSessionsChanged={onSessionsChanged}
 				newSession={{
 					label: "New session",
 					testId: "new-course-session",
@@ -565,6 +570,7 @@ export function CoursePage({
 						{...(cedPath === undefined ? {} : { cedPath })}
 						sessions={sessions}
 						navigate={(target) => router.push(target)}
+						onSessionsChanged={() => router.refresh()}
 					/>
 				</div>
 			</main>
