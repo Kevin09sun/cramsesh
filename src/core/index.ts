@@ -83,6 +83,10 @@ export * from "./session-navigation.ts";
 // session-folders.ts (2026-11-17): the sidebar's pure grouping core —
 // per-test / per-course folders, open sets and walk order. Browser-safe.
 export * from "./session-folders.ts";
+// study-sessions.ts (2026-11-17): whether a chat is a Test prep / AP session
+// and which test/course box it belongs to (sidebar hiding, box session lists,
+// graph grouping). Browser-safe.
+export * from "./study-sessions.ts";
 // auth-keys.ts (auth-keys wave, 2026-09-19): the curated key catalog +
 // shape rules + masking — pure, browser-safe (the auth page binds to the
 // /api/keys routes built on it).
