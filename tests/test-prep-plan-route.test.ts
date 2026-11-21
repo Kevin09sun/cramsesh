@@ -174,6 +174,55 @@ describe("PUT /api/tests/[id]/plan", () => {
 		assert.equal(afterEdit.sections[0]?.id, section.id, "the edit preserved the section id");
 	});
 
+	it("persists leftOut when the body carries it", async () => {
+		const test = testStore.create("Left out");
+		const leftOut = [
+			{
+				id: "lo_1",
+				text: "Glossary of terms",
+				source: "ch1.pdf",
+				reason: "reference, not tested",
+				suggestedSection: "Section A",
+			},
+			{ id: "lo_2", text: "Extra practice", source: "ch2.pdf", reason: "duplicate" },
+		];
+
+		const res = await put(test.id, { sections: draft(), confirm: true, leftOut });
+		assert.equal(res.status, 200);
+		const record = (await res.json()) as { leftOut?: unknown };
+		assert.deepEqual(record.leftOut, leftOut, "the response carries the saved left-out list");
+		assert.deepEqual(testStore.get(test.id)?.leftOut, leftOut, "the list is persisted");
+	});
+
+	it("rejects a malformed leftOut and leaves the record unchanged", async () => {
+		const test = testStore.create("Bad left out");
+		const before = testStore.get(test.id);
+
+		const res = await put(test.id, {
+			sections: draft(),
+			confirm: true,
+			leftOut: [{ id: 1, text: "No id", source: "ch1.pdf", reason: "wrong shape" }],
+		});
+		assert.equal(res.status, 400);
+		assert.deepEqual(testStore.get(test.id), before, "a refused leftOut never writes");
+	});
+
+	it("leaves leftOut untouched when the body omits it", async () => {
+		const test = testStore.create("Keep left out");
+		const saved = testStore.saveSweepPlan(test.id, draft(), [
+			{ text: "Glossary of terms", source: "ch1.pdf", reason: "reference" },
+		]);
+		assert.equal(saved.leftOut?.length, 1);
+
+		const res = await put(test.id, { sections: draft(), confirm: true });
+		assert.equal(res.status, 200);
+		assert.deepEqual(
+			testStore.get(test.id)?.leftOut,
+			saved.leftOut,
+			"a PUT without leftOut preserves the sweep's list",
+		);
+	});
+
 	it("is a 404 for an unknown test", async () => {
 		const res = await put("test_never_existed", { sections: draft(), confirm: true });
 		assert.equal(res.status, 404);

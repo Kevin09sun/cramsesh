@@ -29,6 +29,11 @@ Object.assign(globalThis, {
 	Element: dom.window.Element,
 	HTMLElement: dom.window.HTMLElement,
 	CustomEvent: dom.window.CustomEvent,
+	// Radix's Collapsible content (the Left out list) asks the browser for
+	// computed styles and animation frames; linkedom has neither.
+	getComputedStyle: () => ({ getPropertyValue: () => "" }),
+	requestAnimationFrame: (callback: (time: number) => void) => setTimeout(() => callback(Date.now()), 0),
+	cancelAnimationFrame: (id: number) => clearTimeout(id),
 	IS_REACT_ACT_ENVIRONMENT: true,
 });
 
@@ -99,9 +104,18 @@ async function mount(
 			return Response.json(current);
 		}
 		if (url === `/api/tests/${initial.id}/plan` && init?.method === "PUT") {
-			const body = JSON.parse(String(init.body)) as { sections: TestRecord["sections"]; confirm: boolean };
+			const body = JSON.parse(String(init.body)) as {
+				sections: TestRecord["sections"];
+				confirm: boolean;
+				leftOut?: TestRecord["leftOut"];
+			};
 			puts.push({ method: init.method, body });
-			current = { ...current, planConfirmed: body.confirm ? true : current.planConfirmed, sections: body.sections };
+			current = {
+				...current,
+				planConfirmed: body.confirm ? true : current.planConfirmed,
+				sections: body.sections,
+				...(body.leftOut === undefined ? {} : { leftOut: body.leftOut }),
+			};
 			return Response.json(current);
 		}
 		throw new Error(`unexpected request ${url}`);
@@ -209,6 +223,138 @@ test("only the latest propose_plan card offers the editor; an earlier proposal c
 	await mount(record(), { toolCallId: "call_new", messages });
 	assert.ok(document.querySelector('[data-testid="plan-editor"]'), "the latest part owns the editor");
 	assert.equal(document.querySelector('[data-testid="plan-superseded"]'), null);
+});
+
+async function openLeftOut(): Promise<void> {
+	const trigger = [...document.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
+		button.textContent?.includes("Left out ("),
+	);
+	assert.ok(trigger, "the Left out header is a button");
+	await act(async () => trigger!.click());
+}
+
+const LEFT_OUT: NonNullable<TestRecord["leftOut"]> = [
+	{
+		id: "lo_1",
+		text: "Glossary of terms",
+		reason: "reference, not tested",
+		source: "ch1.pdf",
+		suggestedSection: "Section A",
+	},
+	{
+		id: "lo_2",
+		text: "Extra practice",
+		reason: "duplicate",
+		source: "ch2.pdf",
+	},
+];
+
+test("shows the sweep's coverage line above the editor", async () => {
+	await mount(
+		record({
+			sweep: {
+				status: "done",
+				startedAt: "2026-11-10T12:00:00.000Z",
+				fileHashes: {},
+				coverage: {
+					files: 3,
+					pages: 120,
+					visionPages: 4,
+					unsupported: [],
+					unreadable: [],
+					empty: [],
+					removed: [],
+				},
+			},
+		}),
+	);
+
+	const line = document.querySelector('[data-testid="coverage-line"]');
+	assert.ok(line, "the coverage line renders");
+	assert.match(
+		line!.textContent ?? "",
+		/Read 3 files · 120 pages \(4 looked at by vision\)/,
+		"it uses the shared coverageLine wording",
+	);
+});
+
+test("Left out is collapsed with its count", async () => {
+	await mount(record({ leftOut: LEFT_OUT }));
+
+	assert.match(document.body.textContent ?? "", /Left out \(2\)/, "the header carries the count");
+	assert.equal(
+		document.querySelector('[data-testid="promote-left-out"]'),
+		null,
+		"collapsed by default — no rows yet",
+	);
+	assert.doesNotMatch(document.body.textContent ?? "", /Glossary of terms/);
+
+	await openLeftOut();
+
+	const text = document.body.textContent ?? "";
+	assert.match(text, /Glossary of terms/);
+	assert.match(text, /reference, not tested/, "each row shows its reason");
+	assert.match(text, /ch1\.pdf/, "each row shows its source");
+	assert.equal(
+		document.querySelectorAll('[data-testid="promote-left-out"]').length,
+		2,
+		"every row offers Promote",
+	);
+});
+
+test("promote moves the item into its suggested section in the editor", async () => {
+	await mount(record({ leftOut: LEFT_OUT }));
+	await openLeftOut();
+
+	const promote = document.querySelector<HTMLButtonElement>('[data-testid="promote-left-out"]');
+	assert.ok(promote);
+	await act(async () => promote!.click());
+
+	const values = [...document.querySelectorAll<HTMLInputElement>("input")].map((input) => input.value);
+	assert.ok(values.includes("Glossary of terms"), "the item became a point in the editor");
+	const sources = [...document.querySelectorAll('[data-testid="plan-source"]')].map((node) => node.textContent);
+	assert.ok(sources.includes("ch1.pdf"), "its source came along");
+	assert.match(document.body.textContent ?? "", /Left out \(1\)/, "the promoted item leaves the list");
+});
+
+test("confirm sends leftOut without promoted items", async () => {
+	const { puts } = await mount(record({ leftOut: LEFT_OUT }));
+	await openLeftOut();
+
+	const promote = document.querySelector<HTMLButtonElement>('[data-testid="promote-left-out"]');
+	assert.ok(promote);
+	await act(async () => promote!.click());
+
+	const confirm = [...document.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
+		button.textContent?.includes("Confirm plan"),
+	);
+	assert.ok(confirm);
+	await act(async () => confirm!.click());
+
+	assert.equal(puts.length, 1);
+	const body = puts[0]!.body as { leftOut?: Array<{ id: string }> };
+	assert.deepEqual(
+		body.leftOut?.map((item) => item.id),
+		["lo_2"],
+		"the promoted item is no longer left out",
+	);
+});
+
+test("a running sweep with no sections shows its activity", async () => {
+	await mount(
+		record({
+			sections: [],
+			sweep: {
+				status: "running",
+				activity: "Reading ch4.pdf — page 88/312",
+				startedAt: "2026-11-10T12:00:00.000Z",
+				fileHashes: {},
+			},
+		}),
+	);
+
+	assert.match(document.body.textContent ?? "", /Reading ch4\.pdf — page 88\/312/);
+	assert.equal(document.querySelector('[data-testid="plan-editor"]'), null, "no editor while sweeping");
 });
 
 test("a failed later proposal does not supersede the saved plan", async () => {

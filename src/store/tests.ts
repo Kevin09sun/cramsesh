@@ -304,6 +304,21 @@ function updateSweep(id: string, patch: Partial<SweepState>): TestRecord {
 	return next;
 }
 
+/** Replace the stored left-out list. The plan-review card prunes promoted
+ *  items and PUTs the remainder; like every other mutation this is a fresh
+ *  read-modify-write. An explicit item id wins; a missing one is minted. */
+function setLeftOut(id: string, items: LeftOutInput[]): TestRecord {
+	const record = loadOrThrow(id);
+	const next: TestRecord = {
+		...record,
+		leftOut: mintLeftOut(items),
+		updatedAt: new Date().toISOString(),
+	};
+	writeTest(next);
+	emit("tests-changed", {});
+	return next;
+}
+
 /** First sweep only: a test that already has sections keeps them. The saved
  *  plan stays unconfirmed — it is a proposal, not an approved scope. */
 function saveSweepPlan(id: string, draft: PlanDraftSection[], leftOut: LeftOutInput[]): TestRecord {
@@ -419,6 +434,7 @@ export const testStore = {
 	setFolder,
 	updateSweep,
 	saveSweepPlan,
+	setLeftOut,
 	setPendingAdditions,
 	resolveAdditions,
 	promoteLeftOut,
