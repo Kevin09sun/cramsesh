@@ -62,7 +62,10 @@ export type ModelRole =
 	| "pdfReader"
 	| "apIndexer"
 	| "extractor"
-	| "auditor";
+	| "auditor"
+	| "sweepReader"
+	| "sweepExtractor"
+	| "sweepMerger";
 
 /**
  * The LIVE graph store (src/store/graph.ts) — owned by the app's extraction

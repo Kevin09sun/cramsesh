@@ -18,6 +18,7 @@ import {
 	type TestPoint,
 	type TestSection,
 } from "../src/core/test-prep.ts";
+import { ROLE_SLOT } from "../src/core/settings.ts";
 
 const coverage = (overrides: Partial<SweepCoverage> = {}): SweepCoverage => ({
 	files: 0,
@@ -166,5 +167,13 @@ describe("applyAdditions — accepted re-sweep points", () => {
 		assert.equal(next[1]!.points[0]!.text, "Another");
 		assert.equal(next[1]!.points[0]!.status, "unchecked");
 		assert.deepEqual(next[1]!.points[0]!.history, []);
+	});
+});
+
+describe("ROLE_SLOT — test material sweep roles", () => {
+	it("maps sweepReader→vision, sweepExtractor→cheap, sweepMerger→strong", () => {
+		assert.equal(ROLE_SLOT.sweepReader, "vision");
+		assert.equal(ROLE_SLOT.sweepExtractor, "cheap");
+		assert.equal(ROLE_SLOT.sweepMerger, "strong");
 	});
 });
