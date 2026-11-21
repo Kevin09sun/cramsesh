@@ -260,11 +260,15 @@ async function transcribeOne(
 
 	activity(`Reading ${file.rel}`);
 	const transcript = await transcribeFile(file, { describe, signal, onActivity: activity });
-	try {
-		await fsp.mkdir(cacheDir, { recursive: true });
-		await fsp.writeFile(cacheFile, toCache(file, transcript), "utf8");
-	} catch {
-		// A cache write failure is not worth failing the sweep over.
+	// A transcript with an unreadable unit is not a finished read: caching it
+	// would replay the failure forever. It is re-read on the next sweep.
+	if (transcript.unreadable.length === 0) {
+		try {
+			await fsp.mkdir(cacheDir, { recursive: true });
+			await fsp.writeFile(cacheFile, toCache(file, transcript), "utf8");
+		} catch {
+			// A cache write failure is not worth failing the sweep over.
+		}
 	}
 	return transcript;
 }
@@ -451,7 +455,15 @@ export async function runSweep(
 						.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
 				: [];
 		const changed =
-			mode === "resweep" ? files.filter((file) => previousHashes[file.rel] !== file.hash) : files;
+			mode === "resweep"
+				? files.filter(
+						(file) =>
+							previousHashes[file.rel] !== file.hash ||
+							// I4: a file with an unreadable unit was never a
+							// finished read — re-read it even when unchanged.
+							unreadableCovers(file.rel, previousCoverage?.unreadable ?? []),
+					)
+				: files;
 		const currentHashes = hashMap(files);
 		const fileHashes =
 			mode === "resweep" && enumeration.timedOut

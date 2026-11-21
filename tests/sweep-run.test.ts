@@ -444,6 +444,67 @@ describe("runSweep", () => {
 		assert.deepEqual(coverage.empty, [], "the vision-failed page is not reported as nothing found");
 	});
 
+	it("a failed vision read is not cached and is re-read on the next sweep (I4)", async () => {
+		const pdf = tinyPdf([
+			{ image: true, runs: wrapRuns("Diagram of a cell") },
+			{ runs: wrapRuns(LONG_TEXT) },
+		]);
+		fs.writeFileSync(path.join(folder, "book.pdf"), pdf);
+		headlessOverride.current = fakeHeadless();
+		const record = testStore.create("Vision retry", folder);
+
+		const stages: Stages = {
+			extract: extractStub([
+				{ kind: "fact", category: "definition", text: "Photosynthesis", source: "book.pdf p. 2", evidence: "ATP" },
+			]),
+			merge: mergeStub([
+				{ sections: [section("Biology", [["Photosynthesis", "book.pdf p. 2"]])], leftOut: [] },
+			]),
+		};
+
+		const first = await runSweep(
+			record.id,
+			"initial",
+			deps(stages, {
+				describe: async () => {
+					throw new Error("vision down");
+				},
+			}),
+		);
+		assert.equal(first.ok, true);
+		const afterFirst = testStore.get(record.id)!.sweep!;
+		assert.ok(afterFirst.coverage!.unreadable.includes("book.pdf p. 1 (vision failed)"));
+		assert.equal(afterFirst.coverage!.visionPages, 0);
+		const cacheDir = path.join(TMP_DATA, "tests", record.id, "sweep");
+		assert.equal(
+			fs.existsSync(cacheDir) ? fs.readdirSync(cacheDir).length : 0,
+			0,
+			"a transcript with an unreadable unit is never cached",
+		);
+
+		// The unchanged file is still re-read because it carries an unreadable
+		// entry; this time vision succeeds and the failure is cleared.
+		let described = 0;
+		const second = await runSweep(
+			record.id,
+			"resweep",
+			deps(stages, {
+				describe: async () => {
+					described++;
+					return "A labelled cell diagram.";
+				},
+			}),
+		);
+		assert.equal(second.ok, true);
+		assert.ok(described >= 1, "the vision page was retried");
+		const afterSecond = testStore.get(record.id)!.sweep!;
+		assert.deepEqual(afterSecond.coverage!.unreadable, []);
+		assert.equal(afterSecond.coverage!.visionPages, 1);
+		const cached = fs.readdirSync(cacheDir);
+		assert.equal(cached.length, 1, "the successful transcript is cached");
+		assert.match(fs.readFileSync(path.join(cacheDir, cached[0]!), "utf8"), /A labelled cell diagram\./);
+	});
+
 	it("retries enumeration once, then ends in error", async () => {
 		write("a.md", "alpha");
 		const record = testStore.create("Enumeration failure", folder);
