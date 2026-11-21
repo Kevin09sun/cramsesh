@@ -25,6 +25,7 @@ const KIND_LABEL: Record<JobKind, string> = {
 	visual: "Figure agent",
 	pdf: "PDF reader",
 	ap_index: "Indexing released papers",
+	sweep: "Reading your materials",
 };
 
 /**

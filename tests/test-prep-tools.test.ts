@@ -11,9 +11,14 @@
  */
 
 import assert from "node:assert/strict";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { describe, it } from "node:test";
 import { createFauxCore } from "@earendil-works/pi-ai";
 
+import { resolveSourcePath } from "../src/agent/tools/fs-shared.ts";
+import { resolvePolicy } from "../src/agent/tools/file-access.ts";
 import { applyResult } from "../src/core/test-prep.ts";
 import type { AnswerResult, PlanDraftSection, PointStatus, TestRecord } from "../src/core/test-prep.ts";
 import { QUESTION_TOOLS, toolQuestionKind } from "../src/core/pending.ts";
@@ -80,6 +85,7 @@ interface FakeCalls {
 	get: string[];
 	savePlan: Array<{ id: string; draft: PlanDraftSection[]; confirm: boolean }>;
 	recordResult: Array<{ id: string; pointId: string; result: string; chatId: string }>;
+	setFolder: Array<{ id: string; folder: string }>;
 }
 
 /** An in-memory fake of the three store methods the tools consume. Every
@@ -90,10 +96,15 @@ function fakeTests(initial: TestRecord): {
 	current: () => TestRecord;
 } {
 	let current = initial;
-	const calls: FakeCalls = { get: [], savePlan: [], recordResult: [] };
+	const calls: FakeCalls = { get: [], savePlan: [], recordResult: [], setFolder: [] };
 	const tests: TestPrepToolContext["tests"] = {
 		get: (id) => {
 			calls.get.push(id);
+			return current;
+		},
+		setFolder: (id, folder) => {
+			calls.setFolder.push({ id, folder });
+			current = { ...current, folder };
 			return current;
 		},
 		savePlan: (id, draft, confirm) => {
@@ -181,9 +192,11 @@ describe("testPrepTools registry", () => {
 		// agent could not read the folder it was pointed at.
 		const plain = testPrepTools(ctxOf(fakeTests(recordOf()).tests));
 		assert.equal(plain.pdf, undefined);
+		assert.equal(plain.sweep_materials, undefined, "the sweep tool needs the jobs context");
 		const withJobs = testPrepTools({ ...ctxOf(fakeTests(recordOf()).tests), jobs: JOBS });
 		assert.ok(withJobs.pdf, "pdf job present with a jobs context");
 		assert.ok(withJobs.research, "the same job set practice carries");
+		assert.ok(withJobs.sweep_materials, "sweep_materials present with a jobs context");
 	});
 
 	it("check_point is a question tool: it folds onto the explain kind (the turn pauses)", () => {
@@ -262,6 +275,9 @@ describe("propose_plan", () => {
 	it("REFUSES a missing test with a clean invalid-input result instead of throwing", async () => {
 		const missing: TestPrepToolContext["tests"] = {
 			get: () => null,
+			setFolder: () => {
+				throw new Error("Test not found: test_missing");
+			},
 			savePlan: () => {
 				throw new Error("Test not found: test_missing");
 			},
@@ -503,5 +519,103 @@ describe("test_progress", () => {
 		const text = (result.content[0] as { text: string }).text;
 		const queueLines = text.split("\n").filter((line) => line.includes(" · "));
 		assert.equal(queueLines.length, 30);
+	});
+});
+
+// ── sweep_materials (test material sweep) ───────────────────────────────────
+
+/** A recording jobs context: dispatchJob creates a job and fires spawn. */
+function fakeJobs() {
+	const created: Array<{ kind: string; input?: unknown }> = [];
+	const spawned: Array<{ job: { kind: string }; input?: unknown }> = [];
+	const jobStore = {
+		findJobByToolCallId: () => null,
+		createJob: (args: { kind: string; chatId: string; toolCallId: string; input?: unknown }) => {
+			const job = { id: `job_${created.length + 1}`, status: "running", activity: "starting", createdAt: "", updatedAt: "", ...args };
+			created.push(job);
+			return job;
+		},
+	};
+	const ctx = {
+		chatId: "chat_now",
+		jobStore: jobStore as never,
+		spawn: ((job: { kind: string }, input?: unknown) => {
+			spawned.push({ job, input });
+		}) as never,
+	};
+	return { ctx, created, spawned };
+}
+
+const SWEEP_TEXT =
+	"Reading every file in the folder now. End your turn; the plan arrives when the sweep finishes.";
+
+describe("sweep_materials", () => {
+	it("REFUSES when the test already has a plan and does not dispatch", async () => {
+		const { tests, calls } = fakeTests(recordOf());
+		const jobs = fakeJobs();
+		const tool = testPrepTools({ ...ctxOf(tests), jobs: jobs.ctx }).sweep_materials!;
+
+		const result = await tool.execute("call_sweep", { folder: os.tmpdir() } as never);
+
+		assert.equal(result.isError, true);
+		assert.match((result.details as { problems: string[] }).problems[0]!, /already has a plan — materials added later/i);
+		assert.equal(calls.setFolder.length, 0, "a refusal never touches the record");
+		assert.equal(jobs.created.length, 0, "a refusal never dispatches");
+	});
+
+	it("REFUSES while a sweep is already running (same re-sweep pointer)", async () => {
+		const running = recordOf({
+			sections: [],
+			sweep: { status: "running", startedAt: "2026-11-20T00:00:00.000Z", fileHashes: {} },
+		});
+		const { tests, calls } = fakeTests(running);
+		const jobs = fakeJobs();
+		const tool = testPrepTools({ ...ctxOf(tests), jobs: jobs.ctx }).sweep_materials!;
+
+		const result = await tool.execute("call_sweep", { folder: os.tmpdir() } as never);
+
+		assert.equal(result.isError, true);
+		assert.match(
+			(result.details as { problems: string[] }).problems[0]!,
+			/Re-sweep folder button on the test page/,
+		);
+		assert.equal(calls.setFolder.length, 0);
+		assert.equal(jobs.created.length, 0);
+	});
+
+	it("REFUSES a missing folder without touching the record", async () => {
+		const { tests, calls } = fakeTests(recordOf({ sections: [] }));
+		const jobs = fakeJobs();
+		const missing = path.join(os.tmpdir(), `lh-sweep-missing-${process.pid}-${Date.now()}`);
+		const tool = testPrepTools({ ...ctxOf(tests), jobs: jobs.ctx }).sweep_materials!;
+
+		const result = await tool.execute("call_sweep", { folder: missing } as never);
+
+		assert.equal(result.isError, true);
+		assert.match((result.details as { problems: string[] }).problems[0]!, /not a readable directory/i);
+		assert.equal(calls.setFolder.length, 0);
+		assert.equal(jobs.created.length, 0);
+	});
+
+	it("stores the resolved folder and dispatches a sweep job with { testId, folder }", async () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "lh-sweep-tool-"));
+		try {
+			const { tests, calls } = fakeTests(recordOf({ sections: [] }));
+			const jobs = fakeJobs();
+			const tool = testPrepTools({ ...ctxOf(tests), jobs: jobs.ctx }).sweep_materials!;
+
+			const result = await tool.execute("call_sweep", { folder: dir } as never);
+
+			assert.equal(result.isError, undefined);
+			assert.equal((result.content[0] as { text: string }).text, SWEEP_TEXT);
+			const resolved = resolveSourcePath(dir, resolvePolicy());
+			assert.deepEqual(calls.setFolder, [{ id: "test_1", folder: resolved }]);
+			assert.equal(jobs.created.length, 1);
+			assert.equal(jobs.created[0]!.kind, "sweep");
+			assert.deepEqual(jobs.created[0]!.input, { testId: "test_1", folder: resolved });
+			assert.equal(jobs.spawned.length, 1, "the background runner was fired");
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });

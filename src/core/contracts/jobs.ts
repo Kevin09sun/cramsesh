@@ -9,10 +9,11 @@
 import type { CallUsage } from "./chat.ts";
 import type { LhMessage, LhMarkerMessage } from "../native-messages.ts";
 import { newHandoffMessage } from "../native-messages.ts";
+import { coverageLine, type SweepCoverage } from "../test-prep.ts";
 
 // ─── Async sub-agent jobs (docs/archive/vision.md §2.5; docs/archive/plan.md Wave 0 protocol) ────────────
 
-export type JobKind = "research" | "demo" | "visual" | "pdf" | "ap_index";
+export type JobKind = "research" | "demo" | "visual" | "pdf" | "ap_index" | "sweep";
 export type JobStatus = "running" | "done" | "error";
 
 export interface JobRecord {
@@ -277,8 +278,28 @@ export interface ApIndexResult {
 	untagged: number;
 }
 
+/** The test-material sweep job (test prep, 2026-11-20): reads every file in
+ *  the learner's materials folder and saves the plan UNCONFIRMED. */
+export interface SweepToolInput {
+	/** The test whose materials folder is swept. */
+	testId: string;
+	/** The folder the learner attached (validated absolute path). */
+	folder: string;
+}
+
+/** The sweep orchestration outcome, carried whole as the job's result
+ *  (`SweepOutcome`-shaped — runSweep returns it unchanged). */
+export interface SweepResult {
+	ok: boolean;
+	mode: "initial" | "resweep";
+	points: number;
+	leftOut: number;
+	coverage: SweepCoverage;
+	error?: string;
+}
+
 /** Every sub-agent result shape (the kinds' union). */
-export type SubagentResult = ResearchResult | DemoResult | VisualResult | PdfResult | ApIndexResult;
+export type SubagentResult = ResearchResult | DemoResult | VisualResult | PdfResult | ApIndexResult | SweepResult;
 
 // ─── Sub-agent steer messages (THE ASYNC PROTOCOL §3–4) ─────────────────────
 //
@@ -359,6 +380,9 @@ export function isSubagentFailure(kind: JobKind, result: SubagentResult): boolea
 		const r = result as ApIndexResult;
 		return /^Indexing failed:/i.test(r.brief);
 	}
+	if (kind === "sweep") {
+		return !(result as SweepResult).ok;
+	}
 	const r = result as VisualResult;
 	return typeof r.svg !== "string" || r.svg.length === 0;
 }
@@ -376,6 +400,7 @@ function steerText(kind: JobKind, result: SubagentResult): string {
 			return `${(result as PdfResult).brief}\n\nContinue with what you can establish from the session and flag the gap to the learner.`;
 		if (kind === "ap_index")
 			return `${(result as ApIndexResult).brief}\n\nContinue with what you can establish from the session and flag the gap to the learner.`;
+		if (kind === "sweep") return `Sweep failed: ${(result as SweepResult).error ?? "unknown error"}`;
 		return `The figure could not be made: ${(result as VisualResult).notes ?? "unknown reason"}. Fall back to prose or mermaid, or re-call visual with a tighter brief.`;
 	}
 	if (kind === "research")
@@ -384,6 +409,10 @@ function steerText(kind: JobKind, result: SubagentResult): string {
 		return `PDF reading complete — the reader's brief on "${(result as PdfResult).path}" follows, with page citations. Weave it into the lesson and cite pages when you use it:\n\n${(result as PdfResult).brief}`;
 	if (kind === "ap_index")
 		return `Indexing complete — the indexer's brief follows. Tell the learner how many questions were indexed and name any paper that failed:\n\n${(result as ApIndexResult).brief}`;
+	if (kind === "sweep") {
+		const r = result as SweepResult;
+		return `Sweep finished: ${r.points} points proposed (${r.leftOut} left out). Coverage: ${coverageLine(r.coverage)}. The plan is saved UNCONFIRMED — give the learner a two-line summary and stop for review.`;
+	}
 	if (kind === "demo")
 		return `The demo "${(result as DemoResult).title}" is built, headlessly tested, and rendered in the lesson. Builder notes: ${
 			(result as DemoResult).notes ?? "(none)"
@@ -451,6 +480,8 @@ function abortText(kind: JobKind): string {
 		return "The PDF reading job was aborted by the learner — no brief is coming. Acknowledge it in one line and continue without it (a re-dispatch is fine if the learner wants it).";
 	if (kind === "ap_index")
 		return "The paper-indexing job was aborted by the learner — no index is coming. Acknowledge it in one line and continue without it (a re-dispatch is fine if the learner wants it).";
+	if (kind === "sweep")
+		return "The material sweep was aborted by the learner — no plan is coming. Acknowledge it in one line and continue without it (a re-dispatch is fine if the learner wants it).";
 	return "The figure job was aborted by the learner — no figure is coming. Acknowledge it in one line and teach without it (a re-dispatch is fine if the learner wants it).";
 }
 

@@ -173,6 +173,10 @@ const jobRunner = createJobRunner({
 			}
 		},
 	},
+	// Test material sweep (test prep, 2026-11-20): the real test store is the
+	// sweep's port (record, sweep state, plan proposers) — injected here so
+	// the agent layer imports no store module.
+	sweepStore: stores.testStore,
 });
 /** The app's ONE extraction pipeline instance — both front doors share it:
  *  quiz-triggered session runs (turn-service) and notes imports

@@ -17,6 +17,7 @@
  * (prompts/testprep/10-doctrine.md).
  */
 
+import * as fs from "node:fs/promises";
 import { Type } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { explainInputBase, explainInputProblems } from "../../core/question-core.ts";
@@ -30,7 +31,9 @@ import { readTool } from "./read.ts";
 import { lsTool } from "./ls.ts";
 import { findTool } from "./find.ts";
 import { grepTool } from "./grep.ts";
-import { jobTools, type JobToolContext } from "./jobs.ts";
+import { dispatchJob, jobTools, type JobToolContext } from "./jobs.ts";
+import { resolveSourcePath } from "./fs-shared.ts";
+import { resolvePolicy } from "./file-access.ts";
 import { tutorWebTools } from "./web.ts";
 
 /** The storage port this toolset closes over — the three test-record
@@ -41,6 +44,8 @@ export interface TestPrepStore {
 	get(id: string): TestRecord | null;
 	savePlan(id: string, draft: PlanDraftSection[], confirm: boolean): TestRecord;
 	recordResult(id: string, pointId: string, result: AnswerResult, chatId: string): TestRecord;
+	/** Record the materials folder a sweep reads (test material sweep). */
+	setFolder(id: string, folder: string): TestRecord;
 }
 
 /** The record-reading context the gates need (the practice-tools idiom). */
@@ -332,6 +337,66 @@ function recordResultTool(ctx: TestPrepToolContext): AgentTool<typeof recordResu
 	};
 }
 
+// ─── sweep_materials (test material sweep) ──────────────────────────────────
+
+export const sweepMaterialsInputObject = Type.Object({
+	folder: Type.String({
+		description:
+			"REQUIRED — the materials folder the learner attached, exactly as they gave it (absolute or home-relative).",
+	}),
+});
+
+const SWEEP_MATERIALS_TEXT =
+	"Reading every file in the folder now. End your turn; the plan arrives when the sweep finishes.";
+
+function sweepMaterialsTool(
+	ctx: TestPrepToolContext,
+	jobs: JobToolContext,
+): AgentTool<typeof sweepMaterialsInputObject> {
+	return {
+		name: "sweep_materials",
+		label: "sweep_materials",
+		description:
+			"Read every file in a materials folder the learner attached and build this test's plan from it. The sweep " +
+			"runs in the background; the plan arrives as a new message and is saved UNCONFIRMED for the learner to " +
+			"review. Pass the folder exactly as the learner gave it. Refused when this test already has a plan — " +
+			"materials added later are read with the Re-sweep folder button on the test page.",
+		parameters: sweepMaterialsInputObject,
+		prepareArguments: (args: unknown) => healEncodedArguments(args, sweepMaterialsInputObject) as never,
+		executionMode: "sequential",
+		execute: async (toolCallId, input) => {
+			const test = ctx.tests.get(ctx.testId);
+			if (!test) return invalidInputResult("sweep_materials", [`test "${ctx.testId}" was not found`]);
+			// Review Focus 1: a test with a plan (or a sweep already reading)
+			// never starts a second first-sweep over it.
+			if (test.sections.length > 0 || test.sweep?.status === "running") {
+				return invalidInputResult("sweep_materials", [
+					"this test already has a plan — materials added later are read with the Re-sweep folder button on the test page",
+				]);
+			}
+
+			// Same resolution/denial as ls (resolveSourcePath), then the
+			// directory must actually be readable.
+			let folder: string;
+			try {
+				folder = resolveSourcePath(input.folder, resolvePolicy());
+				const stat = await fs.stat(folder);
+				if (!stat.isDirectory()) throw new Error("not a directory");
+				await fs.readdir(folder);
+			} catch (error) {
+				const reason = error instanceof Error ? error.message : String(error);
+				return invalidInputResult("sweep_materials", [
+					`folder not found or not a readable directory: ${input.folder} (${reason})`,
+				]);
+			}
+
+			ctx.tests.setFolder(ctx.testId, folder);
+			dispatchJob(jobs, "sweep", toolCallId, SWEEP_MATERIALS_TEXT, { testId: ctx.testId, folder });
+			return textResult(SWEEP_MATERIALS_TEXT);
+		},
+	};
+}
+
 // ─── the registry ───────────────────────────────────────────────────────────
 
 /** The test-prep toolset (the test-prep agent's whole registry). */
@@ -355,6 +420,9 @@ export function testPrepTools(ctx: TestPrepToolContext, enabled?: EnabledTools):
 		grep: grepTool,
 		...(jobs?.research ? { research: jobs.research } : {}),
 		...(jobs ? { pdf: jobs.pdf! } : {}),
+		// The material sweep (test prep, 2026-11-20) runs as a background job:
+		// present only when the jobs context is wired, like pdf.
+		...(ctx.jobs ? { sweep_materials: sweepMaterialsTool(ctx, ctx.jobs) } : {}),
 		// Direct web tools (2026-11-12): the settings `web` switch is the
 		// only toggle this registry reads. Absent seam (not wired) = no web
 		// tools; with no search key both still register — the provider
