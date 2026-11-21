@@ -149,6 +149,21 @@ function hashMap(files: SweepFile[]): Record<string, string> {
 	return map;
 }
 
+type FileStats = NonNullable<SweepState["fileStats"]>;
+
+/** Coverage counts as sums over the per-file stats of files currently present
+ *  (I3): a re-read file replaces its own counts, a removed file's counts leave
+ *  with it, and a failed run adds nothing. */
+function coverageTotals(stats: FileStats): Pick<SweepCoverage, "files" | "pages" | "visionPages"> {
+	let pages = 0;
+	let visionPages = 0;
+	for (const stat of Object.values(stats)) {
+		pages += stat.pages;
+		visionPages += stat.visionPages;
+	}
+	return { files: Object.keys(stats).length, pages, visionPages };
+}
+
 /** Does an unreadable entry name this marker's file+unit (e.g. "a.pdf p. 1 (vision failed)")? */
 function unreadableCovers(marker: string, unreadable: string[]): boolean {
 	return unreadable.some((entry) => {
@@ -387,6 +402,7 @@ export async function runSweep(
 	const startedAt = nowIso();
 	const previousHashes = record.sweep?.fileHashes ?? {};
 	const previousCoverage = record.sweep?.coverage;
+	const previousStats: FileStats = record.sweep?.fileStats ?? {};
 
 	let lastActivity = "";
 	const activity = (line: string): void => {
@@ -455,8 +471,15 @@ export async function runSweep(
 				removed,
 			};
 			const finishedAt = nowIso();
-			const coverage = mergeCoverage(previousCoverage, { ...runCoverage, readFiles: [] }, finishedAt);
-			deps.store.updateSweep(testId, { status: "done", finishedAt, coverage, fileHashes });
+			const fileStats: FileStats = { ...previousStats };
+			for (const rel of removed) delete fileStats[rel];
+			// Nothing was read this run: the totals are the whole folder's
+			// per-file stats, minus anything removed from disk.
+			const coverage: SweepCoverage = {
+				...mergeCoverage(previousCoverage, { ...runCoverage, readFiles: [] }, finishedAt),
+				...coverageTotals(fileStats),
+			};
+			deps.store.updateSweep(testId, { status: "done", finishedAt, coverage, fileHashes, fileStats });
 			return { ok: true, mode, points: 0, leftOut: 0, coverage };
 		}
 
@@ -526,12 +549,17 @@ export async function runSweep(
 			} catch (second) {
 				if (isAbort(second, deps.signal)) throw second;
 				const message = `${reasonOf(second)}. Read ${runCoverage.files} files · ${runCoverage.pages} pages.`;
-				// Keep the cumulative audit baseline: a failed re-sweep must not
-				// make the coverage report shrink to only what this run touched.
-				const failureCoverage = mergeCoverage(previousCoverage, {
-					...runCoverage,
-					readFiles: changed.map((file) => file.rel),
-				});
+				// Keep the cumulative audit baseline: a failed run must neither
+				// shrink the report nor fold this run's counts (I3) — the totals
+				// stay the previous run's while the lists may still describe
+				// what was re-read.
+				const failureCoverage: SweepCoverage = {
+					...mergeCoverage(previousCoverage, {
+						...runCoverage,
+						readFiles: changed.map((file) => file.rel),
+					}),
+					...coverageTotals(previousStats),
+				};
 				return fail(message, failureCoverage);
 			}
 		}
@@ -544,12 +572,20 @@ export async function runSweep(
 		}
 
 		const finishedAt = nowIso();
-		const coverage = mergeCoverage(
-			previousCoverage,
-			{ ...runCoverage, readFiles: changed.map((file) => file.rel) },
-			mode === "resweep" ? finishedAt : undefined,
-		);
-		deps.store.updateSweep(testId, { status: "done", finishedAt, coverage, fileHashes });
+		const fileStats: FileStats = { ...previousStats };
+		for (const transcript of transcripts) {
+			fileStats[transcript.rel] = { pages: transcript.pages, visionPages: transcript.visionPages };
+		}
+		for (const rel of removed) delete fileStats[rel];
+		const coverage: SweepCoverage = {
+			...mergeCoverage(
+				previousCoverage,
+				{ ...runCoverage, readFiles: changed.map((file) => file.rel) },
+				mode === "resweep" ? finishedAt : undefined,
+			),
+			...coverageTotals(fileStats),
+		};
+		deps.store.updateSweep(testId, { status: "done", finishedAt, coverage, fileHashes, fileStats });
 
 		return {
 			ok: true,

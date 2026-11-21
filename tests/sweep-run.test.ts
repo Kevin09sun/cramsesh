@@ -221,7 +221,11 @@ describe("runSweep", () => {
 		assert.equal(saved.leftOut, undefined);
 		assert.equal(saved.sweep!.status, "error");
 		assert.match(saved.sweep!.error!, /merger exploded\. Read 2 files · 2 pages\./);
-		assert.equal(saved.sweep!.coverage!.files, 2, "the error names what was read");
+		assert.equal(
+			saved.sweep!.coverage!.files,
+			0,
+			"a failed initial run keeps the (empty) previous totals — it does not fold this run's counts",
+		);
 	});
 
 	it("resweep with no changes makes no merger call and records lastResweep.files 0", async () => {
@@ -343,7 +347,13 @@ describe("runSweep", () => {
 		assert.equal(after.pendingAdditions!.leftOut.length, 1);
 		assert.match(after.pendingAdditions!.leftOut[0]!.id, /^test_/, "the store mints the pending id");
 		assert.equal(after.sweep!.coverage!.lastResweep!.files, 1);
-		assert.equal(after.sweep!.coverage!.files, before.sweep!.coverage!.files + 1);
+		assert.equal(
+			after.sweep!.coverage!.files,
+			before.sweep!.coverage!.files,
+			"a changed file is re-counted in place, never counted twice (I3)",
+		);
+		assert.equal(after.sweep!.coverage!.pages, before.sweep!.coverage!.pages);
+		assert.deepEqual(after.sweep!.fileStats, { "a.md": { pages: 1, visionPages: 0 }, "b.txt": { pages: 1, visionPages: 0 } });
 	});
 
 	it("removed file listed in coverage.removed, no points removed", async () => {
@@ -386,6 +396,9 @@ describe("runSweep", () => {
 		const after = testStore.get(record.id)!;
 		assert.deepEqual(after.sections, before.sections, "no points are removed");
 		assert.deepEqual(after.sweep!.coverage!.removed, ["a.md"]);
+		assert.equal(after.sweep!.coverage!.files, 1, "a removed file's stats leave with it");
+		assert.equal(after.sweep!.coverage!.pages, 1);
+		assert.deepEqual(after.sweep!.fileStats, { "b.txt": { pages: 1, visionPages: 0 } });
 		assert.deepEqual(Object.keys(after.sweep!.fileHashes).sort(), ["b.txt"]);
 	});
 
@@ -644,13 +657,13 @@ describe("runSweep", () => {
 
 		assert.equal(outcome.ok, false);
 		assert.equal(calls.count, 2);
-		assert.equal(outcome.coverage.files, 3, "the audit baseline covers the whole folder");
+		assert.equal(outcome.coverage.files, 2, "the audit baseline covers the whole folder, without adding re-read files");
 		const saved = testStore.get(record.id)!;
 		const coverage = saved.sweep!.coverage!;
 		assert.equal(saved.sweep!.status, "error");
 		assert.match(saved.sweep!.error!, /Read 1 files · 1 pages\./);
-		assert.equal(coverage.files, initialCoverage.files + 1, "coverage is cumulative, not just this run");
-		assert.equal(coverage.pages, initialCoverage.pages + 1);
+		assert.equal(coverage.files, initialCoverage.files, "a failed re-sweep adds no files (I3)");
+		assert.equal(coverage.pages, initialCoverage.pages, "a failed re-sweep adds no pages");
 	});
 
 	it("initial mode finishes from the record when the plan save landed before a crash", async () => {

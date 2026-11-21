@@ -295,6 +295,7 @@ function updateSweep(id: string, patch: Partial<SweepState>): TestRecord {
 			...(patch.finishedAt === undefined ? {} : { finishedAt: patch.finishedAt }),
 			...(patch.error === undefined ? {} : { error: patch.error }),
 			...(patch.coverage === undefined ? {} : { coverage: patch.coverage }),
+			...(patch.fileStats === undefined ? {} : { fileStats: patch.fileStats }),
 		};
 	}
 

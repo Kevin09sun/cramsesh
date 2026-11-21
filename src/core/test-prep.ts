@@ -96,6 +96,10 @@ export interface SweepState {
 	error?: string;
 	coverage?: SweepCoverage;
 	fileHashes: Record<string, string>;
+	/** Per-file read stats, keyed like fileHashes. Coverage counts are sums
+	 *  over this map's currently-present files, so a re-read file replaces its
+	 *  own counts instead of being counted twice. */
+	fileStats?: Record<string, { pages: number; visionPages: number }>;
 }
 
 /** A re-sweep's proposal, held until the learner accepts or drops it. */
