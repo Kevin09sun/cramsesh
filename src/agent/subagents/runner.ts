@@ -18,10 +18,14 @@ import {
 	type ResearchToolInput,
 	type SteerMessage,
 	type SubagentResult,
+	type SweepResult,
+	type SweepToolInput,
 	type UsageStepLike,
 	type VisualResult,
 	type VisualToolInput,
 } from "../../core/contracts.ts";
+import { emptyCoverage } from "../../core/test-prep.ts";
+import { runSweep, type SweepStore } from "./sweep/run-sweep.ts";
 import type { ApCourseRecord, ApDocument } from "../../core/ap.ts";
 import type { ApQuestionIndex, ApRealQuestion } from "../../core/ap-frq.ts";
 import { apPaperPair } from "../../core/ap-frq.ts";
@@ -69,6 +73,9 @@ export const demoModelOverride: { current?: PiEngine } = {};
 export const visualModelOverride: { current?: PiEngine } = {};
 export const pdfModelOverride: { current?: PiEngine } = {};
 export const apIndexModelOverride: { current?: PiEngine } = {};
+/** Test seam for the whole sweep orchestrator (like the model overrides):
+ *  job tests script an outcome without touching a folder or a model. */
+export const sweepOverride: { current?: typeof runSweep } = {};
 
 /** The dispatch-time tool input (from src/agent/tools/jobs.ts schemas). */
 type JobToolInput =
@@ -76,7 +83,8 @@ type JobToolInput =
 	| DemoToolInput
 	| VisualToolInput
 	| PdfToolInput
-	| ApIndexToolInput;
+	| ApIndexToolInput
+	| SweepToolInput;
 
 export interface JobRunnerDeps {
 	chatStore: ChatStore;
@@ -117,6 +125,11 @@ export interface JobRunnerDeps {
 		 *  computer. */
 		paperPath(courseId: string, file: string): string | null;
 	};
+	/** The test-material sweep's store (test prep, 2026-11-20): the test
+	 *  record, the sweep state and the plan writers — injected by the
+	 *  composition root so this layer imports no store module. Absent =
+	 *  sweep jobs are refused ("sweep store not wired"). */
+	sweepStore?: SweepStore;
 }
 
 export interface JobRunner {
@@ -149,6 +162,7 @@ const KIND_ROLE: Record<JobKind, ModelRole> = {
 	visual: "visualMaker",
 	pdf: "pdfReader",
 	ap_index: "apIndexer",
+	sweep: "sweepMerger",
 };
 
 export function createJobRunner(deps: JobRunnerDeps): JobRunner {
@@ -214,6 +228,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 		visual: (jobId, engine, input, loop) => runVisualJob(jobId, engine, input, loop),
 		pdf: (jobId, engine, input, loop) => runPdfJob(jobId, engine, input, loop),
 		ap_index: (jobId, engine, input, loop) => runApIndexJob(jobId, engine, input, loop),
+		sweep: (jobId, engine, input, loop) => runSweepJob(jobId, engine, input, loop),
 	};
 
 	async function runJob(jobId: string, input?: JobToolInput): Promise<void> {
@@ -246,6 +261,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 				| VisualToolInput
 				| PdfToolInput
 				| ApIndexToolInput
+				| SweepToolInput
 				| undefined;
 			const pdf = resolved as PdfToolInput | undefined;
 			const failure: SubagentResult =
@@ -262,7 +278,9 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 							? { svg: "", notes: `FAILED: ${reason}` }
 							: job.kind === "ap_index"
 								? { brief: `Indexing failed: ${reason}`, indexed: [], failed: [], untagged: 0 }
-								: {
+								: job.kind === "sweep"
+									? { ok: false, mode: "initial", points: 0, leftOut: 0, coverage: emptyCoverage(), error: reason }
+									: {
 										path: typeof pdf?.path === "string" ? pdf.path : "",
 										question: typeof pdf?.question === "string" ? pdf.question : "",
 										brief: `PDF failed: ${reason}`,
@@ -676,6 +694,98 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 			jobStore.updateJob(jobId, { error: result.brief.replace(/^Indexing failed:\s*/i, "") });
 		}
 		await finishJob(jobId, result);
+	}
+
+	// ─── test material sweep (test prep, 2026-11-20) ─────────────────────────
+
+	async function runSweepJob(
+		jobId: string,
+		model: PiEngine | undefined,
+		passedInput: JobToolInput | undefined,
+		loop: LoopContext,
+	): Promise<void> {
+		const ctx = jobContext(jobId);
+		if (!ctx) return;
+
+		const input = (passedInput ?? resolveInput(ctx.job, passedInput)) as SweepToolInput | undefined;
+		const testId = typeof input?.testId === "string" ? input.testId : "";
+
+		/** One failed-sweep outcome: honest record error, then the kind's
+		 *  failure shape through finishJob (the teacher learns the outcome). */
+		const fail = async (reason: string): Promise<void> => {
+			if (stillRunning(jobId)) jobStore.updateJob(jobId, { error: reason });
+			await finishJob(jobId, {
+				ok: false,
+				mode: "initial",
+				points: 0,
+				leftOut: 0,
+				coverage: emptyCoverage(),
+				error: reason,
+			});
+		};
+
+		const store = deps.sweepStore;
+		if (!store) {
+			await fail("sweep store not wired");
+			return;
+		}
+		if (!testId) {
+			await fail("test id unavailable");
+			return;
+		}
+
+		// The sweep's other two engines (2026-11-20): the extractor is
+		// load-bearing — its provider key gone refuses the job before any
+		// folder is read. The reader is best-effort: without its key the
+		// sweep still runs and the affected pages carry "(vision failed)".
+		const extractor = deps.engineFor?.("sweepExtractor");
+		const extractorRefusal =
+			extractor ? deps.providerKeyMissing?.(extractor.model.provider, ROLE_SLOT.sweepExtractor) ?? null : null;
+		if (extractorRefusal) {
+			await fail(extractorRefusal.error);
+			return;
+		}
+		const reader = deps.engineFor?.("sweepReader");
+		const readerKeyless =
+			reader !== undefined &&
+			(deps.providerKeyMissing?.(reader.model.provider, ROLE_SLOT.sweepReader) ?? null) !== null;
+
+		// Mirror the sweep's own progress patches onto the job record so the
+		// dispatch card and activity dock show the live line.
+		const progressStore: SweepStore = {
+			get: (id) => store.get(id),
+			updateSweep: (id, patch) => {
+				if (patch.activity !== undefined && stillRunning(jobId)) {
+					jobStore.updateJob(jobId, { activity: patch.activity });
+				}
+				return store.updateSweep(id, patch);
+			},
+			saveSweepPlan: (id, draft, leftOut) => store.saveSweepPlan(id, draft, leftOut),
+			setPendingAdditions: (id, additions) => store.setPendingAdditions(id, additions),
+		};
+
+		try {
+			jobStore.updateJob(jobId, { activity: "reading materials" });
+			// Reader/extractor are separate vision/cheap tiers; the picked engine
+			// (KIND_ROLE.sweep = sweepMerger) merges. The orchestrator catches its
+			// own errors into an outcome; the try/catch is a last-resort guard.
+			const outcome: SweepResult = await (sweepOverride.current ?? runSweep)(testId, "initial", {
+				store: progressStore,
+				engines: {
+					reader: readerKeyless ? undefined : reader,
+					extractor,
+					merger: model,
+				},
+				signal: loop.abortSignal,
+				onUsage: (_role, usage) => loop.onUsage(piUsageToStep(usage)),
+			});
+			if (!outcome.ok && stillRunning(jobId)) jobStore.updateJob(jobId, { error: outcome.error });
+			await finishJob(jobId, outcome);
+		} catch (err) {
+			// The abort path flipped the record and owns the abort steer.
+			if (loop.abortSignal.aborted) return;
+			await fail(err instanceof Error ? err.message : String(err));
+		}
 	}
 
 	return { runJob };

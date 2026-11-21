@@ -284,6 +284,7 @@ const KIND_ICON: Record<JobKind, typeof SearchIcon> = {
 	visual: PenToolIcon,
 	pdf: FileTextIcon, // sources v0 — type-forced entry (JobKind grew "pdf")
 	ap_index: FileTextIcon, // AP prep stage 2 — type-forced entry (JobKind grew "ap_index")
+	sweep: FileTextIcon, // test material sweep — type-forced entry (JobKind grew "sweep")
 };
 
 /** Abort states per blob id: pending (fired) / failed (backend absent). */
@@ -404,7 +405,9 @@ function ActivityBlobRow({
 							? "PDF reader"
 							: blob.jobKind === "ap_index"
 								? "Paper indexer"
-								: "Sub-agent";
+								: blob.jobKind === "sweep"
+									? "Reading your materials"
+									: "Sub-agent";
 	return (
 		<div
 			data-testid={`activity-blob-${blob.process}`}

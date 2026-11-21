@@ -14,12 +14,28 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { PATHS } from "../../config.ts";
 import { emit } from "../core/events.ts";
-import { applyResult, forgetChatInPoint, mergePlan, readiness } from "../core/test-prep.ts";
-import type { AnswerResult, PlanDraftSection, TestRecord } from "../core/test-prep.ts";
+import {
+	applyAdditions,
+	applyResult,
+	forgetChatInPoint,
+	mergePlan,
+	readiness,
+} from "../core/test-prep.ts";
+import type {
+	AnswerResult,
+	LeftOutItem,
+	PendingAdditions,
+	PlanDraftSection,
+	SweepState,
+	TestRecord,
+} from "../core/test-prep.ts";
 import { writeFileAtomicSync } from "./atomic-write.ts";
 
 const TEST_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 const POINT_STATUSES: ReadonlySet<string> = new Set(["unchecked", "solid", "gap", "fixed-recheck"]);
+
+/** A caller-supplied left-out item; the store mints the id when absent. */
+type LeftOutInput = Omit<LeftOutItem, "id"> & { id?: string };
 
 function testFile(id: string): string {
 	if (!TEST_ID_PATTERN.test(id)) throw new Error(`Invalid test id: ${id}`);
@@ -72,6 +88,35 @@ function isTestRecord(value: unknown): value is TestRecord {
 	});
 }
 
+/** Give every left-out item its permanent id; an explicit id wins. */
+function mintLeftOut(items: LeftOutInput[]): LeftOutItem[] {
+	return items.map((item) => (item.id === undefined ? { ...item, id: newId() } : (item as LeftOutItem)));
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * The sweep fields are optional and only trusted at their basic shape: a
+ * `leftOut` that is not an array (or a `sweep`/`pendingAdditions` that is not
+ * an object) reads as absent. The file is never rewritten on read, so a
+ * hand-edit or foreign writer cannot corrupt the next mutation.
+ */
+function withoutMalformedSweepFields(record: TestRecord): TestRecord {
+	const strip: Array<"leftOut" | "sweep" | "pendingAdditions"> = [];
+	if (record.leftOut !== undefined && !Array.isArray(record.leftOut)) strip.push("leftOut");
+	if (record.sweep !== undefined && !isPlainObject(record.sweep)) strip.push("sweep");
+	if (record.pendingAdditions !== undefined && !isPlainObject(record.pendingAdditions)) {
+		strip.push("pendingAdditions");
+	}
+	if (strip.length === 0) return record;
+
+	const next: TestRecord = { ...record };
+	for (const key of strip) delete next[key];
+	return next;
+}
+
 function get(id: string): TestRecord | null {
 	let parsed: unknown;
 	try {
@@ -84,7 +129,7 @@ function get(id: string): TestRecord | null {
 	}
 	// Parseable but wrong-shaped reads the same as absent; the file is never
 	// rewritten here.
-	return isTestRecord(parsed) ? parsed : null;
+	return isTestRecord(parsed) ? withoutMalformedSweepFields(parsed) : null;
 }
 
 function loadOrThrow(id: string): TestRecord {
@@ -219,6 +264,173 @@ function forgetChat(id: string, chatId: string): boolean {
 	return true;
 }
 
+function setFolder(id: string, folder: string): TestRecord {
+	const record = loadOrThrow(id);
+	const next: TestRecord = { ...record, folder, updatedAt: new Date().toISOString() };
+	writeTest(next);
+	emit("tests-changed", {});
+	return next;
+}
+
+/** Patch the latest sweep's progress. A first write creates the sweep; from
+ *  then on `startedAt` belongs to the run, so a patch cannot move it. */
+function updateSweep(id: string, patch: Partial<SweepState>): TestRecord {
+	const record = loadOrThrow(id);
+	let sweep: SweepState;
+	if (record.sweep) {
+		const merged = { ...record.sweep, ...patch };
+		sweep = {
+			...merged,
+			status: merged.status ?? record.sweep.status,
+			startedAt: merged.startedAt ?? record.sweep.startedAt,
+			fileHashes: merged.fileHashes ?? record.sweep.fileHashes,
+		};
+	} else {
+		if (patch.startedAt === undefined) throw new Error("sweep not started");
+		sweep = {
+			status: patch.status ?? "running",
+			startedAt: patch.startedAt,
+			fileHashes: patch.fileHashes ?? {},
+			...(patch.activity === undefined ? {} : { activity: patch.activity }),
+			...(patch.finishedAt === undefined ? {} : { finishedAt: patch.finishedAt }),
+			...(patch.error === undefined ? {} : { error: patch.error }),
+			...(patch.coverage === undefined ? {} : { coverage: patch.coverage }),
+			...(patch.fileStats === undefined ? {} : { fileStats: patch.fileStats }),
+		};
+	}
+
+	const next: TestRecord = { ...record, sweep, updatedAt: new Date().toISOString() };
+	writeTest(next);
+	emit("tests-changed", {});
+	return next;
+}
+
+/** Replace the stored left-out list. The plan-review card prunes promoted
+ *  items and PUTs the remainder; like every other mutation this is a fresh
+ *  read-modify-write. An explicit item id wins; a missing one is minted. */
+function setLeftOut(id: string, items: LeftOutInput[]): TestRecord {
+	const record = loadOrThrow(id);
+	const next: TestRecord = {
+		...record,
+		leftOut: mintLeftOut(items),
+		updatedAt: new Date().toISOString(),
+	};
+	writeTest(next);
+	emit("tests-changed", {});
+	return next;
+}
+
+/** First sweep only: a test that already has sections keeps them. The saved
+ *  plan stays unconfirmed — it is a proposal, not an approved scope. */
+function saveSweepPlan(id: string, draft: PlanDraftSection[], leftOut: LeftOutInput[]): TestRecord {
+	const record = loadOrThrow(id);
+	if (record.sections.length > 0) throw new Error("plan already exists");
+
+	const next: TestRecord = {
+		...record,
+		sections: mergePlan([], draft, newId),
+		planConfirmed: false,
+		leftOut: mintLeftOut(leftOut),
+		updatedAt: new Date().toISOString(),
+	};
+	writeTest(next);
+	emit("tests-changed", {});
+	return next;
+}
+
+/** Hold a re-sweep's proposal until the learner reviews it. The proposal's
+ *  own leftOut items stay inside pendingAdditions. */
+function setPendingAdditions(id: string, additions: PendingAdditions): TestRecord {
+	const record = loadOrThrow(id);
+	const next: TestRecord = {
+		...record,
+		pendingAdditions: {
+			sections: additions.sections,
+			leftOut: mintLeftOut(additions.leftOut),
+		},
+		updatedAt: new Date().toISOString(),
+	};
+	writeTest(next);
+	emit("tests-changed", {});
+	return next;
+}
+
+/**
+ * Apply the learner's review of a re-sweep: accepted points become unchecked
+ * additions (existing points and their progress are untouched), every other
+ * proposal point lands in leftOut as "dropped by you", the proposal's own
+ * leftOut items carry over, and the review is cleared.
+ */
+function resolveAdditions(id: string, acceptedKeys: string[]): TestRecord {
+	const record = loadOrThrow(id);
+	const pending = record.pendingAdditions;
+	if (!pending) throw new Error("no pending additions");
+
+	const accepted = new Set(acceptedKeys);
+	const acceptedDrafts: PlanDraftSection[] = [];
+	const dropped: LeftOutItem[] = [];
+
+	pending.sections.forEach((section, sectionIndex) => {
+		const points = section.points.filter((point, pointIndex) => {
+			if (accepted.has(`${sectionIndex}:${pointIndex}`)) return true;
+			dropped.push({
+				id: newId(),
+				text: point.text,
+				source: point.source,
+				reason: "dropped by you",
+				suggestedSection: section.title,
+			});
+			return false;
+		});
+		if (points.length > 0) acceptedDrafts.push({ title: section.title, points });
+	});
+
+	const { pendingAdditions: _reviewed, ...rest } = record;
+	const next: TestRecord = {
+		...rest,
+		sections: applyAdditions(record.sections, acceptedDrafts, newId),
+		leftOut: [...(record.leftOut ?? []), ...pending.leftOut, ...dropped],
+		updatedAt: new Date().toISOString(),
+	};
+	writeTest(next);
+	emit("tests-changed", {});
+	return next;
+}
+
+/**
+ * Recover a left-out item after confirmation: it becomes an unchecked point in
+ * its suggested section, or in the first section when that section does not
+ * exist. Confirmation is unchanged and the item leaves leftOut.
+ */
+function promoteLeftOut(id: string, itemId: string): TestRecord {
+	const record = loadOrThrow(id);
+	const leftOut = record.leftOut ?? [];
+	const item = leftOut.find((candidate) => candidate.id === itemId);
+	if (!item) throw new Error("unknown left-out item");
+
+	const fallback = record.sections[0]?.title;
+	if (fallback === undefined) throw new Error("no plan sections");
+	const wanted = item.suggestedSection?.trim();
+	const target = wanted === undefined
+		? undefined
+		: record.sections.find((section) => section.title.trim() === wanted);
+	const title = target ? target.title : fallback;
+
+	const next: TestRecord = {
+		...record,
+		sections: applyAdditions(
+			record.sections,
+			[{ title, points: [{ text: item.text, source: item.source }] }],
+			newId,
+		),
+		leftOut: leftOut.filter((candidate) => candidate.id !== itemId),
+		updatedAt: new Date().toISOString(),
+	};
+	writeTest(next);
+	emit("tests-changed", {});
+	return next;
+}
+
 export const testStore = {
 	create,
 	get,
@@ -226,4 +438,11 @@ export const testStore = {
 	savePlan,
 	recordResult,
 	forgetChat,
+	setFolder,
+	updateSweep,
+	saveSweepPlan,
+	setLeftOut,
+	setPendingAdditions,
+	resolveAdditions,
+	promoteLeftOut,
 };

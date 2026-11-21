@@ -77,7 +77,8 @@ const { beginTurn, endTurn, isTurnRunning } = await import("../src/server/turn-l
 const { persistTurn } = await import("../src/server/turn-service.ts");
 const { chatStore } = await import("../src/store/chats.ts");
 const { jobStore } = await import("../src/store/jobs.ts");
-const { createJobRunner, pdfModelOverride, researchModelOverride } = await import("../src/agent/subagents/runner.ts");
+const { createJobRunner, pdfModelOverride, researchModelOverride, sweepOverride } = await import("../src/agent/subagents/runner.ts");
+const { coverageLine, emptyCoverage } = await import("../src/core/test-prep.ts");
 const { providerKeyMissing } = await import("../src/core/settings.ts");
 const { PATHS } = await import("../config.ts");
 const { projectView: projectNative } = await import("../src/core/view.ts");
@@ -410,6 +411,9 @@ describe("steer helpers (contracts.ts)", () => {
 		assert.equal(isSubagentFailure("demo", { ...demo, html: "" }), true);
 		assert.equal(isSubagentFailure("visual", visual), false);
 		assert.equal(isSubagentFailure("visual", { ...visual, svg: "" }), true);
+		const sweep = { ok: true, mode: "initial" as const, points: 3, leftOut: 0, coverage: emptyCoverage() };
+		assert.equal(isSubagentFailure("sweep", sweep), false);
+		assert.equal(isSubagentFailure("sweep", { ...sweep, ok: false, error: "boom" }), true);
 	});
 
 	it("steerDelivered: matches on the deterministic steer id (any steer kind)", () => {
@@ -882,6 +886,243 @@ describe("pdf runner (sources v0)", () => {
 
 		const steer = delivery.steers[0]!;
 		assert.ok(steer.content.includes("flag the gap"), "the teacher learns to flag the gap");
+	});
+});
+
+// ─── sweep runner (test material sweep) ─────────────────────────────────────
+
+describe("sweep runner (test material sweep)", () => {
+	/** The sweep's store is never touched when runSweep is stubbed; any call
+	 *  is a wiring bug the test should surface loudly. */
+	function stubSweepStore() {
+		return {
+			get: () => null,
+			updateSweep: () => {
+				throw new Error("sweep store not used by the stub");
+			},
+			saveSweepPlan: () => {
+				throw new Error("sweep store not used by the stub");
+			},
+			setPendingAdditions: () => {
+				throw new Error("sweep store not used by the stub");
+			},
+		} as import("../src/agent/subagents/sweep/run-sweep.ts").SweepStore;
+	}
+
+	/** A store that tolerates writes (the runner wraps it for job progress). */
+	function inertSweepStore() {
+		return {
+			get: () => null,
+			updateSweep: () => ({}) as never,
+			saveSweepPlan: () => ({}) as never,
+			setPendingAdditions: () => ({}) as never,
+		} as import("../src/agent/subagents/sweep/run-sweep.ts").SweepStore;
+	}
+
+	it("runs runSweep(testId, \"initial\") and steers the outcome with the coverage line", async () => {
+		const chat = chatStore.createChat("Test: sweep runner");
+		trackChat(chat.id);
+		const job = jobStore.createJob({ kind: "sweep", chatId: chat.id, toolCallId: "call-sweep1" });
+		trackJob(job.id);
+
+		const delivery = fakeDeliver();
+		const runner = createJobRunner({
+			chatStore,
+			jobStore,
+			deliver: delivery.deliver,
+			engineFor: () => fauxEngine([]),
+			sweepStore: stubSweepStore(),
+		});
+		const coverage = { files: 2, pages: 5, visionPages: 1, unsupported: [], unreadable: [], empty: [], removed: [] };
+		const seen: Array<{ testId: string; mode: string }> = [];
+		sweepOverride.current = async (testId, mode) => {
+			seen.push({ testId, mode });
+			return { ok: true, mode, points: 12, leftOut: 3, coverage };
+		};
+		try {
+			await runner.runJob(job.id, { testId: "test_1", folder: "C:/materials" });
+		} finally {
+			sweepOverride.current = undefined;
+		}
+
+		assert.deepEqual(seen, [{ testId: "test_1", mode: "initial" }], "the runner called the orchestrator's initial mode");
+		const done = jobStore.getJob(job.id)!;
+		assert.equal(done.status, "done");
+		const result = done.result as { ok: boolean; points: number; leftOut: number };
+		assert.equal(result.ok, true);
+		assert.equal(result.points, 12);
+		assert.equal(result.leftOut, 3);
+
+		assert.equal(delivery.steers.length, 1, "one job, one steer");
+		assert.equal(
+			delivery.steers[0]!.content,
+			`Sweep finished: 12 points proposed (3 left out). Coverage: ${coverageLine(coverage)}. ` +
+				"The plan is saved UNCONFIRMED — give the learner a two-line summary and stop for review.",
+		);
+		assert.ok(delivery.steers[0]!.content.includes(coverageLine(coverage)));
+	});
+
+	it("a failed sweep lands error and steers the failure line", async () => {
+		const chat = chatStore.createChat("Test: sweep runner failure");
+		trackChat(chat.id);
+		const job = jobStore.createJob({ kind: "sweep", chatId: chat.id, toolCallId: "call-sweep2" });
+		trackJob(job.id);
+
+		const delivery = fakeDeliver();
+		const runner = createJobRunner({
+			chatStore,
+			jobStore,
+			deliver: delivery.deliver,
+			engineFor: () => fauxEngine([]),
+			sweepStore: stubSweepStore(),
+		});
+		sweepOverride.current = async (_testId, mode) => ({
+			ok: false,
+			mode,
+			points: 0,
+			leftOut: 0,
+			coverage: emptyCoverage(),
+			error: "models not configured: cheap",
+		});
+		try {
+			await runner.runJob(job.id, { testId: "test_1", folder: "C:/materials" });
+		} finally {
+			sweepOverride.current = undefined;
+		}
+
+		const done = jobStore.getJob(job.id)!;
+		assert.equal(done.status, "error");
+		assert.equal(done.error, "models not configured: cheap");
+		assert.equal(
+			delivery.steers[0]!.content,
+			"Sweep failed: models not configured: cheap\n\nTell the learner what could not be done and offer to try again.",
+		);
+	});
+
+	it("refuses when the sweep store is not wired", async () => {
+		const chat = chatStore.createChat("Test: sweep runner unwired");
+		trackChat(chat.id);
+		const job = jobStore.createJob({ kind: "sweep", chatId: chat.id, toolCallId: "call-sweep3" });
+		trackJob(job.id);
+
+		const delivery = fakeDeliver();
+		const runner = createJobRunner({
+			chatStore,
+			jobStore,
+			deliver: delivery.deliver,
+			engineFor: () => fauxEngine([]),
+		});
+		await runner.runJob(job.id, { testId: "test_1", folder: "C:/materials" });
+
+		const done = jobStore.getJob(job.id)!;
+		assert.equal(done.status, "error");
+		assert.equal(done.error, "sweep store not wired");
+		assert.equal(
+			delivery.steers[0]!.content,
+			"Sweep failed: sweep store not wired\n\nTell the learner what could not be done and offer to try again.",
+		);
+	});
+
+	it("mirrors the sweep's activity patches onto the job record while it runs", async () => {
+		const chat = chatStore.createChat("Test: sweep progress");
+		trackChat(chat.id);
+		const job = jobStore.createJob({ kind: "sweep", chatId: chat.id, toolCallId: "call-sweep4" });
+		trackJob(job.id);
+
+		const delivery = fakeDeliver();
+		const runner = createJobRunner({
+			chatStore,
+			jobStore,
+			deliver: delivery.deliver,
+			engineFor: () => fauxEngine([]),
+			sweepStore: inertSweepStore(),
+		});
+		let activityDuringSweep: string | undefined;
+		sweepOverride.current = async (_testId, mode, deps) => {
+			deps.store.updateSweep("test_1", { activity: "Reading a.pdf" });
+			activityDuringSweep = jobStore.getJob(job.id)!.activity;
+			return { ok: true, mode, points: 0, leftOut: 0, coverage: emptyCoverage() };
+		};
+		try {
+			await runner.runJob(job.id, { testId: "test_1", folder: "C:/materials" });
+		} finally {
+			sweepOverride.current = undefined;
+		}
+
+		assert.equal(activityDuringSweep, "Reading a.pdf", "the poll shows the sweep's live activity");
+		assert.equal(jobStore.getJob(job.id)!.activity, "finished", "the terminal line still wins");
+	});
+
+	it("refuses when the extractor engine's provider key is gone", async () => {
+		const chat = chatStore.createChat("Test: sweep extractor keyless");
+		trackChat(chat.id);
+		const job = jobStore.createJob({ kind: "sweep", chatId: chat.id, toolCallId: "call-sweep5" });
+		trackJob(job.id);
+
+		const engine = fauxEngine([]);
+		const envelope = providerKeyMissing(engine.model.provider, ["cheap"]);
+		let sweepCalls = 0;
+		const delivery = fakeDeliver();
+		const runner = createJobRunner({
+			chatStore,
+			jobStore,
+			deliver: delivery.deliver,
+			engineFor: () => engine,
+			sweepStore: stubSweepStore(),
+			providerKeyMissing: (provider, tier) => (tier === "cheap" ? providerKeyMissing(provider, ["cheap"]) : null),
+		});
+		sweepOverride.current = async (_testId, mode) => {
+			sweepCalls++;
+			return { ok: true, mode, points: 0, leftOut: 0, coverage: emptyCoverage() };
+		};
+		try {
+			await runner.runJob(job.id, { testId: "test_1", folder: "C:/materials" });
+		} finally {
+			sweepOverride.current = undefined;
+		}
+
+		const done = jobStore.getJob(job.id)!;
+		assert.equal(done.status, "error");
+		assert.equal(done.error, envelope.error);
+		assert.equal(sweepCalls, 0, "the sweep never starts without its extractor key");
+		assert.equal(
+			delivery.steers[0]!.content,
+			`Sweep failed: ${envelope.error}\n\nTell the learner what could not be done and offer to try again.`,
+		);
+	});
+
+	it("omits a reader whose provider key is gone — the sweep runs, vision pages fail per page", async () => {
+		const chat = chatStore.createChat("Test: sweep reader keyless");
+		trackChat(chat.id);
+		const job = jobStore.createJob({ kind: "sweep", chatId: chat.id, toolCallId: "call-sweep6" });
+		trackJob(job.id);
+
+		const engine = fauxEngine([]);
+		const delivery = fakeDeliver();
+		const runner = createJobRunner({
+			chatStore,
+			jobStore,
+			deliver: delivery.deliver,
+			engineFor: () => engine,
+			sweepStore: stubSweepStore(),
+			providerKeyMissing: (provider, tier) => (tier === "vision" ? providerKeyMissing(provider, ["vision"]) : null),
+		});
+		let seenReader: unknown = "unset";
+		let seenExtractor: unknown = "unset";
+		sweepOverride.current = async (_testId, mode, deps) => {
+			seenReader = deps.engines.reader;
+			seenExtractor = deps.engines.extractor;
+			return { ok: true, mode, points: 0, leftOut: 0, coverage: emptyCoverage() };
+		};
+		try {
+			await runner.runJob(job.id, { testId: "test_1", folder: "C:/materials" });
+		} finally {
+			sweepOverride.current = undefined;
+		}
+
+		assert.equal(seenReader, undefined, "no reader engine reaches the sweep");
+		assert.ok(seenExtractor, "the extractor engine is unaffected");
+		assert.equal(jobStore.getJob(job.id)!.status, "done");
 	});
 });
 

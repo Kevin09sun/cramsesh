@@ -17,6 +17,9 @@
  * (prompts/testprep/10-doctrine.md).
  */
 
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { Type } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { explainInputBase, explainInputProblems } from "../../core/question-core.ts";
@@ -30,7 +33,9 @@ import { readTool } from "./read.ts";
 import { lsTool } from "./ls.ts";
 import { findTool } from "./find.ts";
 import { grepTool } from "./grep.ts";
-import { jobTools, type JobToolContext } from "./jobs.ts";
+import { dispatchJob, jobTools, type JobToolContext } from "./jobs.ts";
+import { resolveSourcePath } from "./fs-shared.ts";
+import { comparisonPath, resolvePolicy } from "./file-access.ts";
 import { tutorWebTools } from "./web.ts";
 
 /** The storage port this toolset closes over — the three test-record
@@ -41,6 +46,8 @@ export interface TestPrepStore {
 	get(id: string): TestRecord | null;
 	savePlan(id: string, draft: PlanDraftSection[], confirm: boolean): TestRecord;
 	recordResult(id: string, pointId: string, result: AnswerResult, chatId: string): TestRecord;
+	/** Record the materials folder a sweep reads (test material sweep). */
+	setFolder(id: string, folder: string): TestRecord;
 }
 
 /** The record-reading context the gates need (the practice-tools idiom). */
@@ -49,9 +56,10 @@ export interface TestPrepToolContext {
 	testId: string;
 	tests: TestPrepStore;
 	/** THE RARELY-NEEDED SET (the practice-tools idiom, 2026-11-10): the
-	 *  research + pdf jobs, injected by the composition root. Outlines and
-	 *  slides are usually PDFs, so the pdf job matters here. Absent (tests,
-	 *  wiring bugs) = absent from the registry. */
+	 *  research + pdf + sweep jobs, injected by the composition root. The
+	 *  sweep job reads the materials folder and proposes the plan; pdf
+	 *  remains for ad-hoc reads. Absent (tests, wiring bugs) = absent from
+	 *  the registry. */
 	jobs?: JobToolContext;
 	/** Direct web tools (2026-11-12): the live search provider seam. Present
 	 *  = web_search/web_fetch are registered (behind the settings `web`
@@ -108,7 +116,7 @@ const planPointInputObject = Type.Object({
 	),
 	text: Type.String({ description: "REQUIRED — one individually testable item." }),
 	source: Type.String({
-		description: "REQUIRED — the outline line or slide this point came from, so the learner can audit coverage.",
+		description: "REQUIRED — the file and page or slide this point came from, so the learner can audit coverage.",
 	}),
 });
 
@@ -127,8 +135,7 @@ const planSectionInputObject = Type.Object({
 
 export const proposePlanInputObject = Type.Object({
 	sections: Type.Array(planSectionInputObject, {
-		description:
-			"REQUIRED — sections from the outline's headings, each with the individual points the test covers.",
+		description: "REQUIRED — sections, each with the individual points the test covers.",
 	}),
 });
 
@@ -139,8 +146,8 @@ function proposePlanTool(ctx: TestPrepToolContext): AgentTool<typeof proposePlan
 		name: "propose_plan",
 		label: "propose_plan",
 		description:
-			"Propose (or revise) the test plan for learner review: sections from the outline's headings, each holding " +
-			"the individual points the test covers, every point carrying the outline line or slide it came from. " +
+			"Propose (or revise) the test plan for learner review: sections, each holding " +
+			"the individual points the test covers, every point carrying the file and page or slide it came from. " +
 			"Validates that every section has a title and at least one point, and that every point has text. Saves the " +
 			"plan UNCONFIRMED and ends your move: say nothing further that assumes scope, wait for the learner to review " +
 			"and confirm. Call it again whenever the learner asks for changes — including after confirmation; a revision " +
@@ -332,14 +339,105 @@ function recordResultTool(ctx: TestPrepToolContext): AgentTool<typeof recordResu
 	};
 }
 
+// ─── sweep_materials (test material sweep) ──────────────────────────────────
+
+export const sweepMaterialsInputObject = Type.Object({
+	folder: Type.String({
+		// minLength is load-bearing: resolveSourcePath("") means the HOME
+		// directory, so an empty string must never reach the resolver.
+		minLength: 1,
+		description:
+			"REQUIRED — the materials folder the learner attached, exactly as they gave it (absolute or home-relative).",
+	}),
+});
+
+/** Same path, case-insensitively on Windows (where drive casing varies). */
+function samePath(a: string, b: string): boolean {
+	const left = comparisonPath(a);
+	const right = comparisonPath(b);
+	return process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
+}
+
+const SWEEP_MATERIALS_TEXT =
+	"Reading every file in the folder now. End your turn; the plan arrives when the sweep finishes.";
+
+function sweepMaterialsTool(
+	ctx: TestPrepToolContext,
+	jobs: JobToolContext,
+): AgentTool<typeof sweepMaterialsInputObject> {
+	return {
+		name: "sweep_materials",
+		label: "sweep_materials",
+		description:
+			"Read every file in a materials folder the learner attached and build this test's plan from it. The sweep " +
+			"runs in the background; the plan arrives as a new message and is saved UNCONFIRMED for the learner to " +
+			"review. Pass the folder exactly as the learner gave it. Refused when this test already has a plan — " +
+			"materials added later are read with the Re-sweep folder button on the test page.",
+		parameters: sweepMaterialsInputObject,
+		prepareArguments: (args: unknown) => healEncodedArguments(args, sweepMaterialsInputObject) as never,
+		executionMode: "sequential",
+		execute: async (toolCallId, input) => {
+			const test = ctx.tests.get(ctx.testId);
+			if (!test) return invalidInputResult("sweep_materials", [`test "${ctx.testId}" was not found`]);
+			// Review Focus 1: a test with a plan (or a sweep already reading)
+			// never starts a second first-sweep over it. The two refusals are
+			// distinct so the model tells the learner the right next step.
+			if (test.sections.length > 0) {
+				return invalidInputResult("sweep_materials", [
+					"this test already has a plan — materials added later are read with the Re-sweep folder button on the test page",
+				]);
+			}
+			if (test.sweep?.status === "running") {
+				return invalidInputResult("sweep_materials", [
+					"a sweep is already running for this test — wait for it to finish",
+				]);
+			}
+
+			// Empty input would resolve to the home directory (ls's default) —
+			// a first sweep must never read the learner's entire home.
+			if (!input.folder.trim()) {
+				return invalidInputResult("sweep_materials", [
+					"folder is required — pass the folder the learner attached",
+				]);
+			}
+
+			// Same resolution/denial as ls (resolveSourcePath), then the
+			// directory must actually be readable.
+			let folder: string;
+			try {
+				folder = resolveSourcePath(input.folder, resolvePolicy());
+				// Home or a drive/filesystem root is the same mistake with a
+				// non-empty string: refuse it with the same guidance.
+				if (samePath(folder, os.homedir()) || samePath(folder, path.parse(folder).root)) {
+					return invalidInputResult("sweep_materials", [
+						"that is your whole home folder / drive — pass the folder with the test materials",
+					]);
+				}
+				const stat = await fs.stat(folder);
+				if (!stat.isDirectory()) throw new Error("not a directory");
+				await fs.readdir(folder);
+			} catch (error) {
+				const reason = error instanceof Error ? error.message : String(error);
+				return invalidInputResult("sweep_materials", [
+					`folder not found or not a readable directory: ${input.folder} (${reason})`,
+				]);
+			}
+
+			ctx.tests.setFolder(ctx.testId, folder);
+			dispatchJob(jobs, "sweep", toolCallId, SWEEP_MATERIALS_TEXT, { testId: ctx.testId, folder });
+			return textResult(SWEEP_MATERIALS_TEXT);
+		},
+	};
+}
+
 // ─── the registry ───────────────────────────────────────────────────────────
 
 /** The test-prep toolset (the test-prep agent's whole registry). */
 export function testPrepTools(ctx: TestPrepToolContext, enabled?: EnabledTools): Record<string, AgentTool<any>> {
 	// THE RARELY-NEEDED SET (the practice-tools idiom): the research + pdf
 	// jobs (demo/visual stay teach-only), absent when no jobs context was
-	// injected. Outlines and slides are usually PDFs, so the pdf job is how
-	// the agent reads the folder it was pointed at.
+	// injected. The sweep job (below) reads the materials folder to build the
+	// initial plan; pdf remains for ad-hoc reads.
 	const jobs = ctx.jobs ? jobTools(ctx.jobs) : null;
 	// healToolRecord — the standard argument heal over the WHOLE registry
 	// (the practice/teacher/prober convention). The per-tool prepareArguments
@@ -355,6 +453,9 @@ export function testPrepTools(ctx: TestPrepToolContext, enabled?: EnabledTools):
 		grep: grepTool,
 		...(jobs?.research ? { research: jobs.research } : {}),
 		...(jobs ? { pdf: jobs.pdf! } : {}),
+		// The material sweep (test prep, 2026-11-20) runs as a background job:
+		// present only when the jobs context is wired, like pdf.
+		...(ctx.jobs ? { sweep_materials: sweepMaterialsTool(ctx, ctx.jobs) } : {}),
 		// Direct web tools (2026-11-12): the settings `web` switch is the
 		// only toggle this registry reads. Absent seam (not wired) = no web
 		// tools; with no search key both still register — the provider

@@ -4,6 +4,7 @@ import { useContext } from "react";
 import { CheckIcon, SettingsIcon, XIcon } from "lucide-react";
 import { JobsContext } from "@/components/jobs-context";
 import { ChatActionsContext } from "@/components/chat";
+import { PlanReviewCard } from "@/components/test-prep/plan-review-card";
 import { isModelsRefusal, isProviderKeyRefusal, type ArtifactPartProps, type JobKind, type JobRecord } from "@/src/core";
 import { BrailleSpinner } from "@/components/braille-spinner";
 
@@ -25,6 +26,7 @@ const KIND_LABEL: Record<JobKind, string> = {
 	visual: "Figure agent",
 	pdf: "PDF reader",
 	ap_index: "Indexing released papers",
+	sweep: "Reading your materials",
 };
 
 /**
@@ -35,6 +37,29 @@ const KIND_LABEL: Record<JobKind, string> = {
 export function ApIndexJobCard({ part }: ArtifactPartProps) {
 	if (part.state !== "output-available") return null;
 	return <DispatchCard toolCallId={part.toolCallId} kind="ap_index" />;
+}
+
+/**
+ * The sweep dispatch box (test material sweep): while the sweep job runs the
+ * ack drives a live DispatchCard ("Reading your materials"). Once the job
+ * settles, the sweep has written the saved test plan — the SAME plan-review
+ * artifact propose_plan renders mounts here (coverage line, editor, Left out,
+ * Confirm), so the swept plan is reviewable in the chat. A refused job keeps
+ * the dispatch refusal card: its Set up models / Add a key deep-link is the
+ * only actionable surface.
+ */
+export function SweepMaterialsJobCard({ part }: ArtifactPartProps) {
+	const jobs = useContext(JobsContext);
+	if (part.state !== "output-available") return null;
+	const job = jobs.find((j) => j.toolCallId === part.toolCallId) ?? null;
+	const refused =
+		job !== null &&
+		job.status === "error" &&
+		(isModelsRefusal(job.error) || isProviderKeyRefusal(job.error));
+	if (!job || job.status === "running" || refused) {
+		return <DispatchCard toolCallId={part.toolCallId} kind="sweep" />;
+	}
+	return <PlanReviewCard part={part} />;
 }
 
 export function DispatchCard({ toolCallId, kind }: { toolCallId: string; kind: JobKind }) {

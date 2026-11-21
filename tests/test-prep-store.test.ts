@@ -236,3 +236,279 @@ describe("test store (test prep, 2026-11-10)", () => {
 		off();
 	});
 });
+
+describe("test store — material sweep (2026-11-20)", () => {
+	it("saveSweepPlan saves unconfirmed sections and leftOut", () => {
+		const test = testStore.create("Sweep plan");
+		const saved = testStore.saveSweepPlan(test.id, draft(), [
+			{ text: "Chit-chat", source: "notes.md", reason: "not exam material" },
+			{ id: "lo_keep", text: "Off-topic", source: "notes.md", reason: "aside", suggestedSection: "Section A" },
+		]);
+
+		assert.equal(saved.planConfirmed, false, "the draft awaits the learner's approval");
+		assert.deepEqual(
+			saved.sections.map((section) => section.title),
+			["Section A"],
+		);
+		assert.deepEqual(
+			saved.sections[0]!.points.map((point) => [point.text, point.status]),
+			[
+				["Point one", "unchecked"],
+				["Point two", "unchecked"],
+			],
+		);
+		assert.match(saved.sections[0]!.points[0]!.id, /^test_[0-9a-z]+_[0-9a-f]{8}$/);
+
+		const leftOut = saved.leftOut!;
+		assert.equal(leftOut.length, 2);
+		assert.match(leftOut[0]!.id, /^test_[0-9a-z]+_[0-9a-f]{8}$/, "a missing id is minted");
+		assert.equal(leftOut[0]!.reason, "not exam material");
+		assert.equal(leftOut[1]!.id, "lo_keep", "an explicit id is kept");
+		assert.equal(leftOut[1]!.suggestedSection, "Section A");
+
+		assert.deepEqual(testStore.get(test.id), saved);
+	});
+
+	it("saveSweepPlan refuses when a plan exists", () => {
+		const test = testStore.create("Already planned");
+		testStore.saveSweepPlan(test.id, draft(), []);
+
+		assert.throws(
+			() => testStore.saveSweepPlan(test.id, draft(), []),
+			{ message: "plan already exists" },
+		);
+	});
+
+	it("updateSweep requires startedAt to start a sweep and merges later patches", () => {
+		const test = testStore.create("Sweep progress");
+		assert.throws(
+			() => testStore.updateSweep(test.id, { status: "running" }),
+			{ message: "sweep not started" },
+		);
+
+		const started = testStore.updateSweep(test.id, {
+			status: "running",
+			startedAt: "2026-11-20T10:00:00.000Z",
+			activity: "reading ch1.pdf",
+			fileHashes: {},
+		});
+		assert.equal(started.sweep!.startedAt, "2026-11-20T10:00:00.000Z");
+		assert.equal(started.sweep!.activity, "reading ch1.pdf");
+
+		const done = testStore.updateSweep(test.id, {
+			status: "done",
+			finishedAt: "2026-11-20T10:05:00.000Z",
+		});
+		assert.equal(done.sweep!.status, "done");
+		assert.equal(done.sweep!.startedAt, "2026-11-20T10:00:00.000Z", "startedAt is kept");
+		assert.equal(done.sweep!.activity, "reading ch1.pdf", "unpatched fields stay");
+		assert.equal(testStore.get(test.id)!.sweep!.status, "done");
+	});
+
+	it("setFolder persists the folder", () => {
+		const test = testStore.create("Folder test");
+		const moved = testStore.setFolder(test.id, "Math");
+
+		assert.equal(moved.folder, "Math");
+		assert.equal(testStore.get(test.id)!.folder, "Math");
+	});
+
+	it("resolveAdditions adds accepted as unchecked, dropped go to leftOut, pendingAdditions cleared", () => {
+		const test = testStore.create("Resweep");
+		const base = testStore.saveSweepPlan(
+			test.id,
+			[{ title: "Section A", points: [{ text: "Existing", source: "notes.md" }] }],
+			[],
+		);
+		const sectionId = base.sections[0]!.id;
+		const existing = base.sections[0]!.points[0]!;
+		testStore.savePlan(
+			test.id,
+			[
+				{
+					id: sectionId,
+					title: "Section A",
+					points: [{ id: existing.id, text: existing.text, source: existing.source }],
+				},
+			],
+			true,
+		);
+
+		testStore.setPendingAdditions(test.id, {
+			sections: [
+				{
+					title: "Section A",
+					points: [
+						{ text: "Accepted A", source: "ch1.pdf" },
+						{ text: "Dropped A", source: "ch1.pdf" },
+					],
+				},
+				{ title: "Section B", points: [{ text: "Accepted B", source: "ch2.pdf" }] },
+			],
+			leftOut: [{ id: "lo_noise", text: "Noise", source: "ch1.pdf", reason: "not exam material" }],
+		});
+
+		// "9:9" names no pending point: unknown keys are ignored.
+		const resolved = testStore.resolveAdditions(test.id, ["0:0", "1:0", "9:9"]);
+
+		const sectionA = resolved.sections.find((section) => section.title === "Section A")!;
+		assert.deepEqual(
+			sectionA.points.map((point) => point.text),
+			["Existing", "Accepted A"],
+		);
+		const added = sectionA.points[1]!;
+		assert.equal(added.status, "unchecked");
+		assert.deepEqual(added.history, []);
+		assert.equal(sectionA.points[0]!.id, existing.id, "the existing point is unchanged");
+		assert.equal(sectionA.points[0]!.status, "unchecked");
+		assert.deepEqual(sectionA.points[0]!.history, []);
+
+		const sectionB = resolved.sections.find((section) => section.title === "Section B")!;
+		assert.deepEqual(
+			sectionB.points.map((point) => point.text),
+			["Accepted B"],
+		);
+
+		assert.equal(resolved.pendingAdditions, undefined, "the review is cleared");
+		assert.deepEqual(
+			resolved.leftOut!.map((item) => item.text).sort(),
+			["Dropped A", "Noise"],
+		);
+		const droppedA = resolved.leftOut!.find((item) => item.text === "Dropped A")!;
+		assert.equal(droppedA.reason, "dropped by you");
+		assert.equal(
+			droppedA.suggestedSection,
+			"Section A",
+			"a dropped point remembers the section it was proposed for",
+		);
+		assert.ok(resolved.leftOut!.every((item) => item.id.length > 0), "every left-out item has an id");
+	});
+
+	it("resolveAdditions with no pending additions throws", () => {
+		const test = testStore.create("No pending");
+
+		assert.throws(
+			() => testStore.resolveAdditions(test.id, []),
+			{ message: "no pending additions" },
+		);
+	});
+
+	it("promoteLeftOut keeps planConfirmed true and removes the item", () => {
+		const test = testStore.create("Promote");
+		const planned = testStore.saveSweepPlan(test.id, draft(), [
+			{ text: "Maybe useful", source: "notes.md", reason: "borderline", suggestedSection: "Section A" },
+			{ text: "Unknown section", source: "notes.md", reason: "borderline", suggestedSection: "Nowhere" },
+		]);
+		const section = planned.sections[0]!;
+		const confirmed = testStore.savePlan(
+			test.id,
+			[
+				{
+					id: section.id,
+					title: section.title,
+					points: section.points.map((point) => ({ id: point.id, text: point.text, source: point.source })),
+				},
+			],
+			true,
+		);
+		const [named, unknown] = confirmed.leftOut!;
+
+		const promoted = testStore.promoteLeftOut(test.id, named!.id);
+		assert.equal(promoted.planConfirmed, true, "promotion does not unconfirm the plan");
+		assert.equal(
+			promoted.leftOut!.some((item) => item.id === named!.id),
+			false,
+			"the promoted item leaves leftOut",
+		);
+		const appended = promoted.sections[0]!.points[promoted.sections[0]!.points.length - 1]!;
+		assert.equal(appended.text, "Maybe useful");
+		assert.equal(appended.source, "notes.md");
+		assert.equal(appended.status, "unchecked");
+		assert.deepEqual(appended.history, []);
+
+		// An unknown suggested section falls back to the first section instead
+		// of creating a new one.
+		const fallback = testStore.promoteLeftOut(test.id, unknown!.id);
+		assert.equal(fallback.sections.length, 1);
+		const last = fallback.sections[0]!.points[fallback.sections[0]!.points.length - 1]!;
+		assert.equal(last.text, "Unknown section");
+		assert.equal(fallback.leftOut!.length, 0);
+
+		assert.throws(
+			() => testStore.promoteLeftOut(test.id, "lo_never"),
+			{ message: "unknown left-out item" },
+		);
+	});
+
+	it("legacy records without new fields still load", () => {
+		const created = testStore.create("Legacy");
+		const legacy = testStore.get(created.id)!;
+		assert.equal("leftOut" in legacy, false);
+		assert.equal("sweep" in legacy, false);
+		assert.equal("pendingAdditions" in legacy, false);
+
+		// Present-but-malformed optional fields read as absent, and the file is
+		// never rewritten on read.
+		const testsDir = path.join(TMP_DATA, "tests");
+		const file = path.join(testsDir, "test_malformed_optional.json");
+		const bytes = JSON.stringify({
+			id: "test_malformed_optional",
+			title: "Malformed optional fields",
+			createdAt: "2026-11-20T00:00:00.000Z",
+			updatedAt: "2026-11-20T00:00:00.000Z",
+			planConfirmed: false,
+			sections: [],
+			version: 1,
+			leftOut: "not an array",
+			sweep: [],
+			pendingAdditions: 7,
+		});
+		fs.writeFileSync(file, bytes);
+
+		const read = testStore.get("test_malformed_optional")!;
+		assert.equal(read.title, "Malformed optional fields");
+		assert.equal("leftOut" in read, false);
+		assert.equal("sweep" in read, false);
+		assert.equal("pendingAdditions" in read, false);
+		assert.equal(fs.readFileSync(file, "utf-8"), bytes, "the file is not rewritten on read");
+	});
+
+	it("every sweep mutation announces tests-changed after the write", () => {
+		let announces = 0;
+		const off = subscribe((event) => {
+			if (event.type === "tests-changed") announces++;
+		});
+
+		const test = testStore.create("Sweep events");
+		assert.equal(announces, 1, "create announces");
+
+		testStore.setFolder(test.id, "Math");
+		assert.equal(announces, 2, "setFolder announces");
+
+		testStore.updateSweep(test.id, {
+			status: "running",
+			startedAt: "2026-11-20T00:00:00.000Z",
+			fileHashes: {},
+		});
+		assert.equal(announces, 3, "updateSweep announces");
+
+		const planned = testStore.saveSweepPlan(test.id, draft(), [
+			{ text: "Noise", source: "notes.md", reason: "aside" },
+		]);
+		assert.equal(announces, 4, "saveSweepPlan announces");
+
+		testStore.setPendingAdditions(test.id, {
+			sections: [{ title: "Section A", points: [{ text: "New", source: "n.md" }] }],
+			leftOut: [],
+		});
+		assert.equal(announces, 5, "setPendingAdditions announces");
+
+		testStore.resolveAdditions(test.id, ["0:0"]);
+		assert.equal(announces, 6, "resolveAdditions announces");
+
+		testStore.promoteLeftOut(test.id, planned.leftOut![0]!.id);
+		assert.equal(announces, 7, "promoteLeftOut announces");
+
+		off();
+	});
+});

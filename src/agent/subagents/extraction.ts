@@ -800,6 +800,29 @@ export function callUsage(usage: Usage): CallUsage {
 	};
 }
 
+/** Chunk the notes text under the same budget the chat path uses
+ * (owner, 2026-09-28: the whole-file-in-one-call design collapsed a
+ * weak model — 26 propositions, structure bleed mid-emission).
+ * Greedy by line, chars/4 like every other estimate in the app; a
+ * single over-budget line rides alone (never split a line).
+ * Module-level since Task 5 of the test-material sweep reuses it. */
+export function chunkNotes(text: string, budget: number): string[] {
+	if (text.trim().length === 0) return [];
+	const out: string[] = [];
+	let current = "";
+	for (const line of text.split("\n")) {
+		const candidate = current.length === 0 ? line : current + "\n" + line;
+		if (current.length > 0 && Math.ceil(candidate.length / 4) > budget) {
+			out.push(current);
+			current = line;
+		} else {
+			current = candidate;
+		}
+	}
+	if (current.trim().length > 0) out.push(current);
+	return out;
+}
+
 export function createExtractionPipeline(deps: ExtractionPipelineDeps): ExtractionPipeline {
 	const { chatStore, graphStore } = deps;
 	// Stage-engine resolution: a direct test value wins; otherwise the
@@ -1254,28 +1277,6 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 	function notesView(input: { filePath: string; text: string; part?: { i: number; n: number } }): string {
 		const part = input.part && input.part.n > 1 ? ` (part ${input.part.i}/${input.part.n})` : "";
 		return `SOURCE (the author's personal notes): ${input.filePath}${part}\n\n${input.text}`;
-	}
-
-	/** Chunk the notes text under the same budget the chat path uses
-	 * (owner, 2026-09-28: the whole-file-in-one-call design collapsed a
-	 * weak model — 26 propositions, structure bleed mid-emission).
-	 * Greedy by line, chars/4 like every other estimate in the app; a
-	 * single over-budget line rides alone (never split a line). */
-	function chunkNotes(text: string, budget: number): string[] {
-		if (text.trim().length === 0) return [];
-		const out: string[] = [];
-		let current = "";
-		for (const line of text.split("\n")) {
-			const candidate = current.length === 0 ? line : current + "\n" + line;
-			if (current.length > 0 && Math.ceil(candidate.length / 4) > budget) {
-				out.push(current);
-				current = line;
-			} else {
-				current = candidate;
-			}
-		}
-		if (current.trim().length > 0) out.push(current);
-		return out;
 	}
 
 	async function notesExtract(

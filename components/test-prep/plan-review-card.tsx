@@ -3,8 +3,17 @@
 import { useContext, useEffect, useState } from "react";
 
 import { ChatActionsContext } from "@/components/chat";
+import { CoverageLine } from "@/components/test-prep/coverage-line";
+import { LeftOutList } from "@/components/test-prep/left-out-list";
 import { PlanEditor } from "@/components/test-prep/plan-editor";
-import type { ArtifactPartProps, LhViewMessage, PlanDraftSection, TestRecord } from "@/src/core";
+import { promoteIntoDraft } from "@/src/core";
+import type {
+	ArtifactPartProps,
+	LeftOutItem,
+	LhViewMessage,
+	PlanDraftSection,
+	TestRecord,
+} from "@/src/core";
 
 /**
  * The plan-review card (test prep, 2026-11-10): the `propose_plan` artifact.
@@ -36,11 +45,18 @@ import type { ArtifactPartProps, LhViewMessage, PlanDraftSection, TestRecord } f
  */
 
 /** The record shape both records share — the fields this card renders. */
-type PlanRecord = Pick<TestRecord, "id" | "title" | "planConfirmed" | "sections">;
+type PlanRecord = Pick<
+	TestRecord,
+	"id" | "title" | "planConfirmed" | "sections" | "leftOut" | "sweep"
+>;
 
 export interface PlanReviewConfig {
 	/** The tool whose settled parts are the proposals. */
 	toolName: string;
+	/** Every tool part that supersedes an earlier proposal. Defaults to
+	 *  [toolName]; Test prep adds the sweep, which proposes a plan without
+	 *  calling propose_plan. */
+	proposalToolNames?: string[];
 	/** The chat record field carrying the linked record's id. */
 	chatKey: "testId" | "apCourseId";
 	/** e.g. "/api/tests" — the record's plan route base. */
@@ -68,6 +84,9 @@ export interface PlanReviewConfig {
 
 export const TEST_PREP_PLAN_CONFIG: PlanReviewConfig = {
 	toolName: "propose_plan",
+	// A completed material sweep writes the same saved plan, so it is a
+	// proposal too: an earlier propose_plan card must collapse under it.
+	proposalToolNames: ["propose_plan", "sweep_materials"],
 	chatKey: "testId",
 	apiBase: "/api/tests",
 	pageBase: "/tests",
@@ -92,9 +111,10 @@ export const TEST_PREP_PLAN_CONFIG: PlanReviewConfig = {
  *  has no view (tests/previews keep the card interactive). */
 function latestProposalCallId(
 	messages: readonly LhViewMessage[] | undefined,
-	toolName: string,
+	toolNames: readonly string[],
 ): string | null {
 	if (!messages) return null;
+	const types = new Set(toolNames.map((name) => `tool-${name}`));
 	for (let messageIndex = messages.length - 1; messageIndex >= 0; messageIndex--) {
 		const parts = messages[messageIndex]?.parts ?? [];
 		for (let partIndex = parts.length - 1; partIndex >= 0; partIndex--) {
@@ -102,7 +122,8 @@ function latestProposalCallId(
 			// Only a SETTLED call saved a revision; a failed/interrupted call
 			// (output-error, input-available) never superseded the record.
 			if (
-				candidate?.type === `tool-${toolName}` &&
+				candidate?.type !== undefined &&
+				types.has(candidate.type) &&
 				candidate.state === "output-available" &&
 				typeof candidate.toolCallId === "string"
 			) {
@@ -127,6 +148,16 @@ function errorText(reason: unknown, fallback: string): string {
 	return reason instanceof Error && reason.message !== "" ? reason.message : fallback;
 }
 
+/** Does the draft being saved still hold this promoted item as a point? A
+ *  promotion only prunes it from Left out when the point survived to save. */
+function draftContains(sections: PlanDraftSection[], item: LeftOutItem): boolean {
+	const text = item.text.trim();
+	const source = item.source.trim();
+	return sections.some((section) =>
+		section.points.some((point) => point.text.trim() === text && point.source.trim() === source),
+	);
+}
+
 function countLine(config: PlanReviewConfig, sections: number, points: number): string {
 	return `${sections} ${sections === 1 ? config.sectionLabel : `${config.sectionLabel}s`} · ${points} ${
 		points === 1 ? config.pointLabel : `${config.pointLabel}s`
@@ -144,6 +175,10 @@ export function PlanReviewCard({
 	const [loading, setLoading] = useState(true);
 	const [saving, setSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	/** The editor's draft lives here so Promote can insert into it. */
+	const [draft, setDraft] = useState<PlanDraftSection[] | null>(null);
+	/** Left-out items the learner promoted or dismissed in this card. */
+	const [hiddenLeftOut, setHiddenLeftOut] = useState<string[]>([]);
 
 	useEffect(() => {
 		if (!chatId) {
@@ -166,7 +201,10 @@ export function PlanReviewCard({
 				const recordResponse = await fetch(`${config.apiBase}/${id}/plan`);
 				if (!recordResponse.ok) throw new Error(config.loadError);
 				const loaded = (await recordResponse.json()) as PlanRecord;
-				if (alive) setRecord(loaded);
+				if (alive) {
+					setRecord(loaded);
+					setDraft(toDraft(loaded.sections));
+				}
 			} catch (reason) {
 				if (alive) setError(errorText(reason, config.loadError));
 			} finally {
@@ -178,8 +216,45 @@ export function PlanReviewCard({
 		};
 	}, [chatId, config]);
 
-	const latestProposalId = latestProposalCallId(actions?.messages, config.toolName);
+	// A sweep writes the proposal when it finishes: while it is still running
+	// and no sections exist yet, poll the plan so the card fills in without a
+	// manual reload. Once sections exist (a re-sweep over a confirmed plan) the
+	// card must NOT poll — a poll would wipe the learner's in-progress edits.
+	const sweepRunning = record?.sweep?.status === "running" && record.sections.length === 0;
+	useEffect(() => {
+		if (!linkedId || !sweepRunning) return;
+		let alive = true;
+		const timer = setInterval(async () => {
+			try {
+				const response = await fetch(`${config.apiBase}/${linkedId}/plan`);
+				if (!response.ok || !alive) return;
+				const loaded = (await response.json()) as PlanRecord;
+				if (!alive) return;
+				setRecord(loaded);
+				setDraft(toDraft(loaded.sections));
+			} catch {
+				// Transient poll failure: keep the last good record.
+			}
+		}, 2000);
+		return () => {
+			alive = false;
+			clearInterval(timer);
+		};
+	}, [linkedId, sweepRunning, config.apiBase]);
+
+	const latestProposalId = latestProposalCallId(
+		actions?.messages,
+		config.proposalToolNames ?? [config.toolName],
+	);
 	const isLatestProposal = latestProposalId === null || latestProposalId === part.toolCallId;
+
+	/** Move one left-out item into its suggested section of the draft and
+	 *  hide it locally; the next save prunes it from the stored list. */
+	function promote(item: LeftOutItem): void {
+		if (!draft) return;
+		setDraft(promoteIntoDraft(draft, item));
+		setHiddenLeftOut((current) => [...current, item.id]);
+	}
 
 	async function save(sections: PlanDraftSection[], confirm: boolean): Promise<void> {
 		if (!linkedId) return;
@@ -187,10 +262,19 @@ export function PlanReviewCard({
 		setError(null);
 		try {
 			const draft = config.prepareDraft ? config.prepareDraft(sections) : sections;
+			const body: Record<string, unknown> = { sections: draft, confirm };
+			if (record?.leftOut !== undefined) {
+				// A promoted item leaves Left out only when the point it became
+				// is actually in the saved draft; if the learner deleted it
+				// again, the item stays recoverable.
+				body.leftOut = record.leftOut.filter(
+					(item) => !hiddenLeftOut.includes(item.id) || !draftContains(draft, item),
+				);
+			}
 			const response = await fetch(`${config.apiBase}/${linkedId}/plan`, {
 				method: "PUT",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ sections: draft, confirm }),
+				body: JSON.stringify(body),
 			});
 			if (!response.ok) {
 				const payload = (await response.json().catch(() => null)) as {
@@ -210,6 +294,8 @@ export function PlanReviewCard({
 			}
 			const saved = (await response.json()) as PlanRecord;
 			setRecord(saved);
+			setDraft(toDraft(saved.sections));
+			setHiddenLeftOut([]);
 			if (confirm) actions?.sendText(config.confirmMessage);
 		} catch (reason) {
 			setError(errorText(reason, config.saveError));
@@ -266,20 +352,41 @@ export function PlanReviewCard({
 		);
 	}
 
+	const sweeping = record.sweep?.status === "running" && record.sections.length === 0;
+	const sweepFailed = record.sweep?.status === "error" && record.sections.length === 0;
+	const visibleLeftOut = (record.leftOut ?? []).filter((item) => !hiddenLeftOut.includes(item.id));
+
 	return (
 		<div data-testid="plan-review-card" className="my-1 rounded-xl border bg-card p-4">
 			<div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
 				{config.proposedTitle}
 			</div>
-			<p className="mb-3 text-sm text-muted-foreground">{config.instruction}</p>
-			<PlanEditor
-				initial={toDraft(record.sections)}
-				onSave={save}
-				saving={saving}
-				submitLabel={config.submitLabel}
-				sectionLabel={config.sectionLabel}
-				pointLabel={config.pointLabel}
-			/>
+			{sweeping ? (
+				<p data-testid="sweep-activity" className="text-sm text-muted-foreground">
+					{record.sweep?.activity}
+				</p>
+			) : sweepFailed ? (
+				<p data-testid="sweep-error" className="text-sm text-red-500">
+					{record.sweep?.error ?? config.unavailable}
+				</p>
+			) : (
+				<>
+					<p className="mb-3 text-sm text-muted-foreground">{config.instruction}</p>
+					<CoverageLine coverage={record.sweep?.coverage} />
+					{draft && (
+						<PlanEditor
+							draft={draft}
+							onDraftChange={setDraft}
+							onSave={save}
+							saving={saving}
+							submitLabel={config.submitLabel}
+							sectionLabel={config.sectionLabel}
+							pointLabel={config.pointLabel}
+						/>
+					)}
+					<LeftOutList items={visibleLeftOut} onPromote={promote} />
+				</>
+			)}
 			{error && <p className="mt-2 text-sm text-red-500">{error}</p>}
 		</div>
 	);

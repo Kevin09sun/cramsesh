@@ -39,13 +39,21 @@ function cloneDraft(sections: PlanDraftSection[]): PlanDraftSection[] {
 
 export function PlanEditor({
 	initial,
+	draft,
+	onDraftChange,
 	onSave,
 	saving = false,
 	submitLabel = "Confirm plan",
 	sectionLabel = "section",
 	pointLabel = "point",
 }: {
-	initial: PlanDraftSection[];
+	/** Uncontrolled seed (the readiness view's "Edit plan"). */
+	initial?: PlanDraftSection[];
+	/** Controlled draft: when present the editor renders exactly this and
+	 *  reports every change through onDraftChange. The plan-review card lifts
+	 *  its draft this way so Promote can insert into it. */
+	draft?: PlanDraftSection[];
+	onDraftChange?: (draft: PlanDraftSection[]) => void;
 	onSave: (sections: PlanDraftSection[], confirm: boolean) => void;
 	saving?: boolean;
 	/** The action's label — "Confirm plan" on a proposal, "Save plan" when
@@ -57,10 +65,19 @@ export function PlanEditor({
 	pointLabel?: string;
 }) {
 	const sectionWord = capitalise(sectionLabel);
-	const [sections, setSections] = useState<PlanDraftSection[]>(() => cloneDraft(initial));
+	const [internalSections, setInternalSections] = useState<PlanDraftSection[]>(() =>
+		cloneDraft(draft ?? initial ?? []),
+	);
+	const sections = draft ?? internalSections;
+
+	function changeSections(update: (current: PlanDraftSection[]) => PlanDraftSection[]): void {
+		const next = update(sections);
+		if (draft === undefined) setInternalSections(next);
+		else onDraftChange?.(next);
+	}
 
 	function editSection(index: number, update: (section: PlanDraftSection) => PlanDraftSection): void {
-		setSections((current) => current.map((section, i) => (i === index ? update(section) : section)));
+		changeSections((current) => current.map((section, i) => (i === index ? update(section) : section)));
 	}
 
 	function editPoint(
@@ -93,7 +110,7 @@ export function PlanEditor({
 							variant="ghost"
 							size="icon-sm"
 							aria-label={`Remove ${sectionLabel} ${sectionIndex + 1}`}
-							onClick={() => setSections((current) => current.filter((_, i) => i !== sectionIndex))}
+							onClick={() => changeSections((current) => current.filter((_, i) => i !== sectionIndex))}
 						>
 							<XIcon className="size-3.5" />
 						</Button>
@@ -145,10 +162,13 @@ export function PlanEditor({
 						size="sm"
 						className="mt-1"
 						onClick={() =>
-							editSection(sectionIndex, (current) => ({
-								...current,
-								points: [...current.points, { text: "", source: "" }],
-							}))
+							changeSections((current) =>
+								current.map((section, i) =>
+									i === sectionIndex
+										? { ...section, points: [...section.points, { text: "", source: "" }] }
+										: section,
+								),
+							)
 						}
 					>
 						Add {pointLabel}
@@ -162,7 +182,7 @@ export function PlanEditor({
 					variant="outline"
 					size="sm"
 					onClick={() =>
-						setSections((current) => [...current, { title: "", points: [{ text: "", source: "" }] }])
+						changeSections((current) => [...current, { title: "", points: [{ text: "", source: "" }] }])
 					}
 				>
 					Add {sectionLabel}

@@ -29,7 +29,7 @@ Sessions are saved locally, including earlier messages when context is compacted
 
 1. Create a [Deepgram API key](https://console.deepgram.com/) with the **Member role or higher**, required for [short-lived token minting](https://developers.deepgram.com/reference/auth/tokens/grant).
 2. Add it under **Settings → Providers → Dictation** and choose the language below the key. **Multilingual** supports automatic recognition and mixed-language speech.
-3. Use the microphone or **Mod+D** to start and stop. Review the text before sending. **Esc cancellation discards the pending transcript**; stop normally to keep it.
+3. Use the microphone or **Alt+M** to start and stop. Review the text before sending. **Esc cancellation discards the pending transcript**; stop normally to keep it.
 
 Audio streams from your browser directly to Deepgram using a short-lived token. A `403 Insufficient permissions` error while obtaining that token can mean the key's role is insufficient.
 

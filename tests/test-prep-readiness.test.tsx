@@ -20,7 +20,7 @@ import { afterEach, test } from "node:test";
 import { createRoot, type Root } from "react-dom/client";
 import { parseHTML } from "linkedom";
 import { ReadinessView } from "../components/test-prep/readiness-view.tsx";
-import type { ChatSummary, TestRecord } from "../src/core/index.ts";
+import type { ChatSummary, PendingAdditions, TestRecord } from "../src/core/index.ts";
 
 const dom = parseHTML("<html><body></body></html>");
 Object.assign(globalThis, {
@@ -28,11 +28,25 @@ Object.assign(globalThis, {
 	document: dom.document,
 	Element: dom.window.Element,
 	HTMLElement: dom.window.HTMLElement,
+	HTMLInputElement: dom.window.HTMLInputElement,
 	CustomEvent: dom.window.CustomEvent,
 	IS_REACT_ACT_ENVIRONMENT: true,
 	// next/link's idle-callback fallback reads `self` (the Sessions rows are Links).
 	self: globalThis,
+	// Radix's Collapsible content (the Left out lists) asks the browser for
+	// computed styles and animation frames; linkedom has neither.
+	getComputedStyle: () => ({ getPropertyValue: () => "" }),
+	requestAnimationFrame: (callback: (time: number) => void) => setTimeout(() => callback(Date.now()), 0),
+	cancelAnimationFrame: (id: number) => clearTimeout(id),
 });
+
+// linkedom does not implement native checkbox activation. Preserve click
+// semantics so React's onChange reads the toggled `checked`.
+const nativeInputClick = dom.window.HTMLInputElement.prototype.click;
+dom.window.HTMLInputElement.prototype.click = function (this: HTMLInputElement) {
+	if (this.type === "checkbox") this.checked = !this.checked;
+	nativeInputClick.call(this);
+};
 
 // SessionStarter stashes the opening message before navigating; the same-tab
 // handover needs sessionStorage (the render-new-session stub).
@@ -122,6 +136,33 @@ async function mount(
 		if (url === "/api/tests/test_1/plan" && method === "PUT") {
 			const draft = (body as { sections: TestRecord["sections"]; confirm: boolean });
 			current = { ...current, sections: draft.sections, planConfirmed: draft.confirm ? true : current.planConfirmed };
+			return Response.json(current);
+		}
+		if (url === "/api/tests/test_1/sweep" && method === "GET") {
+			return Response.json({
+				sweep: current.sweep ?? null,
+				pendingAdditions: current.pendingAdditions ?? null,
+			});
+		}
+		if (url === "/api/tests/test_1/sweep" && method === "POST") {
+			current = {
+				...current,
+				sweep: {
+					status: "running",
+					activity: "Reading your materials",
+					startedAt: "2026-11-21T12:00:00.000Z",
+					fileHashes: {},
+				},
+			};
+			return Response.json({ started: true }, { status: 202 });
+		}
+		if (url === "/api/tests/test_1/additions" && method === "POST") {
+			current = { ...current, pendingAdditions: undefined };
+			return Response.json(current);
+		}
+		if (url === "/api/tests/test_1/left-out" && method === "POST") {
+			const itemId = (body as { itemId: string }).itemId;
+			current = { ...current, leftOut: (current.leftOut ?? []).filter((item) => item.id !== itemId) };
 			return Response.json(current);
 		}
 		throw new Error(`unexpected request ${method} ${url}`);
@@ -275,4 +316,121 @@ test("New session starts the next testprep sitting through the Continue path", a
 	assert.ok(post, "New session creates a session");
 	assert.deepEqual(post!.body, { title: "Continue.", kind: "testprep", testId: "test_1" });
 	assert.deepEqual(navigated, ["/chat/chat_new"]);
+});
+
+// ─── Material sweep: re-sweep, additions, left out (2026-11-21) ─────────────
+
+const ADDITIONS: PendingAdditions = {
+	sections: [
+		{
+			title: "Membranes & transport",
+			points: [
+				{ text: "Signal transduction", source: "ch4.pdf p. 2" },
+				{ text: "Cotransport", source: "ch4.pdf p. 3" },
+			],
+		},
+		{
+			title: "Cell cycle",
+			points: [{ text: "Checkpoints", source: "ch5.pdf p. 9" }],
+		},
+	],
+	leftOut: [
+		{ id: "lo_add", text: "Chapter summary", source: "ch4.pdf p. 1", reason: "summary, not tested" },
+	],
+};
+
+async function openFirstLeftOut(): Promise<void> {
+	const trigger = [...document.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
+		button.textContent?.includes("Left out ("),
+	);
+	assert.ok(trigger, "the Left out header is a button");
+	await act(async () => trigger!.click());
+}
+
+test("Re-sweep folder is disabled without a stored folder", async () => {
+	await mount();
+
+	const button = document.querySelector<HTMLButtonElement>('[data-testid="resweep-folder"]');
+	assert.ok(button, "the header offers Re-sweep folder");
+	assert.equal(button!.disabled, true);
+	assert.equal(button!.getAttribute("title"), "This test has no stored folder");
+});
+
+test("Re-sweep folder is disabled while additions await review", async () => {
+	await mount({ test: record({ folder: "materials", pendingAdditions: ADDITIONS }) });
+
+	const button = document.querySelector<HTMLButtonElement>('[data-testid="resweep-folder"]');
+	assert.ok(button);
+	assert.equal(button!.disabled, true);
+	assert.equal(button!.getAttribute("title"), "Review the new items first");
+	assert.ok(document.querySelector('[data-testid="resweep-additions"]'), "the review card renders");
+});
+
+test("the additions card posts only the checked keys", async () => {
+	const { seen } = await mount({ test: record({ folder: "materials", pendingAdditions: ADDITIONS }) });
+
+	const keeper = document.querySelector<HTMLInputElement>('[data-testid="addition-0:0"]');
+	const dropper = document.querySelector<HTMLInputElement>('[data-testid="addition-0:1"]');
+	const otherSection = document.querySelector<HTMLInputElement>('[data-testid="addition-1:0"]');
+	assert.ok(keeper && dropper && otherSection, "every proposed point has a checkbox");
+	assert.equal(keeper!.checked, true, "new items are accepted by default");
+	assert.equal(dropper!.checked, true);
+	assert.equal(otherSection!.checked, true);
+
+	await act(async () => dropper!.click());
+	assert.equal(dropper!.checked, false, "the learner can drop one");
+
+	const add = [...document.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
+		button.textContent?.includes("Add accepted"),
+	);
+	assert.ok(add, "the card offers Add accepted");
+	await act(async () => add!.click());
+
+	const post = seen.find((request) => request.method === "POST" && request.url === "/api/tests/test_1/additions");
+	assert.ok(post, "accepting posts the review");
+	assert.deepEqual(post!.body, { accepted: ["0:0", "1:0"] }, "only the checked keys, in section order");
+});
+
+test("promoting a left-out item posts its id", async () => {
+	const item = { id: "lo_1", text: "Glossary of terms", source: "ch1.pdf", reason: "reference, not tested" };
+	const { seen } = await mount({ test: record({ folder: "materials", leftOut: [item] }) });
+
+	await openFirstLeftOut();
+	const promote = document.querySelector<HTMLButtonElement>('[data-testid="promote-left-out"]');
+	assert.ok(promote, "the persistent list offers Promote");
+	assert.equal(promote!.getAttribute("aria-label"), "Promote Glossary of terms");
+	await act(async () => promote!.click());
+
+	const post = seen.find((request) => request.method === "POST" && request.url === "/api/tests/test_1/left-out");
+	assert.ok(post, "promoting posts to left-out");
+	assert.deepEqual(post!.body, { itemId: "lo_1" });
+});
+
+test("the coverage line carries the last re-sweep's file count", async () => {
+	await mount({
+		test: record({
+			folder: "materials",
+			sweep: {
+				status: "done",
+				startedAt: "2026-11-21T12:00:00.000Z",
+				finishedAt: "2026-11-21T12:05:00.000Z",
+				fileHashes: {},
+				coverage: {
+					files: 3,
+					pages: 120,
+					visionPages: 4,
+					unsupported: [],
+					unreadable: [],
+					empty: [],
+					removed: [],
+					lastResweep: { at: "2026-11-21T12:05:00.000Z", files: 4 },
+				},
+			},
+		}),
+	});
+
+	const line = document.querySelector('[data-testid="coverage-line"]');
+	assert.ok(line, "the whole-folder coverage line renders");
+	assert.match(line!.textContent ?? "", /Read 3 files · 120 pages \(4 looked at by vision\)/);
+	assert.match(document.body.textContent ?? "", /Last re-sweep: \+4 files/);
 });

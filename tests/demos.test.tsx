@@ -484,6 +484,41 @@ describe("steer card rendering (the delivered artifact)", () => {
 		const html = renderToStaticMarkup(<SubagentSteerCard message={msg as never} />);
 		assert.match(html, /could not be displayed/);
 	});
+
+	it("renders the sweep summary: points, left out and the coverage line", () => {
+		const steer = buildSubagentSteer(
+			{ id: "jsw", kind: "sweep", toolCallId: "csw" },
+			{
+				ok: true,
+				mode: "initial",
+				points: 12,
+				leftOut: 3,
+				coverage: { files: 2, pages: 5, visionPages: 1, unsupported: [], unreadable: [], empty: [], removed: [] },
+			},
+		);
+		const html = renderToStaticMarkup(<SubagentSteerCard message={projectNative([steer])[0] as never} />);
+		assert.match(html, /data-testid="sweep-steer-card"/);
+		assert.match(html, /12 points proposed · 3 left out/);
+		assert.match(html, /Read 2 files · 5 pages \(1 looked at by vision\)/);
+	});
+
+	it("renders the sweep failure with its error, not a plan summary", () => {
+		const steer = buildSubagentSteer(
+			{ id: "jswf", kind: "sweep", toolCallId: "cswf" },
+			{
+				ok: false,
+				mode: "initial",
+				points: 0,
+				leftOut: 0,
+				coverage: { files: 0, pages: 0, visionPages: 0, unsupported: [], unreadable: [], empty: [], removed: [] },
+				error: "could not list the folder",
+			},
+		);
+		const html = renderToStaticMarkup(<SubagentSteerCard message={projectNative([steer])[0] as never} />);
+		assert.match(html, /Sweep failed/);
+		assert.match(html, /could not list the folder/);
+		assert.ok(!html.includes("points proposed"), "no success summary for a failure");
+	});
 });
 
 

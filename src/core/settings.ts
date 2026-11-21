@@ -332,6 +332,13 @@ export const ROLE_SLOT: Readonly<Record<ModelRole, ModelSlotName>> = {
 	// Deliberately NOT a BACKGROUND_MODEL_ROLES member: the role has no
 	// settings override UI (the plan fixes it to the Cheap slot).
 	apIndexer: "cheap",
+	// Test material sweep (2026-11-20): reading pages is a vision job,
+	// extraction is bulk Cheap work, merging needs judgement on the Strong
+	// tier. Deliberately NOT BACKGROUND_MODEL_ROLES members: these roles
+	// have no settings override UI (the plan fixes their slots).
+	sweepReader: "vision",
+	sweepExtractor: "cheap",
+	sweepMerger: "strong",
 };
 
 /** General settings — app-level behavior. Version DISPLAY and plans login
