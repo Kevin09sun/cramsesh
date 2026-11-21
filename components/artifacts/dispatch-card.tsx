@@ -49,8 +49,8 @@ export function ApIndexJobCard({ part }: ArtifactPartProps) {
  * only actionable surface.
  */
 export function SweepMaterialsJobCard({ part }: ArtifactPartProps) {
-	if (part.state !== "output-available") return null;
 	const jobs = useContext(JobsContext);
+	if (part.state !== "output-available") return null;
 	const job = jobs.find((j) => j.toolCallId === part.toolCallId) ?? null;
 	const refused =
 		job !== null &&

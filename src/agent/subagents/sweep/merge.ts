@@ -244,8 +244,12 @@ export function unplacedByMerger(bucket: Candidate[], output: MergeOutput): Arra
 	const mentioned = (candidate: Candidate): boolean => {
 		const text = candidate.text.trim().toLowerCase();
 		return output.leftOut.some((item) => {
-			if (item.source.trim() === candidate.source.trim()) return true;
 			const itemText = item.text.trim().toLowerCase();
+			// An empty Left out entry mentions nothing: `text.includes("")` is
+			// always true, so counting it would swallow every candidate and
+			// silently drop the whole bucket (I8).
+			if (!itemText) return false;
+			if (item.source.trim() === candidate.source.trim()) return true;
 			return itemText === text || itemText.includes(text) || text.includes(itemText);
 		});
 	};

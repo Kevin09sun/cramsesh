@@ -232,6 +232,22 @@ describe("GET /api/tests/[id]/sweep", () => {
 		assert.match(body.sweep.error, /Interrupted — run Re-sweep again/);
 		assert.equal(testStore.get(test.id)!.sweep!.status, "error", "the stale record is closed, not just reported");
 	});
+
+	it("leaves a sweep started after this process began alone (process-start liveness)", async () => {
+		const test = testStore.create("Live view", FOLDER);
+		// Started by THIS process but held in no live set here — one route
+		// module instance cannot see the entry another recorded (the reason
+		// liveness lives on globalThis). A start after process start is still
+		// this process's run, never a previous process's corpse.
+		testStore.updateSweep(test.id, { status: "running", startedAt: new Date().toISOString() });
+
+		const res = await getSweep(test.id);
+		assert.equal(res.status, 200);
+		const body = (await res.json()) as { sweep: { status: string; error?: string } };
+		assert.equal(body.sweep.status, "running", "a sweep started after process start must not be called interrupted");
+		assert.equal(body.sweep.error, undefined);
+		assert.equal(testStore.get(test.id)!.sweep!.status, "running");
+	});
 });
 
 describe("POST /api/tests/[id]/additions", () => {

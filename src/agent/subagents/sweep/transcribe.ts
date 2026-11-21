@@ -146,6 +146,7 @@ function splitExtractedPages(text: string): Map<number, string> {
 async function describeVisionPages(
 	file: SweepFile,
 	targets: PdfPageInfo[],
+	totalPages: number,
 	deps: TranscribeDeps,
 ): Promise<Array<{ page: number; description: string | null }>> {
 	const outcomes: Array<{ page: number; description: string | null }> = [];
@@ -168,7 +169,7 @@ async function describeVisionPages(
 			try {
 				const png = byPage.get(page.page);
 				if (!png) throw new Error("renderer returned no image");
-				deps.onActivity?.(`Describing ${file.rel} — page ${page.page}/${targets.length}`);
+				deps.onActivity?.(`Describing ${file.rel} — page ${page.page}/${totalPages}`);
 				return {
 					page: page.page,
 					description: await deps.describe([{ png, mime: "image/png" }], VISION_HINT),
@@ -197,7 +198,7 @@ async function transcribePdf(file: SweepFile, deps: TranscribeDeps): Promise<Tra
 				// can describe. Report the same per-page outcome directly.
 				for (const page of visionTargets) unreadable.push(`${file.rel} p. ${page.page} (vision failed)`);
 			} else {
-				for (const outcome of await describeVisionPages(file, visionTargets, deps)) {
+				for (const outcome of await describeVisionPages(file, visionTargets, info.page_count, deps)) {
 					if (outcome.description === null) unreadable.push(`${file.rel} p. ${outcome.page} (vision failed)`);
 					else descriptions.set(outcome.page, outcome.description);
 				}

@@ -389,6 +389,28 @@ describe("sweep stages", () => {
 		);
 	});
 
+	it("ignores an empty-text Left out entry when deciding mentions (I8)", () => {
+		const bucket: Candidate[] = [
+			{
+				kind: "fact",
+				category: "definition",
+				text: "Dropped fact",
+				source: "a.pdf p. 1",
+				evidence: "e",
+			},
+		];
+		// `"Dropped fact".includes("")` is true — an empty Left out item must
+		// not be read as naming every candidate and swallow the bucket.
+		assert.deepEqual(
+			unplacedByMerger(bucket, {
+				sections: [],
+				leftOut: [{ text: "   ", source: "other.pdf", reason: "citation" }],
+			}),
+			[{ text: "Dropped fact", source: "a.pdf p. 1", reason: "not placed by the merger" }],
+			"a blank Left out item mentions nothing",
+		);
+	});
+
 	it("mergeCandidates throws after maxTurns of invalid submissions", async () => {
 		const emptyPlan = { sections: [], leftOut: [] };
 		const steps = Array.from({ length: 4 }, (_, index) =>

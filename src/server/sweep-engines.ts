@@ -27,23 +27,65 @@ import { stores } from "./stores.ts";
  *  launch without touching a folder or a model. Undefined in production. */
 export const resweepOverride: { current?: typeof runSweep } = {};
 
+interface LhSweepGlobal {
+	__lhLiveResweeps?: Set<string>;
+	__lhSweepProcessStartedAt?: number;
+}
+
 /** Re-sweeps running in THIS process. A record that says "running" without a
  *  live entry here (and started before this process did) died with a previous
  *  server process: it must be closed as interrupted, not block re-sweeping
- *  forever. */
-const liveResweeps = new Set<string>();
-/** Captured once at module load — the boundary between "this process could
- *  still own that run" and "a previous process died mid-run". */
-const processStartedAt = Date.now();
+ *  forever.
+ *
+ *  Lives on globalThis, NOT a module-level Set: Next dev compiles each route
+ *  entry as its own module instance (the turn-liveness lesson), so a GET on
+ *  /api/tests/[id]/sweep could read an empty set while the POST that launched
+ *  the sweep holds the live entry. globalThis spans module instances within
+ *  the process. */
+function liveResweeps(): Set<string> {
+	const g = globalThis as typeof globalThis & LhSweepGlobal;
+	return (g.__lhLiveResweeps ??= new Set<string>());
+}
+
+/** The boundary between "this process could still own that run" and "a
+ *  previous process died mid-run". `process.uptime()` counts from the real
+ *  process start — module-load time does not: each route module loads when
+ *  its first request arrives, which can be well after an initial sweep job
+ *  began. Captured once on globalThis for the same module-instance reason. */
+function processStartedAt(): number {
+	const g = globalThis as typeof globalThis & LhSweepGlobal;
+	return (g.__lhSweepProcessStartedAt ??= Date.now() - process.uptime() * 1000);
+}
+
+/** True while an initial sweep job for this test is still running. The job
+ *  store has no by-kind index, so this is one directory read
+ *  (listJobsByChat) — a sweep GET/POST is rare enough that the scan is the
+ *  right trade. An initial sweep runs as a job, so a job that is provably
+ *  running in this process must never be called interrupted. */
+function sweepJobRunning(testId: string): boolean {
+	try {
+		for (const jobs of stores.jobStore.listJobsByChat().values()) {
+			for (const job of jobs) {
+				if (job.kind !== "sweep" || job.status !== "running") continue;
+				const input = job.input as { testId?: unknown } | undefined;
+				if (input?.testId === testId) return true;
+			}
+		}
+	} catch {
+		/* a job-store read must never block closing a dead sweep */
+	}
+	return false;
+}
 
 /** True when the record claims a running sweep that no live owner can be
- *  advancing: no re-sweep in this process, and it started before the process
- *  did (an initial sweep runs as a job, whose process is this one). */
+ *  advancing: no re-sweep in this process, no running sweep job for the test,
+ *  and it started before the process did. */
 export function isInterruptedSweep(testId: string, record: Pick<TestRecord, "sweep">): boolean {
 	if (record.sweep?.status !== "running") return false;
-	if (liveResweeps.has(testId)) return false;
+	if (liveResweeps().has(testId)) return false;
+	if (sweepJobRunning(testId)) return false;
 	const started = Date.parse(record.sweep.startedAt);
-	return Number.isNaN(started) || started < processStartedAt;
+	return Number.isNaN(started) || started < processStartedAt();
 }
 
 export const INTERRUPTED_SWEEP_ERROR = "Interrupted — run Re-sweep again";
@@ -103,13 +145,13 @@ export function sweepEngines(
  *  route answers 202 immediately; the orchestrator owns the record's fate
  *  (a missing engine or failed stage lands on the sweep record). */
 export function startResweep(testId: string): void {
-	liveResweeps.add(testId);
+	liveResweeps().add(testId);
 	void (resweepOverride.current ?? runSweep)(testId, "resweep", {
 		store: stores.testStore,
 		engines: sweepEngines(),
 	})
 		.catch((error) => console.error(`[sweep ${testId}] re-sweep failed:`, error))
 		.finally(() => {
-			liveResweeps.delete(testId);
+			liveResweeps().delete(testId);
 		});
 }
