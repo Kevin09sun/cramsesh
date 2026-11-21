@@ -111,6 +111,11 @@ function reasonOf(error: unknown): string {
 	return flat || "unknown error";
 }
 
+/** "1 file" / "2 files" — failure messages read as prose. */
+function plural(count: number, one: string, many: string): string {
+	return `${count} ${count === 1 ? one : many}`;
+}
+
 function throwIfAborted(signal?: AbortSignal): void {
 	if (signal?.aborted) {
 		throw signal.reason ?? new DOMException("The operation was aborted.", "AbortError");
@@ -601,7 +606,7 @@ export async function runSweep(
 				merged = await runMerge();
 			} catch (second) {
 				if (isAbort(second, deps.signal)) throw second;
-				const message = `${reasonOf(second)}. Read ${runCoverage.files} files · ${runCoverage.pages} pages.`;
+				const message = `${reasonOf(second)}. Read ${plural(runCoverage.files, "file", "files")} · ${plural(runCoverage.pages, "page", "pages")}.`;
 				// Keep the cumulative audit baseline: a failed run must neither
 				// shrink the report nor fold this run's counts (I3) — the totals
 				// stay the previous run's while the lists may still describe
@@ -620,7 +625,9 @@ export async function runSweep(
 		throwIfAborted(deps.signal);
 		if (mode === "initial") {
 			deps.store.saveSweepPlan(testId, merged.sections, merged.leftOut);
-		} else {
+		} else if (merged.sections.length > 0 || merged.leftOut.length > 0) {
+			// An addition-free re-sweep writes no empty review: nothing for the
+			// learner to accept or drop.
 			deps.store.setPendingAdditions(testId, { sections: merged.sections, leftOut: merged.leftOut });
 		}
 

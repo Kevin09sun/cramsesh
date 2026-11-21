@@ -96,6 +96,41 @@ describe("coverageLine", () => {
 		assert.ok(!line.includes("couldn't read"), line);
 		assert.ok(!line.includes("not read"), line);
 	});
+
+	it("collapses consecutive unreadable pages and keeps an identical reason suffix", () => {
+		const line = coverageLine(
+			coverage({
+				files: 2,
+				pages: 20,
+				unreadable: [
+					"book.pdf p. 1 (vision failed)",
+					"book.pdf p. 2 (vision failed)",
+					"book.pdf p. 4 (vision failed)",
+					"old.pdf (encrypted)",
+				],
+			}),
+		);
+
+		assert.ok(
+			line.includes(
+				"couldn't read: book.pdf p. 1–2 (vision failed), book.pdf p. 4 (vision failed), old.pdf (encrypted)",
+			),
+			line,
+		);
+	});
+
+	it("does not merge unreadable pages whose reasons differ", () => {
+		const line = coverageLine(
+			coverage({
+				unreadable: ["book.pdf p. 1 (vision failed)", "book.pdf p. 2 (extraction failed)"],
+			}),
+		);
+
+		assert.ok(
+			line.includes("book.pdf p. 1 (vision failed), book.pdf p. 2 (extraction failed)"),
+			line,
+		);
+	});
 });
 
 describe("promoteIntoDraft — one-click promote of a left-out item", () => {

@@ -344,6 +344,34 @@ test("confirm sends leftOut without promoted items", async () => {
 	);
 });
 
+test("a promoted item deleted before save stays in leftOut (T10)", async () => {
+	const { puts } = await mount(record({ leftOut: LEFT_OUT }));
+	await openLeftOut();
+
+	const promote = document.querySelector<HTMLButtonElement>('[data-testid="promote-left-out"]');
+	assert.ok(promote);
+	await act(async () => promote!.click());
+
+	// The promoted item became point 3 of Section A; delete it again.
+	const remove = document.querySelector<HTMLButtonElement>('[aria-label="Remove section 1, point 3"]');
+	assert.ok(remove, "the promoted point can be removed");
+	await act(async () => remove!.click());
+
+	const confirm = [...document.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
+		button.textContent?.includes("Confirm plan"),
+	);
+	assert.ok(confirm);
+	await act(async () => confirm!.click());
+
+	assert.equal(puts.length, 1);
+	const body = puts[0]!.body as { leftOut?: Array<{ id: string }> };
+	assert.deepEqual(
+		body.leftOut?.map((item) => item.id),
+		["lo_1", "lo_2"],
+		"the item stays recoverable because its point never reached the saved draft",
+	);
+});
+
 test("a running sweep with no sections shows its activity", async () => {
 	await mount(
 		record({

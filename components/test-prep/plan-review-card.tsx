@@ -148,6 +148,16 @@ function errorText(reason: unknown, fallback: string): string {
 	return reason instanceof Error && reason.message !== "" ? reason.message : fallback;
 }
 
+/** Does the draft being saved still hold this promoted item as a point? A
+ *  promotion only prunes it from Left out when the point survived to save. */
+function draftContains(sections: PlanDraftSection[], item: LeftOutItem): boolean {
+	const text = item.text.trim();
+	const source = item.source.trim();
+	return sections.some((section) =>
+		section.points.some((point) => point.text.trim() === text && point.source.trim() === source),
+	);
+}
+
 function countLine(config: PlanReviewConfig, sections: number, points: number): string {
 	return `${sections} ${sections === 1 ? config.sectionLabel : `${config.sectionLabel}s`} · ${points} ${
 		points === 1 ? config.pointLabel : `${config.pointLabel}s`
@@ -254,7 +264,12 @@ export function PlanReviewCard({
 			const draft = config.prepareDraft ? config.prepareDraft(sections) : sections;
 			const body: Record<string, unknown> = { sections: draft, confirm };
 			if (record?.leftOut !== undefined) {
-				body.leftOut = record.leftOut.filter((item) => !hiddenLeftOut.includes(item.id));
+				// A promoted item leaves Left out only when the point it became
+				// is actually in the saved draft; if the learner deleted it
+				// again, the item stays recoverable.
+				body.leftOut = record.leftOut.filter(
+					(item) => !hiddenLeftOut.includes(item.id) || !draftContains(draft, item),
+				);
 			}
 			const response = await fetch(`${config.apiBase}/${linkedId}/plan`, {
 				method: "PUT",

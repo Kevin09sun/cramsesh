@@ -374,9 +374,12 @@ describe("test store — material sweep (2026-11-20)", () => {
 			resolved.leftOut!.map((item) => item.text).sort(),
 			["Dropped A", "Noise"],
 		);
+		const droppedA = resolved.leftOut!.find((item) => item.text === "Dropped A")!;
+		assert.equal(droppedA.reason, "dropped by you");
 		assert.equal(
-			resolved.leftOut!.find((item) => item.text === "Dropped A")!.reason,
-			"dropped by you",
+			droppedA.suggestedSection,
+			"Section A",
+			"a dropped point remembers the section it was proposed for",
 		);
 		assert.ok(resolved.leftOut!.every((item) => item.id.length > 0), "every left-out item has an id");
 	});

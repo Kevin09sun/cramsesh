@@ -356,6 +356,38 @@ describe("runSweep", () => {
 		assert.deepEqual(after.sweep!.fileStats, { "a.md": { pages: 1, visionPages: 0 }, "b.txt": { pages: 1, visionPages: 0 } });
 	});
 
+	it("an addition-free re-sweep writes no empty pending review", async () => {
+		write("a.md", "alpha");
+		const record = testStore.create("Nothing new", folder);
+
+		await runSweep(
+			record.id,
+			"initial",
+			deps({
+				extract: extractStub([
+					{ kind: "fact", category: "definition", text: "Alpha", source: "a.md", evidence: "alpha" },
+				]),
+				merge: mergeStub([{ sections: [section("A", [["Alpha", "a.md"]])], leftOut: [] }]),
+			}),
+		);
+
+		// The file changed, extraction found a candidate, but the merger judged
+		// it adds nothing.
+		write("a.md", "alpha revised");
+		const stages: Stages = {
+			extract: extractStub([
+				{ kind: "fact", category: "definition", text: "Alpha", source: "a.md", evidence: "alpha" },
+			]),
+			merge: mergeStub([{ sections: [], leftOut: [] }]),
+		};
+		const outcome = await runSweep(record.id, "resweep", deps(stages));
+
+		assert.equal(outcome.ok, true);
+		const saved = testStore.get(record.id)!;
+		assert.equal(saved.pendingAdditions, undefined, "no empty review is ever stored");
+		assert.equal(saved.sweep!.status, "done");
+	});
+
 	it("removed file listed in coverage.removed, no points removed", async () => {
 		write("a.md", "alpha");
 		write("b.txt", "beta");
@@ -779,7 +811,7 @@ describe("runSweep", () => {
 		const saved = testStore.get(record.id)!;
 		const coverage = saved.sweep!.coverage!;
 		assert.equal(saved.sweep!.status, "error");
-		assert.match(saved.sweep!.error!, /Read 1 files · 1 pages\./);
+		assert.match(saved.sweep!.error!, /Read 1 file · 1 page\./);
 		assert.equal(coverage.files, initialCoverage.files, "a failed re-sweep adds no files (I3)");
 		assert.equal(coverage.pages, initialCoverage.pages, "a failed re-sweep adds no pages");
 	});

@@ -993,7 +993,10 @@ describe("sweep runner (test material sweep)", () => {
 		const done = jobStore.getJob(job.id)!;
 		assert.equal(done.status, "error");
 		assert.equal(done.error, "models not configured: cheap");
-		assert.equal(delivery.steers[0]!.content, "Sweep failed: models not configured: cheap");
+		assert.equal(
+			delivery.steers[0]!.content,
+			"Sweep failed: models not configured: cheap\n\nTell the learner what could not be done and offer to try again.",
+		);
 	});
 
 	it("refuses when the sweep store is not wired", async () => {
@@ -1014,7 +1017,10 @@ describe("sweep runner (test material sweep)", () => {
 		const done = jobStore.getJob(job.id)!;
 		assert.equal(done.status, "error");
 		assert.equal(done.error, "sweep store not wired");
-		assert.equal(delivery.steers[0]!.content, "Sweep failed: sweep store not wired");
+		assert.equal(
+			delivery.steers[0]!.content,
+			"Sweep failed: sweep store not wired\n\nTell the learner what could not be done and offer to try again.",
+		);
 	});
 
 	it("mirrors the sweep's activity patches onto the job record while it runs", async () => {
@@ -1079,7 +1085,10 @@ describe("sweep runner (test material sweep)", () => {
 		assert.equal(done.status, "error");
 		assert.equal(done.error, envelope.error);
 		assert.equal(sweepCalls, 0, "the sweep never starts without its extractor key");
-		assert.equal(delivery.steers[0]!.content, `Sweep failed: ${envelope.error}`);
+		assert.equal(
+			delivery.steers[0]!.content,
+			`Sweep failed: ${envelope.error}\n\nTell the learner what could not be done and offer to try again.`,
+		);
 	});
 
 	it("omits a reader whose provider key is gone — the sweep runs, vision pages fail per page", async () => {

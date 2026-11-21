@@ -373,7 +373,13 @@ function resolveAdditions(id: string, acceptedKeys: string[]): TestRecord {
 	pending.sections.forEach((section, sectionIndex) => {
 		const points = section.points.filter((point, pointIndex) => {
 			if (accepted.has(`${sectionIndex}:${pointIndex}`)) return true;
-			dropped.push({ id: newId(), text: point.text, source: point.source, reason: "dropped by you" });
+			dropped.push({
+				id: newId(),
+				text: point.text,
+				source: point.source,
+				reason: "dropped by you",
+				suggestedSection: section.title,
+			});
 			return false;
 		});
 		if (points.length > 0) acceptedDrafts.push({ title: section.title, points });

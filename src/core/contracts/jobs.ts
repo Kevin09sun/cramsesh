@@ -400,7 +400,10 @@ function steerText(kind: JobKind, result: SubagentResult): string {
 			return `${(result as PdfResult).brief}\n\nContinue with what you can establish from the session and flag the gap to the learner.`;
 		if (kind === "ap_index")
 			return `${(result as ApIndexResult).brief}\n\nContinue with what you can establish from the session and flag the gap to the learner.`;
-		if (kind === "sweep") return `Sweep failed: ${(result as SweepResult).error ?? "unknown error"}`;
+		if (kind === "sweep")
+			return `Sweep failed: ${
+				(result as SweepResult).error ?? "unknown error"
+			}\n\nTell the learner what could not be done and offer to try again.`;
 		return `The figure could not be made: ${(result as VisualResult).notes ?? "unknown reason"}. Fall back to prose or mermaid, or re-call visual with a tighter brief.`;
 	}
 	if (kind === "research")

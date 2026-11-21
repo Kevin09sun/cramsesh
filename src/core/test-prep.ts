@@ -434,11 +434,14 @@ export function mergeCoverage(
 	return merged;
 }
 
-const PAGE_ENTRY = /^(.*) p\. (\d+)$/;
+const PAGE_ENTRY = /^(.*?) p\. (\d+)(?: \((.+)\))?$/;
 
-/** "ch4.pdf p. 88", "p. 89", "p. 90" → "ch4.pdf p. 88–90"; other entries pass through. */
+/** "ch4.pdf p. 88", "p. 89", "p. 90" → "ch4.pdf p. 88–90"; entries carrying a
+ *  reason collapse only when the reason is identical across the run
+ *  ("book.pdf p. 1 (vision failed)", "p. 2 (vision failed)" → "…p. 1–2 (…)");
+ *  anything else passes through. */
 function collapsePages(entries: string[]): string {
-	type Range = { file: string; start: number; end: number };
+	type Range = { file: string; start: number; end: number; reason?: string };
 	const groups: Array<Range | { literal: string }> = [];
 
 	for (const entry of entries) {
@@ -449,19 +452,26 @@ function collapsePages(entries: string[]): string {
 		}
 		const file = match[1]!;
 		const page = Number(match[2]);
+		const reason = match[3];
 		const last = groups[groups.length - 1];
-		if (last && "file" in last && last.file === file && page === last.end + 1) {
+		if (
+			last &&
+			"file" in last &&
+			last.file === file &&
+			last.reason === reason &&
+			page === last.end + 1
+		) {
 			last.end = page;
 		} else {
-			groups.push({ file, start: page, end: page });
+			groups.push({ file, start: page, end: page, ...(reason === undefined ? {} : { reason }) });
 		}
 	}
 
 	return groups
 		.map((group) => {
 			if ("literal" in group) return group.literal;
-			if (group.start === group.end) return `${group.file} p. ${group.start}`;
-			return `${group.file} p. ${group.start}–${group.end}`;
+			const base = group.start === group.end ? `${group.file} p. ${group.start}` : `${group.file} p. ${group.start}–${group.end}`;
+			return group.reason === undefined ? base : `${base} (${group.reason})`;
 		})
 		.join(", ");
 }
@@ -478,7 +488,7 @@ export function coverageLine(c: SweepCoverage): string {
 
 	const parts = [`Read ${files} · ${pages}${vision}`];
 	if (c.empty.length > 0) parts.push(`nothing found: ${collapsePages(c.empty)}`);
-	if (c.unreadable.length > 0) parts.push(`couldn't read: ${c.unreadable.join(", ")}`);
+	if (c.unreadable.length > 0) parts.push(`couldn't read: ${collapsePages(c.unreadable)}`);
 	if (c.unsupported.length > 0) parts.push(`not read: ${c.unsupported.join(", ")}`);
 	if (c.removed.length > 0) parts.push(`removed: ${c.removed.join(", ")}`);
 
