@@ -16,7 +16,7 @@ import { planProblems, type LeftOutItem, type PlanDraftSection } from "../../../
 import type { PiEngine } from "../../models.ts";
 import { runSubmitAgent } from "../submit-agent.ts";
 import type { Candidate } from "./extract.ts";
-import { SWEEP_MERGER_SYSTEM } from "./prompts.ts";
+import { SWEEP_MERGER_SYSTEM, SWEEP_RECONCILE_SYSTEM } from "./prompts.ts";
 
 export interface MergeInput {
 	candidates: Candidate[];
@@ -197,28 +197,127 @@ function combineOutputs(outputs: MergeOutput[]): MergeOutput {
 	return { sections: order.map((key) => byTitle.get(key)!), leftOut };
 }
 
-async function mergeBySourceFile(input: MergeInput, opts: MergeOptions): Promise<MergeOutput> {
+/** One bucket's serialized size, bounded by MERGE_MAX_CHARS (I6). */
+function serializedLength(value: unknown): number {
+	return JSON.stringify(value).length;
+}
+
+/**
+ * Split candidates into merge buckets that each serialize under
+ * MERGE_MAX_CHARS: candidates stay grouped by source file (first-appearance
+ * order) and a file too large for one call is cut into consecutive buckets.
+ */
+function bucketCandidates(candidates: Candidate[]): Candidate[][] {
 	const groups = new Map<string, Candidate[]>();
-	for (const candidate of input.candidates) {
+	for (const candidate of candidates) {
 		const file = sourceFileOf(candidate.source);
 		const group = groups.get(file);
 		if (group) group.push(candidate);
 		else groups.set(file, [candidate]);
 	}
-	// One file cannot be split further — still merge it whole (empty sections
-	// allowed, since the combined plan is validated below).
-	const outputs: MergeOutput[] = [];
-	if (groups.size <= 1) {
-		outputs.push(await mergeOnce(input, opts, true));
-	} else {
-		for (const candidates of groups.values()) {
-			outputs.push(await mergeOnce({ ...input, candidates }, opts, true));
+
+	const buckets: Candidate[][] = [];
+	for (const group of groups.values()) {
+		let current: Candidate[] = [];
+		let size = 2; // the surrounding brackets
+		for (const candidate of group) {
+			const piece = serializedLength(candidate) + 1; // + comma
+			if (current.length > 0 && size + piece > MERGE_MAX_CHARS) {
+				buckets.push(current);
+				current = [];
+				size = 2;
+			}
+			current.push(candidate);
+			size += piece;
+		}
+		if (current.length > 0) buckets.push(current);
+	}
+	return buckets;
+}
+
+/** The candidates of a bucket the merger returned empty sections for and
+ *  never mentioned in Left out — silently dropped otherwise (I8). "Mentions"
+ *  means the same source (a bucket is one file) or the fact text appears in
+ *  the item. Exported for its focused test. */
+export function unplacedByMerger(bucket: Candidate[], output: MergeOutput): Array<Omit<LeftOutItem, "id">> {
+	if (output.sections.length > 0) return [];
+	const mentioned = (candidate: Candidate): boolean => {
+		const text = candidate.text.trim().toLowerCase();
+		return output.leftOut.some((item) => {
+			if (item.source.trim() === candidate.source.trim()) return true;
+			const itemText = item.text.trim().toLowerCase();
+			return itemText === text || itemText.includes(text) || text.includes(itemText);
+		});
+	};
+	return bucket
+		.filter((candidate) => !mentioned(candidate))
+		.map((candidate) => ({
+			text: candidate.text,
+			source: candidate.source,
+			reason: "not placed by the merger",
+		}));
+}
+
+/** Route every candidate a bucket silently dropped into Left out. */
+function withUnplaced(bucket: Candidate[], output: MergeOutput): MergeOutput {
+	const dropped = unplacedByMerger(bucket, output);
+	return dropped.length === 0 ? output : { sections: output.sections, leftOut: [...output.leftOut, ...dropped] };
+}
+
+function reconcilePrompt(outputs: MergeOutput[]): string {
+	const lines = ["=== PARTIAL PLANS (reconcile into ONE plan) ==="];
+	outputs.forEach((output, index) => {
+		lines.push(`Plan ${index + 1}:`);
+		if (output.sections.length === 0) lines.push("  (no sections)");
+		for (const section of output.sections) {
+			lines.push(`  ${section.title}`);
+			for (const point of section.points) lines.push(`    - ${point.text} — source: ${point.source}`);
+		}
+	});
+	lines.push("", "=== LEFT OUT FROM THE PARTIAL PLANS ===");
+	const leftOut = outputs.flatMap((output) => output.leftOut);
+	if (leftOut.length === 0) lines.push("(none)");
+	else {
+		for (const item of leftOut) {
+			lines.push(`- ${item.text} — source: ${item.source} — reason: ${item.reason}`);
 		}
 	}
-	const combined = combineOutputs(outputs);
-	const problem = submissionProblem(combined.sections, input.existingPoints.length > 0);
-	if (problem) throw new Error(`the merged plan is not usable: ${problem}`);
-	return combined;
+	return lines.join("\n");
+}
+
+/** The one reconcile merge over every bucket output. When the union is
+ *  itself past the limit it cannot be one model call: concatenate by title
+ *  (the previous behaviour) instead. */
+async function reconcileOutputs(
+	outputs: MergeOutput[],
+	input: MergeInput,
+	opts: MergeOptions,
+): Promise<MergeOutput> {
+	const serialized = serializedLength({
+		sections: outputs.flatMap((output) => output.sections),
+		leftOut: outputs.flatMap((output) => output.leftOut),
+	});
+	if (serialized > MERGE_MAX_CHARS) return combineOutputs(outputs);
+
+	const value = await runSubmitAgent<SubmitValue>({
+		role: "sweepMerger",
+		toolName: "submit_plan",
+		toolDescription:
+			"Submit the reconciled plan: merge duplicate archetypes and facts across the partial plans into " +
+			"one point (best source citation), keep section titles coherent, and never drop a point except " +
+			"into Left out with a reason.",
+		parameters: planSchema,
+		fill: fillPlan,
+		systemPrompt: SWEEP_RECONCILE_SYSTEM,
+		prompt: reconcilePrompt(outputs),
+		engine: opts.engine,
+		signal: opts.signal,
+		onStep: (usage) => opts.onUsage(usage),
+		neverSubmitted: "the merger never submitted a reconciled plan",
+		validate: (submission) =>
+			submissionProblem(submission.sections, input.existingPoints.length > 0),
+	});
+	return { sections: value.sections, leftOut: value.leftOut };
 }
 
 /**
@@ -227,9 +326,32 @@ async function mergeBySourceFile(input: MergeInput, opts: MergeOptions): Promise
  */
 export async function mergeCandidates(input: MergeInput, opts: MergeOptions): Promise<MergeOutput> {
 	let candidates = input.candidates;
-	if (JSON.stringify(candidates).length > MERGE_MAX_CHARS) candidates = dedupeFacts(candidates);
-	if (JSON.stringify(candidates).length > MERGE_MAX_CHARS) {
-		return mergeBySourceFile({ ...input, candidates }, opts);
+	if (serializedLength(candidates) > MERGE_MAX_CHARS) candidates = dedupeFacts(candidates);
+
+	if (serializedLength(candidates) <= MERGE_MAX_CHARS) {
+		// A single merge is one coherent judgment: an empty plan on a re-sweep
+		// means "nothing new", not a bucket that dropped its material.
+		return mergeOnce({ ...input, candidates }, opts);
 	}
-	return mergeOnce({ ...input, candidates }, opts);
+
+	const buckets = bucketCandidates(candidates);
+	const outputs: MergeOutput[] = [];
+	for (const bucket of buckets) {
+		// A bucket may be entirely noise, so empty sections are allowed there;
+		// the combined plan is validated below.
+		const output = await mergeOnce({ ...input, candidates: bucket }, opts, true);
+		outputs.push(withUnplaced(bucket, output));
+	}
+
+	if (outputs.length <= 1) {
+		const combined = outputs[0] ?? { sections: [], leftOut: [] };
+		const problem = submissionProblem(combined.sections, input.existingPoints.length > 0);
+		if (problem) throw new Error(`the merged plan is not usable: ${problem}`);
+		return combined;
+	}
+
+	const reconciled = await reconcileOutputs(outputs, input, opts);
+	const problem = submissionProblem(reconciled.sections, input.existingPoints.length > 0);
+	if (problem) throw new Error(`the merged plan is not usable: ${problem}`);
+	return reconciled;
 }

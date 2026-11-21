@@ -58,3 +58,19 @@ export const SWEEP_MERGER_SYSTEM = [
 	"Submit the whole plan in one call. If a submission is rejected, read the rejection and submit a " +
 		"corrected plan.",
 ].join("\n");
+
+/** The one reconcile pass over several partial plans (I6): merge duplicates
+ *  across buckets into one point and never drop material silently. */
+export const SWEEP_RECONCILE_SYSTEM = [
+	"You reconcile several partial study plans taken from ONE materials folder into one coherent plan.",
+	"",
+	"Rules:",
+	"- Merge duplicate archetypes and duplicate facts across the partial plans into ONE point; keep the " +
+		"best source citation for the merged point.",
+	"- Keep section titles coherent: the same topic is one section.",
+	"- Never drop a point except into Left out with a reason.",
+	"- Each point keeps a source citation.",
+	"",
+	"Submit the whole reconciled plan in one call. If a submission is rejected, read the rejection and " +
+		"submit a corrected plan.",
+].join("\n");
