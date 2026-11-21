@@ -53,6 +53,10 @@ type PlanRecord = Pick<
 export interface PlanReviewConfig {
 	/** The tool whose settled parts are the proposals. */
 	toolName: string;
+	/** Every tool part that supersedes an earlier proposal. Defaults to
+	 *  [toolName]; Test prep adds the sweep, which proposes a plan without
+	 *  calling propose_plan. */
+	proposalToolNames?: string[];
 	/** The chat record field carrying the linked record's id. */
 	chatKey: "testId" | "apCourseId";
 	/** e.g. "/api/tests" — the record's plan route base. */
@@ -80,6 +84,9 @@ export interface PlanReviewConfig {
 
 export const TEST_PREP_PLAN_CONFIG: PlanReviewConfig = {
 	toolName: "propose_plan",
+	// A completed material sweep writes the same saved plan, so it is a
+	// proposal too: an earlier propose_plan card must collapse under it.
+	proposalToolNames: ["propose_plan", "sweep_materials"],
 	chatKey: "testId",
 	apiBase: "/api/tests",
 	pageBase: "/tests",
@@ -104,9 +111,10 @@ export const TEST_PREP_PLAN_CONFIG: PlanReviewConfig = {
  *  has no view (tests/previews keep the card interactive). */
 function latestProposalCallId(
 	messages: readonly LhViewMessage[] | undefined,
-	toolName: string,
+	toolNames: readonly string[],
 ): string | null {
 	if (!messages) return null;
+	const types = new Set(toolNames.map((name) => `tool-${name}`));
 	for (let messageIndex = messages.length - 1; messageIndex >= 0; messageIndex--) {
 		const parts = messages[messageIndex]?.parts ?? [];
 		for (let partIndex = parts.length - 1; partIndex >= 0; partIndex--) {
@@ -114,7 +122,8 @@ function latestProposalCallId(
 			// Only a SETTLED call saved a revision; a failed/interrupted call
 			// (output-error, input-available) never superseded the record.
 			if (
-				candidate?.type === `tool-${toolName}` &&
+				candidate?.type !== undefined &&
+				types.has(candidate.type) &&
 				candidate.state === "output-available" &&
 				typeof candidate.toolCallId === "string"
 			) {
@@ -197,10 +206,11 @@ export function PlanReviewCard({
 		};
 	}, [chatId, config]);
 
-	// A sweep writes the proposal when it finishes: while it is still running,
-	// poll the plan so the card fills in without a manual reload. The interval
-	// only exists in that state; the first poll that sees `done` tears it down.
-	const sweepRunning = record?.sweep?.status === "running";
+	// A sweep writes the proposal when it finishes: while it is still running
+	// and no sections exist yet, poll the plan so the card fills in without a
+	// manual reload. Once sections exist (a re-sweep over a confirmed plan) the
+	// card must NOT poll — a poll would wipe the learner's in-progress edits.
+	const sweepRunning = record?.sweep?.status === "running" && record.sections.length === 0;
 	useEffect(() => {
 		if (!linkedId || !sweepRunning) return;
 		let alive = true;
@@ -222,7 +232,10 @@ export function PlanReviewCard({
 		};
 	}, [linkedId, sweepRunning, config.apiBase]);
 
-	const latestProposalId = latestProposalCallId(actions?.messages, config.toolName);
+	const latestProposalId = latestProposalCallId(
+		actions?.messages,
+		config.proposalToolNames ?? [config.toolName],
+	);
 	const isLatestProposal = latestProposalId === null || latestProposalId === part.toolCallId;
 
 	/** Move one left-out item into its suggested section of the draft and

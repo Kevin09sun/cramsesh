@@ -19,8 +19,10 @@ import { afterEach, test } from "node:test";
 import { createRoot, type Root } from "react-dom/client";
 import { parseHTML } from "linkedom";
 import { ChatActionsContext } from "../components/chat.tsx";
+import { JobsContext } from "../components/jobs-context.ts";
 import { PlanReviewCard } from "../components/test-prep/plan-review-card.tsx";
-import type { LhViewMessage, TestRecord } from "../src/core/index.ts";
+import { SweepMaterialsJobCard } from "../components/artifacts/dispatch-card.tsx";
+import type { JobRecord, JobStatus, LhViewMessage, TestRecord } from "../src/core/index.ts";
 
 const dom = parseHTML("<html><body></body></html>");
 Object.assign(globalThis, {
@@ -96,11 +98,13 @@ async function mount(
 	const messages = options.messages ?? proposalMessages([toolCallId]);
 	const puts: Array<{ method: string; body: unknown }> = [];
 	const sent: string[] = [];
+	let planGets = 0;
 	let current = initial;
 	globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
 		const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
 		if (url === "/api/chats/chat_1") return Response.json({ id: "chat_1", testId: initial.id });
 		if (url === `/api/tests/${initial.id}/plan` && (init?.method ?? "GET") === "GET") {
+			planGets++;
 			return Response.json(current);
 		}
 		if (url === `/api/tests/${initial.id}/plan` && init?.method === "PUT") {
@@ -152,7 +156,7 @@ async function mount(
 			</ChatActionsContext.Provider>,
 		);
 	});
-	return { puts, sent };
+	return { puts, sent, planGets: () => planGets };
 }
 
 test("renders each saved point with its source, not the call arguments", async () => {
@@ -369,4 +373,122 @@ test("a failed later proposal does not supersede the saved plan", async () => {
 	await mount(record(), { toolCallId: "call_ok", messages });
 	assert.ok(document.querySelector('[data-testid="plan-editor"]'), "the settled proposal keeps the editor");
 	assert.equal(document.querySelector('[data-testid="plan-superseded"]'), null);
+});
+
+test("a running re-sweep over an existing plan does not poll over in-progress edits (T10)", async () => {
+	const { planGets } = await mount(
+		record({
+			sweep: {
+				status: "running",
+				startedAt: "2026-11-10T12:00:00.000Z",
+				fileHashes: {},
+			},
+		}),
+	);
+
+	assert.ok(document.querySelector('[data-testid="plan-editor"]'), "an existing plan stays editable while re-sweeping");
+	assert.ok(!document.querySelector('[data-testid="plan-superseded"]'));
+	// The poll is 2s; with sections present it must never be armed.
+	await new Promise((resolve) => setTimeout(resolve, 2200));
+	await act(async () => {});
+	assert.equal(planGets(), 1, "only the initial load — no poll wiped the draft");
+});
+
+// ─── C1 — the swept plan is reviewable in the chat ──────────────────────────
+
+const SWEEP_COVERAGE = {
+	files: 3,
+	pages: 120,
+	visionPages: 4,
+	unsupported: [],
+	unreadable: [],
+	empty: [],
+	removed: [],
+};
+
+/** Mounts the sweep artifact registered for `tool-sweep_materials` against a
+ *  mock plan API and a jobs feed carrying the sweep job. */
+async function mountSweep(
+	initial: TestRecord,
+	options: { jobStatus?: JobStatus } = {},
+) {
+	const toolCallId = "call_sweep";
+	const messages: LhViewMessage[] = [
+		{
+			id: "message_sweep",
+			role: "assistant",
+			parts: [{ type: "tool-sweep_materials", toolCallId, state: "output-available" }],
+		},
+	];
+	globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+		const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+		if (url === "/api/chats/chat_1") return Response.json({ id: "chat_1", testId: initial.id });
+		if (url === `/api/tests/${initial.id}/plan` && (init?.method ?? "GET") === "GET") {
+			return Response.json(initial);
+		}
+		throw new Error(`unexpected request ${url}`);
+	}) as typeof fetch;
+
+	const job: JobRecord = {
+		id: "job_sweep",
+		kind: "sweep",
+		chatId: "chat_1",
+		toolCallId,
+		status: options.jobStatus ?? "done",
+		activity: "Reading a.pdf",
+		createdAt: "2026-11-10T12:00:00.000Z",
+		updatedAt: "2026-11-10T12:00:00.000Z",
+	};
+
+	host = document.createElement("div");
+	document.body.append(host);
+	root = createRoot(host);
+	await act(async () => {
+		root!.render(
+			<JobsContext.Provider value={[job]}>
+				<ChatActionsContext.Provider
+					value={{
+						chatId: "chat_1",
+						messages,
+						syncFromServer: async () => {},
+						sendText: () => {},
+						openSetup: () => {},
+					}}
+				>
+					<SweepMaterialsJobCard
+						part={{ type: "tool-sweep_materials", state: "output-available", toolCallId }}
+					/>
+				</ChatActionsContext.Provider>
+			</JobsContext.Provider>,
+		);
+	});
+}
+
+test("a settled sweep part renders the reviewable plan: coverage line, editor and Left out (C1)", async () => {
+	await mountSweep(
+		record({
+			leftOut: LEFT_OUT,
+			sweep: {
+				status: "done",
+				startedAt: "2026-11-10T12:00:00.000Z",
+				finishedAt: "2026-11-10T12:01:00.000Z",
+				fileHashes: {},
+				coverage: SWEEP_COVERAGE,
+			},
+		}),
+	);
+
+	assert.ok(document.querySelector('[data-testid="plan-editor"]'), "the swept plan is editable in chat");
+	assert.match(
+		document.querySelector('[data-testid="coverage-line"]')?.textContent ?? "",
+		/Read 3 files · 120 pages \(4 looked at by vision\)/,
+	);
+	assert.match(document.body.textContent ?? "", /Left out \(2\)/);
+});
+
+test("a running sweep part shows the dispatch card, not a half-built editor", async () => {
+	await mountSweep(record({ sections: [] }), { jobStatus: "running" });
+
+	assert.ok(document.querySelector('[data-testid="dispatch-card"]'), "live activity while the sweep runs");
+	assert.equal(document.querySelector('[data-testid="plan-editor"]'), null);
 });
