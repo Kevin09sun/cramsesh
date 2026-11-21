@@ -77,6 +77,42 @@ describe("sweep stages", () => {
 		assert.ok(beta.startsWith("<!-- source: notes.pdf p. 2 -->"), beta);
 	});
 
+	it("chunkTranscripts keeps the marker exact when chunkNotes dropped a blank line at a break", () => {
+		// The blank line after the first unit triggers a break and chunkNotes
+		// drops it; a naive running cursor then lags and labels the last chunk
+		// with b.pdf p. 1 instead of b.pdf p. 2.
+		const markdown = [
+			"<!-- source: b.pdf p. 1 -->",
+			"a".repeat(40),
+			"",
+			"middle",
+			"<!-- source: b.pdf p. 2 -->",
+			"c".repeat(40),
+		].join("\n");
+
+		const chunks = chunkTranscripts([transcript("b.pdf", markdown)], 10);
+		const last = chunks[chunks.length - 1]!;
+
+		assert.ok(last.includes("c".repeat(40)), "the final unit is its own chunk");
+		assert.ok(last.startsWith("<!-- source: b.pdf p. 2 -->"), last);
+		assert.equal(last.includes("b.pdf p. 1"), false, "the previous unit's marker never leaks forward");
+	});
+
+	it("chunkTranscripts emits no chunk made only of marker lines", () => {
+		const markdown = [
+			"<!-- source: a.pdf p. 1 -->",
+			"",
+			"<!-- source: a.pdf p. 2 -->",
+			"the only real content here",
+		].join("\n");
+
+		const chunks = chunkTranscripts([transcript("a.pdf", markdown)], 5);
+
+		assert.equal(chunks.length, 1, "marker-only chunks are skipped");
+		assert.ok(chunks[0]!.includes("the only real content here"));
+		assert.ok(chunks[0]!.startsWith("<!-- source: a.pdf p. 2 -->"), chunks[0]);
+	});
+
 	it("extractCandidates rejects a candidate with a source not in the chunk then accepts the retry", async () => {
 		const chunk =
 			"<!-- source: notes.pdf p. 3 -->\nMitochondria produce ATP through cellular respiration.";
@@ -104,6 +140,33 @@ describe("sweep stages", () => {
 
 		assert.deepEqual(result.candidates, good.candidates);
 		assert.deepEqual(result.markersSeen, ["notes.pdf p. 3"]);
+	});
+
+	it("extractCandidates reports every marker in a multi-marker chunk", async () => {
+		const chunk = [
+			"<!-- source: a.pdf p. 1 -->",
+			"first unit",
+			"<!-- source: a.pdf p. 2 -->",
+			"second unit",
+		].join("\n");
+		const good = {
+			candidates: [
+				{
+					kind: "fact",
+					category: "definition",
+					text: "second unit",
+					source: "a.pdf p. 2",
+					evidence: "second unit",
+				},
+			],
+		};
+
+		const result = await extractCandidates(chunk, {
+			engine: fauxEngine([submit("submit_candidates", good, "multi-marker")]),
+			onUsage: noUsage,
+		});
+
+		assert.deepEqual(result.markersSeen, ["a.pdf p. 1", "a.pdf p. 2"]);
 	});
 
 	it("mergeCandidates returns sections and leftOut", async () => {
@@ -151,6 +214,66 @@ describe("sweep stages", () => {
 
 		assert.deepEqual(out.sections, []);
 		assert.deepEqual(out.leftOut, []);
+	});
+
+	it("mergeCandidates overflow splits by source file and keeps an all-noise bucket's Left out", async () => {
+		// Two source files, each bucket over MERGE_MAX_CHARS on its own? No —
+		// together they are over; each is under, so the merger runs once per file.
+		const candidates: Candidate[] = [];
+		for (let index = 0; index < 400; index++) {
+			candidates.push({
+				kind: "fact",
+				category: "definition",
+				text: `alpha fact ${index} ${"x".repeat(300)}`,
+				source: "a.pdf p. 1",
+				evidence: "e",
+			});
+			candidates.push({
+				kind: "fact",
+				category: "definition",
+				text: `beta fact ${index} ${"x".repeat(300)}`,
+				source: "b.pdf p. 1",
+				evidence: "e",
+			});
+		}
+		assert.ok(JSON.stringify(candidates).length > 150_000, "the fixture forces the overflow path");
+
+		// The first bucket (a.pdf) is all noise and legitimately submits no
+		// sections; the second bucket carries the plan.
+		const engine = fauxEngine([
+			submit(
+				"submit_plan",
+				{
+					sections: [],
+					leftOut: [{ text: "all of alpha", source: "a.pdf p. 1", reason: "filler examples" }],
+				},
+				"bucket-a",
+			),
+			submit(
+				"submit_plan",
+				{
+					sections: [
+						{ title: "Beta material", points: [{ text: "A beta point", source: "b.pdf p. 1" }] },
+					],
+					leftOut: [{ text: "a beta citation", source: "b.pdf p. 1", reason: "citation" }],
+				},
+				"bucket-b",
+			),
+		]);
+
+		const out = await mergeCandidates(
+			{ candidates, outlineHeadings: [], existingPoints: [], existingLeftOut: [] },
+			{ engine, onUsage: noUsage },
+		);
+
+		assert.deepEqual(out.sections, [
+			{ title: "Beta material", points: [{ text: "A beta point", source: "b.pdf p. 1" }] },
+		]);
+		assert.deepEqual(
+			out.leftOut.map((item) => item.text).sort(),
+			["a beta citation", "all of alpha"],
+			"both buckets' Left out lists survive",
+		);
 	});
 
 	it("mergeCandidates throws after maxTurns of invalid submissions", async () => {

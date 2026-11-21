@@ -119,17 +119,20 @@ function mergePrompt(input: MergeInput): string {
 	].join("\n");
 }
 
-/** Load-bearing "at least one section" rule is skipped on a re-sweep, where
- *  an addition-free plan is legitimate. */
-function submissionProblem(sections: PlanDraftSection[], reSweep: boolean): string | null {
-	let problems = planProblems(sections);
-	if (reSweep && sections.length === 0) {
-		problems = problems.filter((problem) => problem !== "The plan needs at least one section.");
-	}
+/** Load-bearing "at least one section" rule is skipped where an
+ *  addition-free plan is legitimate: re-sweeps, and each source-file bucket
+ *  of an overflow merge (a bucket may be entirely noise). */
+function submissionProblem(sections: PlanDraftSection[], allowEmpty: boolean): string | null {
+	if (allowEmpty && sections.length === 0) return null;
+	const problems = planProblems(sections);
 	return problems.length > 0 ? problems.join("; ") : null;
 }
 
-async function mergeOnce(input: MergeInput, opts: MergeOptions): Promise<MergeOutput> {
+async function mergeOnce(
+	input: MergeInput,
+	opts: MergeOptions,
+	allowEmptySections = input.existingPoints.length > 0,
+): Promise<MergeOutput> {
 	const value = await runSubmitAgent<SubmitValue>({
 		role: "sweepMerger",
 		toolName: "submit_plan",
@@ -145,7 +148,7 @@ async function mergeOnce(input: MergeInput, opts: MergeOptions): Promise<MergeOu
 		signal: opts.signal,
 		onStep: (usage) => opts.onUsage(usage),
 		neverSubmitted: "the merger never submitted a plan",
-		validate: (submission) => submissionProblem(submission.sections, input.existingPoints.length > 0),
+		validate: (submission) => submissionProblem(submission.sections, allowEmptySections),
 	});
 
 	return { sections: value.sections, leftOut: value.leftOut };
@@ -202,14 +205,20 @@ async function mergeBySourceFile(input: MergeInput, opts: MergeOptions): Promise
 		if (group) group.push(candidate);
 		else groups.set(file, [candidate]);
 	}
-	// One file cannot be split further — merge it whole rather than loop.
-	if (groups.size <= 1) return mergeOnce(input, opts);
-
+	// One file cannot be split further — still merge it whole (empty sections
+	// allowed, since the combined plan is validated below).
 	const outputs: MergeOutput[] = [];
-	for (const candidates of groups.values()) {
-		outputs.push(await mergeOnce({ ...input, candidates }, opts));
+	if (groups.size <= 1) {
+		outputs.push(await mergeOnce(input, opts, true));
+	} else {
+		for (const candidates of groups.values()) {
+			outputs.push(await mergeOnce({ ...input, candidates }, opts, true));
+		}
 	}
-	return combineOutputs(outputs);
+	const combined = combineOutputs(outputs);
+	const problem = submissionProblem(combined.sections, input.existingPoints.length > 0);
+	if (problem) throw new Error(`the merged plan is not usable: ${problem}`);
+	return combined;
 }
 
 /**

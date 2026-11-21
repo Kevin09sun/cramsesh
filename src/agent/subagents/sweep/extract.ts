@@ -46,6 +46,23 @@ function markerSources(text: string): string[] {
 	return seen;
 }
 
+/** Index where `chunkLines` occurs in `lines` at or after `from`, or -1.
+ *  chunkNotes returns contiguous line runs, so this recovers a chunk's true
+ *  start even when the chunker dropped a blank line at a break. */
+function locateChunk(chunkLines: string[], lines: string[], from: number): number {
+	for (let start = from; start + chunkLines.length <= lines.length; start++) {
+		let matches = true;
+		for (let index = 0; index < chunkLines.length; index++) {
+			if (lines[start + index] !== chunkLines[index]) {
+				matches = false;
+				break;
+			}
+		}
+		if (matches) return start;
+	}
+	return -1;
+}
+
 /**
  * Split every transcript into chunks of at most `budget` tokens (chars/4).
  * Markers cross chunk boundaries here: when a chunk does not itself begin
@@ -71,10 +88,21 @@ export function chunkTranscripts(transcripts: Transcript[], budget: number): str
 		let cursor = 0;
 		for (const chunk of chunkNotes(markdown, budget)) {
 			const chunkLines = chunk.split("\n");
+			// chunkNotes can drop a blank line that triggered a break, so the
+			// cursor cannot simply add chunk lengths: find where this chunk
+			// really starts in the source lines.
+			const start = locateChunk(chunkLines, lines, cursor);
+			const startLine = start >= 0 ? start : cursor;
+			cursor = startLine + chunkLines.length;
+
+			// A chunk of marker lines only is not worth a model call; the
+			// next chunk carries the same marker in force.
+			const hasContent = chunkLines.some((line) => line.trim() !== "" && markerSource(line) === null);
+			if (!hasContent) continue;
+
 			const startsWithMarker = markerSource(chunkLines[0] ?? "") !== null;
-			const carried = active[cursor] ?? "";
+			const carried = active[startLine] ?? "";
 			chunks.push(startsWithMarker || carried === "" ? chunk : `<!-- source: ${carried} -->\n${chunk}`);
-			cursor += chunkLines.length;
 		}
 	}
 	return chunks;
