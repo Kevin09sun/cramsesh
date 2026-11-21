@@ -46,6 +46,12 @@ export interface TestRecord {
 	planConfirmed: boolean;
 	sections: TestSection[];
 	version: 1;
+	/** Material the sweep set aside as noise; recoverable for the test's life. */
+	leftOut?: LeftOutItem[];
+	/** Progress of the most recent sweep. */
+	sweep?: SweepState;
+	/** Re-sweep additions awaiting the learner's accept/drop review. */
+	pendingAdditions?: PendingAdditions;
 }
 
 /** The plan-review draft: ids are optional because they are minted on merge. */
@@ -53,6 +59,49 @@ export interface PlanDraftSection {
 	id?: string;
 	title: string;
 	points: Array<{ id?: string; text: string; source: string }>;
+}
+
+// ─── material sweep records ─────────────────────────────────────────────────
+
+/** A candidate the merger judged to be noise, kept visible and promotable. */
+export interface LeftOutItem {
+	id: string;
+	text: string;
+	source: string;
+	reason: string;
+	suggestedSection?: string;
+}
+
+/**
+ * Whole-folder coverage, cumulative across sweeps. `unsupported`, `unreadable`,
+ * `empty` and `removed` name files or "file p. N" entries; "couldn't read" is
+ * deliberately distinct from "read but found nothing".
+ */
+export interface SweepCoverage {
+	files: number;
+	pages: number;
+	visionPages: number;
+	unsupported: string[];
+	unreadable: string[];
+	empty: string[];
+	removed: string[];
+	lastResweep?: { at: string; files: number };
+}
+
+export interface SweepState {
+	status: "running" | "done" | "error";
+	activity?: string;
+	startedAt: string;
+	finishedAt?: string;
+	error?: string;
+	coverage?: SweepCoverage;
+	fileHashes: Record<string, string>;
+}
+
+/** A re-sweep's proposal, held until the learner accepts or drops it. */
+export interface PendingAdditions {
+	sections: PlanDraftSection[];
+	leftOut: LeftOutItem[];
 }
 
 // ─── the status machine ─────────────────────────────────────────────────────
@@ -303,4 +352,184 @@ export function planProblems(draft: PlanDraftSection[]): string[] {
 	});
 
 	return problems;
+}
+
+// ─── material sweep ─────────────────────────────────────────────────────────
+
+/** Coverage before anything has been read. */
+export function emptyCoverage(): SweepCoverage {
+	return {
+		files: 0,
+		pages: 0,
+		visionPages: 0,
+		unsupported: [],
+		unreadable: [],
+		empty: [],
+		removed: [],
+	};
+}
+
+/** Does a coverage entry belong to this file ("a.pdf", "a.pdf p. 3", "a.pdf (encrypted)")? */
+function belongsToFile(entry: string, rel: string): boolean {
+	if (entry === rel) return true;
+	if (!entry.startsWith(rel)) return false;
+	const boundary = entry.charAt(rel.length);
+	return (
+		boundary === " " ||
+		boundary === ":" ||
+		boundary === "(" ||
+		boundary === "·" ||
+		boundary === "-" ||
+		boundary === "–" ||
+		boundary === "—"
+	);
+}
+
+function unionLists(base: string[], addition: string[]): string[] {
+	const seen = new Set(base);
+	const union = [...base];
+	for (const entry of addition) {
+		if (!seen.has(entry)) {
+			seen.add(entry);
+			union.push(entry);
+		}
+	}
+	return union;
+}
+
+/**
+ * Fold one run's coverage into the whole-folder cumulative coverage. Counts
+ * add; lists union and dedupe. A file transcribed in this run has its old
+ * `unreadable`/`empty` entries cleared first (a page that failed last time and
+ * read now must stop saying "couldn't read"). `removed` is replaced by the
+ * run's list: it describes the folder as it is now. `readFiles` is a
+ * run-only hint and is never stored.
+ */
+export function mergeCoverage(
+	prev: SweepCoverage | undefined,
+	run: SweepCoverage & { readFiles?: string[] },
+	resweepAt?: string,
+): SweepCoverage {
+	const base = prev ?? emptyCoverage();
+	const readFiles = run.readFiles ?? [];
+	const keepEntry = (entry: string) => !readFiles.some((rel) => belongsToFile(entry, rel));
+
+	const merged: SweepCoverage = {
+		files: base.files + run.files,
+		pages: base.pages + run.pages,
+		visionPages: base.visionPages + run.visionPages,
+		unsupported: unionLists(base.unsupported, run.unsupported),
+		unreadable: unionLists(base.unreadable.filter(keepEntry), run.unreadable),
+		empty: unionLists(base.empty.filter(keepEntry), run.empty),
+		removed: [...run.removed],
+	};
+
+	const lastResweep = resweepAt !== undefined ? { at: resweepAt, files: run.files } : base.lastResweep;
+	if (lastResweep !== undefined) merged.lastResweep = lastResweep;
+
+	return merged;
+}
+
+const PAGE_ENTRY = /^(.*) p\. (\d+)$/;
+
+/** "ch4.pdf p. 88", "p. 89", "p. 90" → "ch4.pdf p. 88–90"; other entries pass through. */
+function collapsePages(entries: string[]): string {
+	type Range = { file: string; start: number; end: number };
+	const groups: Array<Range | { literal: string }> = [];
+
+	for (const entry of entries) {
+		const match = PAGE_ENTRY.exec(entry);
+		if (!match) {
+			groups.push({ literal: entry });
+			continue;
+		}
+		const file = match[1]!;
+		const page = Number(match[2]);
+		const last = groups[groups.length - 1];
+		if (last && "file" in last && last.file === file && page === last.end + 1) {
+			last.end = page;
+		} else {
+			groups.push({ file, start: page, end: page });
+		}
+	}
+
+	return groups
+		.map((group) => {
+			if ("literal" in group) return group.literal;
+			if (group.start === group.end) return `${group.file} p. ${group.start}`;
+			return `${group.file} p. ${group.start}–${group.end}`;
+		})
+		.join(", ");
+}
+
+/**
+ * The audit line under the plan, e.g.
+ * "Read 14 files · 312 pages (41 looked at by vision) · nothing found: ch4.pdf p. 88–90 · couldn't read: old.pdf (encrypted) · not read: notes.key".
+ * Sections with empty lists are omitted.
+ */
+export function coverageLine(c: SweepCoverage): string {
+	const files = `${c.files} ${c.files === 1 ? "file" : "files"}`;
+	const pages = `${c.pages} ${c.pages === 1 ? "page" : "pages"}`;
+	const vision = c.visionPages > 0 ? ` (${c.visionPages} looked at by vision)` : "";
+
+	const parts = [`Read ${files} · ${pages}${vision}`];
+	if (c.empty.length > 0) parts.push(`nothing found: ${collapsePages(c.empty)}`);
+	if (c.unreadable.length > 0) parts.push(`couldn't read: ${c.unreadable.join(", ")}`);
+	if (c.unsupported.length > 0) parts.push(`not read: ${c.unsupported.join(", ")}`);
+	if (c.removed.length > 0) parts.push(`removed: ${c.removed.join(", ")}`);
+
+	return parts.join(" · ");
+}
+
+/**
+ * Insert a promoted left-out item as a point into the section whose trimmed
+ * title matches `suggestedSection`, else the first section. Returns new
+ * drafts; the item's new point has no id (mint on merge) and never mutates the
+ * input.
+ */
+export function promoteIntoDraft(draft: PlanDraftSection[], item: LeftOutItem): PlanDraftSection[] {
+	const wanted = item.suggestedSection?.trim();
+	const matchIndex = wanted === undefined ? -1 : draft.findIndex((section) => section.title.trim() === wanted);
+	const target = matchIndex === -1 ? 0 : matchIndex;
+
+	return draft.map((section, index) =>
+		index === target
+			? { ...section, points: [...section.points, { text: item.text, source: item.source }] }
+			: { ...section, points: [...section.points] },
+	);
+}
+
+/**
+ * Merge accepted re-sweep additions into the confirmed sections: matched by
+ * trimmed section title, otherwise a new section is appended. Every added
+ * point is new (`newId()`, unchecked, empty history); existing points and
+ * their progress are never altered.
+ */
+export function applyAdditions(
+	sections: TestSection[],
+	accepted: PlanDraftSection[],
+	newId: () => string,
+): TestSection[] {
+	const next: TestSection[] = sections.map((section) => ({ ...section, points: [...section.points] }));
+
+	for (const addition of accepted) {
+		const added: TestPoint[] = addition.points.map((point) => ({
+			id: newId(),
+			text: point.text,
+			source: point.source,
+			status: "unchecked",
+			history: [],
+		}));
+		if (added.length === 0) continue;
+
+		const title = addition.title.trim();
+		const matched = next.find((section) => section.title.trim() === title);
+		if (matched) {
+			matched.points.push(...added);
+		} else {
+			next.push({ id: newId(), title: addition.title, points: added });
+		}
+	}
+
+	return next;
 }
