@@ -13,9 +13,13 @@
  *
  * GET serves the sweep-progress view: the latest sweep state and the
  * pending additions review (null when absent).
+ *
+ * The mutation carries the shared same-origin guard (src/server/same-origin.ts):
+ * browser intent, not authentication — a cross-site caller never launches
+ * a sweep.
  */
 
-import { startResweep, stores } from "@/src/server";
+import { sameOriginAuthorized, startResweep, stores } from "@/src/server";
 
 export const dynamic = "force-dynamic";
 
@@ -33,9 +37,16 @@ export async function GET(
 }
 
 export async function POST(
-	_request: Request,
+	request: Request,
 	ctx: { params: Promise<{ id: string }> },
 ): Promise<Response> {
+	if (!sameOriginAuthorized(request)) {
+		return Response.json(
+			{ error: "Re-sweeps require a trusted same-origin request." },
+			{ status: 403 },
+		);
+	}
+
 	const { id } = await ctx.params;
 	const record = stores.testStore.get(id);
 	if (!record) return Response.json({ error: "Unknown test" }, { status: 404 });

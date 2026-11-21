@@ -41,11 +41,24 @@ export function retentionForSlot(slot: ModelSlotName) {
 
 /** The reader, extractor and merger a sweep runs on. An engine whose
  *  provider key is gone is not an engine: the key-presence gate the job
- *  runner applies, applied here. */
-export function sweepEngines(): SweepDeps["engines"] {
-	const reader = resolveEngine("sweepReader");
-	const extractor = resolveEngine("sweepExtractor");
-	const merger = resolveEngine("sweepMerger");
+ *  runner applies, applied here. A construction failure (a configured model
+ *  missing from the catalog throws synchronously in piEngineForSpec) also
+ *  drops that engine, so the orchestrator records its own honest
+ *  "models not configured" error instead of the launch 500ing with no
+ *  sweep record. `resolve` is the test seam. */
+export function sweepEngines(
+	resolve: (role: ModelRole) => PiEngine | undefined = resolveEngine,
+): SweepDeps["engines"] {
+	const pick = (role: ModelRole): PiEngine | undefined => {
+		try {
+			return resolve(role);
+		} catch {
+			return undefined;
+		}
+	};
+	const reader = pick("sweepReader");
+	const extractor = pick("sweepExtractor");
+	const merger = pick("sweepMerger");
 	return {
 		...(reader && providerKeyPresent(reader.model.provider) ? { reader } : {}),
 		...(extractor && providerKeyPresent(extractor.model.provider) ? { extractor } : {}),

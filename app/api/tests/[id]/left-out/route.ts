@@ -5,10 +5,12 @@
  * { itemId } goes through testStore.promoteLeftOut: the item becomes an
  * unchecked point in its suggested section (or the first section) and leaves
  * leftOut. Answers 200 with the updated record. An unknown test is a 404, a
- * malformed body a 400, and an unknown item a 404.
+ * malformed body a 400, and an unknown item a 404 (no plan to promote into is
+ * a 409). The mutation carries the shared same-origin guard
+ * (src/server/same-origin.ts).
  */
 
-import { stores } from "@/src/server";
+import { sameOriginAuthorized, stores } from "@/src/server";
 
 export const dynamic = "force-dynamic";
 
@@ -16,6 +18,13 @@ export async function POST(
 	request: Request,
 	ctx: { params: Promise<{ id: string }> },
 ): Promise<Response> {
+	if (!sameOriginAuthorized(request)) {
+		return Response.json(
+			{ error: "Left-out changes require a trusted same-origin request." },
+			{ status: 403 },
+		);
+	}
+
 	const { id } = await ctx.params;
 	if (!stores.testStore.get(id)) return Response.json({ error: "Unknown test" }, { status: 404 });
 
@@ -34,6 +43,9 @@ export async function POST(
 		const message = error instanceof Error ? error.message : String(error);
 		if (message === "unknown left-out item") {
 			return Response.json({ error: message }, { status: 404 });
+		}
+		if (message === "no plan sections") {
+			return Response.json({ error: message }, { status: 409 });
 		}
 		return Response.json({ error: message }, { status: 500 });
 	}

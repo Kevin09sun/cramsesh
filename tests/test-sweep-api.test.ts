@@ -53,7 +53,6 @@ type PlanDraftSection = import("../src/core/test-prep.ts").PlanDraftSection;
 
 const BASE = "http://localhost";
 const FOLDER = path.join(TMP_DATA, "materials");
-const JSON_HEADERS = { "content-type": "application/json" };
 
 function draft(): PlanDraftSection[] {
 	return [
@@ -82,32 +81,33 @@ function stubResweep(): void {
 	};
 }
 
-function postSweep(id: string): Promise<Response> {
-	return sweepRoute.POST(new Request(`${BASE}/api/tests/${id}/sweep`, { method: "POST" }), {
-		params: Promise.resolve({ id }),
-	});
+function postSweep(id: string, origin = BASE): Promise<Response> {
+	return sweepRoute.POST(
+		new Request(`${BASE}/api/tests/${id}/sweep`, { method: "POST", headers: { origin } }),
+		{ params: Promise.resolve({ id }) },
+	);
 }
 
 function getSweep(id: string): Promise<Response> {
 	return sweepRoute.GET(new Request(`${BASE}/api/tests/${id}/sweep`), { params: Promise.resolve({ id }) });
 }
 
-function postAdditions(id: string, body: unknown): Promise<Response> {
+function postAdditions(id: string, body: unknown, origin = BASE): Promise<Response> {
 	return additionsRoute.POST(
 		new Request(`${BASE}/api/tests/${id}/additions`, {
 			method: "POST",
-			headers: JSON_HEADERS,
+			headers: { origin, "content-type": "application/json" },
 			body: JSON.stringify(body),
 		}),
 		{ params: Promise.resolve({ id }) },
 	);
 }
 
-function postLeftOut(id: string, body: unknown): Promise<Response> {
+function postLeftOut(id: string, body: unknown, origin = BASE): Promise<Response> {
 	return leftOutRoute.POST(
 		new Request(`${BASE}/api/tests/${id}/left-out`, {
 			method: "POST",
-			headers: JSON_HEADERS,
+			headers: { origin, "content-type": "application/json" },
 			body: JSON.stringify(body),
 		}),
 		{ params: Promise.resolve({ id }) },
@@ -166,6 +166,15 @@ describe("POST /api/tests/[id]/sweep", () => {
 		assert.equal(deps.store, testStore, "the route injects the real test store");
 		assert.ok(deps.engines, "the route injects the settings-resolved engines");
 	});
+
+	it("refuses a cross-origin launch", async () => {
+		stubResweep();
+		const test = testStore.create("Cross origin sweep", FOLDER);
+
+		const res = await postSweep(test.id, "https://evil.example");
+		assert.equal(res.status, 403);
+		assert.equal(resweepCalls.length, 0, "a refused request never launches a sweep");
+	});
 });
 
 describe("GET /api/tests/[id]/sweep", () => {
@@ -218,6 +227,18 @@ describe("POST /api/tests/[id]/additions", () => {
 		assert.equal(testStore.get(test.id)?.pendingAdditions, undefined);
 	});
 
+	it("refuses a cross-origin review", async () => {
+		const test = testStore.create("Cross origin additions", FOLDER);
+		testStore.setPendingAdditions(test.id, {
+			sections: [{ title: "Section A", points: [{ text: "New point", source: "new.pdf" }] }],
+			leftOut: [],
+		});
+
+		const res = await postAdditions(test.id, { accepted: ["0:0"] }, "https://evil.example");
+		assert.equal(res.status, 403);
+		assert.ok(testStore.get(test.id)?.pendingAdditions, "a refused request never writes");
+	});
+
 	it("is a 400 when accepted is not an array of strings", async () => {
 		const test = testStore.create("Bad accepted", FOLDER);
 		const notArray = await postAdditions(test.id, { accepted: "0:0" });
@@ -258,6 +279,19 @@ describe("POST /api/tests/[id]/left-out", () => {
 		assert.ok(record.sections[0]?.points.some((point) => point.text === "Deep fact"));
 	});
 
+	it("refuses a cross-origin promotion", async () => {
+		const test = testStore.create("Cross origin left-out", FOLDER);
+		const saved = testStore.saveSweepPlan(test.id, draft(), [
+			{ text: "Deep fact", source: "notes.pdf", reason: "detail" },
+		]);
+		const item = saved.leftOut?.[0];
+		assert.ok(item, "the sweep minted a left-out item");
+
+		const res = await postLeftOut(test.id, { itemId: item.id }, "https://evil.example");
+		assert.equal(res.status, 403);
+		assert.equal(testStore.get(test.id)?.leftOut?.length, 1, "a refused request never writes");
+	});
+
 	it("is a 404 for an unknown left-out item", async () => {
 		const test = testStore.create("Unknown item", FOLDER);
 		testStore.saveSweepPlan(test.id, draft(), []);
@@ -271,8 +305,31 @@ describe("POST /api/tests/[id]/left-out", () => {
 		assert.equal(res.status, 400);
 	});
 
+	it("is a 409 when there is no plan section to promote into", async () => {
+		const test = testStore.create("No sections", FOLDER);
+		testStore.setPendingAdditions(test.id, {
+			sections: [],
+			leftOut: [{ id: "test_orphan", text: "Orphan", source: "x.pdf", reason: "detail" }],
+		});
+		const resolved = testStore.resolveAdditions(test.id, []);
+		const item = resolved.leftOut?.[0];
+		assert.ok(item, "the orphan rode through the review");
+
+		const res = await postLeftOut(test.id, { itemId: item.id });
+		assert.equal(res.status, 409);
+	});
+
 	it("is a 404 for an unknown test", async () => {
 		const res = await postLeftOut("test_never_existed", { itemId: "x" });
 		assert.equal(res.status, 404);
+	});
+});
+
+describe("sweepEngines", () => {
+	it("drops an engine whose construction throws", () => {
+		const engines = sweepServer.sweepEngines(() => {
+			throw new Error("model not in catalog");
+		});
+		assert.deepEqual(engines, {});
 	});
 });

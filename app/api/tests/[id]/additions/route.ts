@@ -6,10 +6,11 @@
  * "sectionIndex:pointIndex") go through testStore.resolveAdditions: accepted
  * points become unchecked additions, everything else lands in leftOut, and
  * the review clears. Answers 200 with the updated record. An unknown test is
- * a 404; a malformed body a 400; a review already resolved a 409.
+ * a 404; a malformed body a 400; a review already resolved a 409. The
+ * mutation carries the shared same-origin guard (src/server/same-origin.ts).
  */
 
-import { stores } from "@/src/server";
+import { sameOriginAuthorized, stores } from "@/src/server";
 
 export const dynamic = "force-dynamic";
 
@@ -17,6 +18,13 @@ export async function POST(
 	request: Request,
 	ctx: { params: Promise<{ id: string }> },
 ): Promise<Response> {
+	if (!sameOriginAuthorized(request)) {
+		return Response.json(
+			{ error: "Addition review requires a trusted same-origin request." },
+			{ status: 403 },
+		);
+	}
+
 	const { id } = await ctx.params;
 	if (!stores.testStore.get(id)) return Response.json({ error: "Unknown test" }, { status: 404 });
 
