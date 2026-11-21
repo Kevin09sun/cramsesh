@@ -18,6 +18,7 @@ import {
 	type Describe,
 	type SweepFile,
 } from "../src/agent/subagents/sweep/transcribe.ts";
+import { pdfExtract, pdfInfo } from "../src/agent/subagents/pdf-ops.ts";
 import { tinyPdf, type Run } from "./helpers/tiny-pdf.ts";
 
 const LONG_TEXT =
@@ -384,6 +385,77 @@ describe("transcribeFile — pdf", () => {
 		assert.match(transcript.unreadable[0]!, /^bad\.pdf \(.+\)$/);
 		assert.equal(transcript.pages, 0);
 		assert.equal(transcript.visionPages, 0);
+	});
+
+	it("parses the whole PDF once, not once per page (I5)", async () => {
+		const pdf = make("once.pdf", imageAndTextPdf());
+		headlessOverride.current = fakeHeadless();
+		const specs: string[] = [];
+		const describeStub: Describe = async () => "A labelled diagram.";
+
+		const transcript = await transcribeFile(sweepFile(pdf, root), {
+			describe: describeStub,
+			pdf: {
+				info: pdfInfo,
+				extract: async (abs, spec) => {
+					specs.push(spec);
+					return pdfExtract(abs, spec);
+				},
+			},
+		});
+
+		assert.deepEqual(specs, ["1-2"], "one full-document extraction for the whole file");
+		assert.match(transcript.markdown, /<!-- source: once\.pdf p\. 1 -->/);
+		assert.match(transcript.markdown, /Diagram of a cell/);
+		assert.match(transcript.markdown, /<!-- source: once\.pdf p\. 2 -->/);
+		assert.match(transcript.markdown, /Photosynthesis converts/);
+		assert.equal(transcript.pages, 2);
+	});
+
+	it("renders vision pages in batches of eight (I5)", async () => {
+		const pdf = make("many.pdf", tinyPdf(Array.from({ length: 10 }, (_, i) => ({
+			image: true,
+			runs: wrapRuns(`${LONG_TEXT} page ${i + 1}`),
+		}))));
+		const batches: number[][] = [];
+		headlessOverride.current = fakeHeadless({
+			renderPdfPages: async (_p, pages) => {
+				batches.push([...pages]);
+				return pages.map((page) => ({ page, png: Buffer.from("fake-png") }));
+			},
+		});
+		const describeStub: Describe = async () => "described";
+
+		const transcript = await transcribeFile(sweepFile(pdf, root), { describe: describeStub });
+
+		assert.deepEqual(batches, [[1, 2, 3, 4, 5, 6, 7, 8], [9, 10]], "one render per batch of eight");
+		assert.equal(transcript.visionPages, 10);
+	});
+
+	it("with no reader, vision pages are marked failed without rendering (I5)", async () => {
+		const pdf = make("noreader.pdf", imageAndTextPdf());
+		let renders = 0;
+		headlessOverride.current = fakeHeadless({
+			renderPdfPages: async (_p, pages) => {
+				renders++;
+				return pages.map((page) => ({ page, png: Buffer.from("fake-png") }));
+			},
+		});
+		let describes = 0;
+		const describeStub: Describe = async () => {
+			describes++;
+			throw new Error("no reader");
+		};
+
+		const transcript = await transcribeFile(sweepFile(pdf, root), {
+			describe: describeStub,
+			hasReader: false,
+		});
+
+		assert.equal(renders, 0, "nothing is rendered when nobody can read it");
+		assert.equal(describes, 0);
+		assert.deepEqual(transcript.unreadable, ["noreader.pdf p. 1 (vision failed)"]);
+		assert.match(transcript.markdown, /Diagram of a cell/, "the page's text still transcribes");
 	});
 });
 

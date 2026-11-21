@@ -248,6 +248,7 @@ async function transcribeOne(
 	signal: AbortSignal | undefined,
 	activity: (line: string) => void,
 	cacheDir: string,
+	hasReader: boolean,
 ): Promise<Transcript> {
 	throwIfAborted(signal);
 	const cacheFile = path.join(cacheDir, `${file.hash}.md`);
@@ -259,7 +260,7 @@ async function transcribeOne(
 	}
 
 	activity(`Reading ${file.rel}`);
-	const transcript = await transcribeFile(file, { describe, signal, onActivity: activity });
+	const transcript = await transcribeFile(file, { describe, signal, onActivity: activity, hasReader });
 	// A transcript with an unreadable unit is not a finished read: caching it
 	// would replay the failure forever. It is re-read on the next sweep.
 	if (transcript.unreadable.length === 0) {
@@ -501,11 +502,14 @@ export async function runSweep(
 		if (!deps.stages?.merge && !deps.engines.merger) return fail("models not configured: strong");
 
 		const describe = deps.describe ?? readerDescribe(deps);
+		// A reader exists only when one was injected or a reader engine is
+		// configured; otherwise PDF vision pages are marked failed unrendered.
+		const hasReader = deps.describe !== undefined || deps.engines.reader !== undefined;
 		const cacheDir = cacheDirFor(testId);
 		const transcripts: Transcript[] = [];
 		for (const file of changed) {
 			throwIfAborted(deps.signal);
-			transcripts.push(await transcribeOne(file, describe, deps.signal, activity, cacheDir));
+			transcripts.push(await transcribeOne(file, describe, deps.signal, activity, cacheDir, hasReader));
 		}
 
 		const chunks = chunkTranscripts(transcripts, CHUNK_BUDGET);

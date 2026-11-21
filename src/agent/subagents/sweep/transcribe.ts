@@ -53,6 +53,13 @@ export interface TranscribeDeps {
 	describe: Describe;
 	signal?: AbortSignal;
 	onActivity?: (line: string) => void;
+	/** False when no vision reader is configured (the orchestrator's default
+	 *  reader throws on every call): vision pages are reported failed without
+	 *  rendering anything. Omitted = true. */
+	hasReader?: boolean;
+	/** Test seam for the pdfjs plumbing, so a test can count the single
+	 *  full-document extraction. Production uses pdfInfo/pdfExtract. */
+	pdf?: { info: typeof pdfInfo; extract: typeof pdfExtract };
 }
 
 /** Exact routing rule: a page also goes to vision when it has any image,
@@ -68,6 +75,9 @@ const VISION_HINT =
 
 const DPI = 150;
 const CONCURRENCY = 4;
+/** Pages per renderPdfPages call: one Skia render pass per batch, not per
+ *  page — a 300-page PDF means ~38 renders, not 300. */
+const VISION_BATCH = 8;
 
 function marker(rel: string, unit?: string): string {
 	return unit ? `<!-- source: ${rel} ${unit} -->` : `<!-- source: ${rel} -->`;
@@ -114,47 +124,94 @@ async function mapLimit<T, R>(
 	return results;
 }
 
-/** pdfExtract prefixes each page with `--- Page N ---`; the sweep's own
- *  marker already names the page. */
-function stripPageHeader(text: string, page: number): string {
-	const prefix = `--- Page ${page} ---\n`;
-	return text.startsWith(prefix) ? text.slice(prefix.length) : text;
+/** pdfExtract prefixes each page with `--- Page N ---`; split one full-document
+ *  extraction back into page texts (I5: one parse per file, not one per page). */
+function splitExtractedPages(text: string): Map<number, string> {
+	const pages = new Map<number, string>();
+	const header = /^--- Page (\d+) ---$/gm;
+	const matches = [...text.matchAll(header)];
+	for (let index = 0; index < matches.length; index++) {
+		const match = matches[index]!;
+		const number = Number(match[1]);
+		const start = (match.index ?? 0) + match[0].length;
+		const end = index + 1 < matches.length ? (matches[index + 1]!.index ?? text.length) : text.length;
+		pages.set(number, text.slice(start, end).replace(/^\n/, ""));
+	}
+	return pages;
+}
+
+/** Describe each vision page with the bounded pool, rendering in page
+ *  batches. A failed batch (or a batch entry with no image) is per-page
+ *  "no description" — the same outcome as a failed describe call. */
+async function describeVisionPages(
+	file: SweepFile,
+	targets: PdfPageInfo[],
+	deps: TranscribeDeps,
+): Promise<Array<{ page: number; description: string | null }>> {
+	const outcomes: Array<{ page: number; description: string | null }> = [];
+	for (let start = 0; start < targets.length; start += VISION_BATCH) {
+		throwIfAborted(deps.signal);
+		const batch = targets.slice(start, start + VISION_BATCH);
+		const numbers = batch.map((page) => page.page);
+		let rendered: Array<{ page: number; png: Buffer }>;
+		try {
+			// renderPdfPages is native (pdfjs + Skia) — no browser gate.
+			rendered = await getHeadless().renderPdfPages(file.abs, numbers, { dpi: DPI });
+		} catch (error) {
+			if (deps.signal?.aborted) throw error;
+			for (const page of numbers) outcomes.push({ page, description: null });
+			continue;
+		}
+		const byPage = new Map(rendered.map((entry) => [entry.page, entry.png]));
+		const batchOutcomes = await mapLimit(batch, CONCURRENCY, async (page) => {
+			throwIfAborted(deps.signal);
+			try {
+				const png = byPage.get(page.page);
+				if (!png) throw new Error("renderer returned no image");
+				deps.onActivity?.(`Describing ${file.rel} — page ${page.page}/${targets.length}`);
+				return {
+					page: page.page,
+					description: await deps.describe([{ png, mime: "image/png" }], VISION_HINT),
+				};
+			} catch (error) {
+				if (deps.signal?.aborted) throw error;
+				return { page: page.page, description: null };
+			}
+		});
+		outcomes.push(...batchOutcomes);
+	}
+	return outcomes;
 }
 
 async function transcribePdf(file: SweepFile, deps: TranscribeDeps): Promise<Transcript> {
 	const unreadable: string[] = [];
 	try {
-		const info = await pdfInfo(file.abs);
+		const pdf = deps.pdf ?? { info: pdfInfo, extract: pdfExtract };
+		const info = await pdf.info(file.abs);
 		throwIfAborted(deps.signal);
 		const descriptions = new Map<number, string>();
 		const visionTargets = info.pages.filter(needsVision);
 		if (visionTargets.length) {
-			// renderPdfPages is native (pdfjs + Skia) — no browser gate. A
-			// render failure is the same per-page outcome as a describe failure.
-			const outcomes = await mapLimit(visionTargets, CONCURRENCY, async (page) => {
-				throwIfAborted(deps.signal);
-				try {
-					const rendered = await getHeadless().renderPdfPages(file.abs, [page.page], { dpi: DPI });
-					const png = rendered.find((r) => r.page === page.page)?.png;
-					if (!png) throw new Error("renderer returned no image");
-					deps.onActivity?.(`Describing ${file.rel} — page ${page.page}/${info.page_count}`);
-					return { page: page.page, description: await deps.describe([{ png, mime: "image/png" }], VISION_HINT) };
-				} catch (error) {
-					if (deps.signal?.aborted) throw error;
-					return { page: page.page, description: null };
+			if (deps.hasReader === false) {
+				// No reader exists: rendering could only produce images nobody
+				// can describe. Report the same per-page outcome directly.
+				for (const page of visionTargets) unreadable.push(`${file.rel} p. ${page.page} (vision failed)`);
+			} else {
+				for (const outcome of await describeVisionPages(file, visionTargets, deps)) {
+					if (outcome.description === null) unreadable.push(`${file.rel} p. ${outcome.page} (vision failed)`);
+					else descriptions.set(outcome.page, outcome.description);
 				}
-			});
-			for (const outcome of outcomes) {
-				if (outcome.description === null) unreadable.push(`${file.rel} p. ${outcome.page} (vision failed)`);
-				else descriptions.set(outcome.page, outcome.description);
 			}
 		}
 
+		// ONE parse for the whole document; the pages are split from its
+		// `--- Page N ---` headers.
+		const pageText = splitExtractedPages(await pdf.extract(file.abs, `1-${info.page_count}`));
 		const sections: string[] = [];
 		for (const page of info.pages) {
 			throwIfAborted(deps.signal);
 			deps.onActivity?.(`Reading ${file.rel} — page ${page.page}/${info.page_count}`);
-			const text = stripPageHeader(await pdfExtract(file.abs, String(page.page)), page.page).trim();
+			const text = (pageText.get(page.page) ?? "").trim();
 			const parts = [marker(file.rel, `p. ${page.page}`)];
 			if (text) parts.push(text);
 			const description = descriptions.get(page.page);
