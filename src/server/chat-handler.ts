@@ -27,7 +27,6 @@ import { extractionTriggerTokens } from "../core/extraction-trigger.ts";
 import type { ApLearnScope } from "../core/ap.ts";
 import { createJobRunner } from "../agent/subagents/runner.ts";
 import { createExtractionPipeline } from "../agent/subagents/extraction.ts";
-import type { ModelRole } from "../../config.ts";
 import {
 	deliverJobResult,
 	noteSteersDurable,
@@ -46,6 +45,10 @@ import { fileAccessPolicy } from "./file-access.ts";
 import { collectToolCallIds } from "./pi/call-ids.ts";
 import { providerEventNote } from "../agent/provider-events.ts";
 import { effectiveSettings, stores } from "./stores.ts";
+// The shared role→engine resolution (also the sweep's launch wiring): the
+// chain (role override → slot → NOTHING) read FRESH so a settings PUT
+// between dispatch and spawn lands.
+import { resolveEngine, retentionForSlot } from "./sweep-engines.ts";
 import { apPaperPath, apPaperPresent, apPapers } from "./ap-papers.ts";
 import { figurePng, figureState } from "./ap-figures.ts";
 import { searchAvailable, searchProvider } from "./search.ts";
@@ -55,9 +58,12 @@ import {
 	extractionEnabled,
 	graphToolsEnabled,
 	resolveConversationSpec,
-	resolveRoleSpec,
 } from "../core/settings-resolution.ts";
-import { modelsNotConfigured, providerKeyMissing as providerKeyMissingEnvelope, ROLE_SLOT, type ModelSlotName, type ProviderKeyMissing } from "../core/settings.ts";
+import {
+	modelsNotConfigured,
+	providerKeyMissing as providerKeyMissingEnvelope,
+	type ProviderKeyMissing,
+} from "../core/settings.ts";
 import { beginTurn, endTurn } from "./turn-liveness.ts";
 import { applyParkedDismissal } from "./dismissal-park.ts";
 import { registerTurn, rememberTurnFailure, unregisterTurn } from "./turn-runs.ts";
@@ -208,20 +214,9 @@ setTurnRunner(async (chatId, input) => {
 	await res.arrayBuffer().catch(() => undefined);
 	return res.status;
 });
-/** The settings-resolved engine for one role — BYOK (owner, 2026-09-22):
- *  the chain (role override → slot → NOTHING) may end empty, and undefined
- *  flows through to the per-need refusal gates (runner/extraction), read
- *  FRESH so a settings PUT between dispatch and spawn lands. */
-function resolveEngine(role: ModelRole): PiEngine | undefined {
-	const spec = resolveRoleSpec(role, stores.settingsStore.readSettings());
-	return spec ? piEngineForSpec(spec, true, undefined, retentionForSlot(ROLE_SLOT[role])) : undefined;
-}
-
-/** Slot policy is independent of model overrides. Read fresh per operation,
- * including parked conversations, background loops and compaction. */
-function retentionForSlot(slot: ModelSlotName) {
-	return () => stores.settingsStore.readSettings()?.models?.[slot]?.cacheRetention;
-}
+/** The settings-resolved engine for one role lives in the shared server
+ *  seam (sweep-engines.ts), so the sweep and the job runner resolve the
+ *  SAME models; imported above. */
 
 setJobRespawn((jobId) => void jobRunner.runJob(jobId));
 // The learner-filesystem policy (file-access wave): every tool registry is
