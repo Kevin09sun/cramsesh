@@ -286,10 +286,14 @@ describe("transcribeFile — pdf", () => {
 		assert.match(transcript.markdown, /Photosynthesis converts/);
 	});
 
-	it("no headless renderer -> vision pages are unreadable but text is kept", async () => {
+	it("renderer failure -> vision page is unreadable but text is kept", async () => {
 		const pdf = make("noeyes.pdf", imageAndTextPdf());
 		let callCount = 0;
-		headlessOverride.current = fakeHeadless({ available: () => false });
+		headlessOverride.current = fakeHeadless({
+			renderPdfPages: async () => {
+				throw new Error("render engine exploded");
+			},
+		});
 		const describeStub: Describe = async () => {
 			callCount++;
 			return "should not run";

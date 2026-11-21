@@ -129,26 +129,24 @@ async function transcribePdf(file: SweepFile, deps: TranscribeDeps): Promise<Tra
 		const descriptions = new Map<number, string>();
 		const visionTargets = info.pages.filter(needsVision);
 		if (visionTargets.length) {
-			if (getHeadless().available()) {
-				const outcomes = await mapLimit(visionTargets, CONCURRENCY, async (page) => {
-					throwIfAborted(deps.signal);
-					try {
-						const rendered = await getHeadless().renderPdfPages(file.abs, [page.page], { dpi: DPI });
-						const png = rendered.find((r) => r.page === page.page)?.png;
-						if (!png) throw new Error("renderer returned no image");
-						deps.onActivity?.(`Describing ${file.rel} — page ${page.page}/${info.page_count}`);
-						return { page: page.page, description: await deps.describe([{ png, mime: "image/png" }], VISION_HINT) };
-					} catch (error) {
-						if (deps.signal?.aborted) throw error;
-						return { page: page.page, description: null };
-					}
-				});
-				for (const outcome of outcomes) {
-					if (outcome.description === null) unreadable.push(`${file.rel} p. ${outcome.page} (vision failed)`);
-					else descriptions.set(outcome.page, outcome.description);
+			// renderPdfPages is native (pdfjs + Skia) — no browser gate. A
+			// render failure is the same per-page outcome as a describe failure.
+			const outcomes = await mapLimit(visionTargets, CONCURRENCY, async (page) => {
+				throwIfAborted(deps.signal);
+				try {
+					const rendered = await getHeadless().renderPdfPages(file.abs, [page.page], { dpi: DPI });
+					const png = rendered.find((r) => r.page === page.page)?.png;
+					if (!png) throw new Error("renderer returned no image");
+					deps.onActivity?.(`Describing ${file.rel} — page ${page.page}/${info.page_count}`);
+					return { page: page.page, description: await deps.describe([{ png, mime: "image/png" }], VISION_HINT) };
+				} catch (error) {
+					if (deps.signal?.aborted) throw error;
+					return { page: page.page, description: null };
 				}
-			} else {
-				for (const page of visionTargets) unreadable.push(`${file.rel} p. ${page.page} (vision failed)`);
+			});
+			for (const outcome of outcomes) {
+				if (outcome.description === null) unreadable.push(`${file.rel} p. ${outcome.page} (vision failed)`);
+				else descriptions.set(outcome.page, outcome.description);
 			}
 		}
 
