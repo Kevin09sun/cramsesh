@@ -2,16 +2,19 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { OPENING_PROMPT_FAILURE } from "@/components/opening-prompt";
 import { SidebarToggle } from "@/components/sidebar";
 import { SessionStarter } from "@/components/start-session";
 import { StudySessionList } from "@/components/study-session-list";
+import { CoverageLine } from "@/components/test-prep/coverage-line";
+import { LeftOutList } from "@/components/test-prep/left-out-list";
 import { PlanEditor } from "@/components/test-prep/plan-editor";
+import { ResweepAdditionsCard } from "@/components/test-prep/resweep-additions-card";
 import { Button } from "@/components/ui/button";
 import { readiness, readinessPercent } from "@/src/core";
-import type { ChatSummary, PlanDraftSection, PointStatus, TestRecord } from "@/src/core";
+import type { ChatSummary, LeftOutItem, PlanDraftSection, PointStatus, TestRecord } from "@/src/core";
 
 /**
  * The readiness view (test prep, 2026-11-10) — option B of the approved
@@ -89,6 +92,7 @@ export function ReadinessView({
 	const [editing, setEditing] = useState(false);
 	const [saving, setSaving] = useState(false);
 	const [starting, setStarting] = useState(false);
+	const [accepting, setAccepting] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 
 	const ready = readiness(test);
@@ -97,6 +101,47 @@ export function ReadinessView({
 		{ solid: 0, total: 0 },
 	);
 	const percent = readinessPercent(totals.solid, totals.total);
+
+	const sweep = test.sweep;
+	const pendingAdditions = test.pendingAdditions;
+	const sweepRunning = sweep?.status === "running";
+	const resweepDisabled = !test.folder || pendingAdditions !== undefined || sweepRunning;
+	const resweepTitle = !test.folder
+		? "This test has no stored folder"
+		: pendingAdditions !== undefined
+			? "Review the new items first"
+			: undefined;
+
+	// A re-sweep is background work: poll its progress only while it runs, and
+	// let the first non-running answer tear the interval down.
+	useEffect(() => {
+		if (!sweepRunning) return;
+		let alive = true;
+		const timer = setInterval(() => {
+			void (async () => {
+				try {
+					const response = await fetch(`/api/tests/${test.id}/sweep`);
+					if (!response.ok || !alive) return;
+					const payload = (await response.json()) as {
+						sweep?: TestRecord["sweep"] | null;
+						pendingAdditions?: TestRecord["pendingAdditions"] | null;
+					};
+					if (!alive) return;
+					setTest((current) => ({
+						...current,
+						sweep: payload.sweep ?? undefined,
+						pendingAdditions: payload.pendingAdditions ?? undefined,
+					}));
+				} catch {
+					// Transient poll failure: keep the last good record.
+				}
+			})();
+		}, 2000);
+		return () => {
+			alive = false;
+			clearInterval(timer);
+		};
+	}, [sweepRunning, test.id]);
 
 	const go = navigate ?? ((target: string) => window.location.assign(target));
 
@@ -157,6 +202,82 @@ export function ReadinessView({
 		}
 	}
 
+	/** Pull the sweep view (progress + pending additions) after a launch or
+	 *  during a poll, so the header and review card track the background run. */
+	async function refreshSweep(): Promise<void> {
+		const response = await fetch(`/api/tests/${test.id}/sweep`);
+		if (!response.ok) return;
+		const payload = (await response.json()) as {
+			sweep?: TestRecord["sweep"] | null;
+			pendingAdditions?: TestRecord["pendingAdditions"] | null;
+		};
+		setTest((current) => ({
+			...current,
+			sweep: payload.sweep ?? undefined,
+			pendingAdditions: payload.pendingAdditions ?? undefined,
+		}));
+	}
+
+	async function resweep(): Promise<void> {
+		if (resweepDisabled) return;
+		setError(null);
+		try {
+			const response = await fetch(`/api/tests/${test.id}/sweep`, { method: "POST" });
+			if (!response.ok) {
+				const payload = (await response.json().catch(() => null)) as { error?: unknown } | null;
+				throw new Error(
+					typeof payload?.error === "string" ? payload.error : "The re-sweep could not start.",
+				);
+			}
+			await refreshSweep();
+		} catch (reason) {
+			setError(errorText(reason, "The re-sweep could not start."));
+		}
+	}
+
+	async function acceptAdditions(accepted: string[]): Promise<void> {
+		setAccepting(true);
+		setError(null);
+		try {
+			const response = await fetch(`/api/tests/${test.id}/additions`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ accepted }),
+			});
+			if (!response.ok) {
+				const payload = (await response.json().catch(() => null)) as { error?: unknown } | null;
+				throw new Error(
+					typeof payload?.error === "string" ? payload.error : "The additions could not be saved.",
+				);
+			}
+			setTest((await response.json()) as TestRecord);
+		} catch (reason) {
+			setError(errorText(reason, "The additions could not be saved."));
+		} finally {
+			setAccepting(false);
+		}
+	}
+
+	async function promote(item: LeftOutItem): Promise<void> {
+		setError(null);
+		try {
+			const response = await fetch(`/api/tests/${test.id}/left-out`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ itemId: item.id }),
+			});
+			if (!response.ok) {
+				const payload = (await response.json().catch(() => null)) as { error?: unknown } | null;
+				throw new Error(
+					typeof payload?.error === "string" ? payload.error : "The item could not be promoted.",
+				);
+			}
+			setTest((await response.json()) as TestRecord);
+		} catch (reason) {
+			setError(errorText(reason, "The item could not be promoted."));
+		}
+	}
+
 	return (
 		<div className="space-y-6">
 			<div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -187,6 +308,17 @@ export function ReadinessView({
 					>
 						{editing ? "Close editor" : "Edit plan"}
 					</Button>
+					<Button
+						type="button"
+						variant="outline"
+						size="sm"
+						data-testid="resweep-folder"
+						disabled={resweepDisabled}
+						title={resweepTitle}
+						onClick={() => void resweep()}
+					>
+						{sweepRunning ? (sweep?.activity ?? "Re-sweeping…") : "Re-sweep folder"}
+					</Button>
 					{test.planConfirmed ? (
 						<Button
 							type="button"
@@ -205,10 +337,35 @@ export function ReadinessView({
 				</div>
 			</div>
 
+			{sweep?.coverage && (
+				<div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+					<CoverageLine coverage={sweep.coverage} />
+					{sweep.coverage.lastResweep && (
+						<p data-testid="last-resweep" className="text-xs text-muted-foreground">
+							Last re-sweep: +{sweep.coverage.lastResweep.files} files
+						</p>
+					)}
+				</div>
+			)}
+
+			{sweep?.status === "error" && sweep.error && (
+				<p role="alert" data-testid="sweep-error" className="text-sm text-destructive">
+					{sweep.error}
+				</p>
+			)}
+
 			{error && (
 				<p role="alert" className="text-sm text-destructive">
 					{error}
 				</p>
+			)}
+
+			{pendingAdditions && (
+				<ResweepAdditionsCard
+					additions={pendingAdditions}
+					onAccept={(accepted) => void acceptAdditions(accepted)}
+					accepting={accepting}
+				/>
 			)}
 
 			{editing && (
@@ -282,6 +439,8 @@ export function ReadinessView({
 					No plan yet — the agent proposes one in your first sitting.
 				</p>
 			)}
+
+			<LeftOutList items={test.leftOut ?? []} onPromote={(item) => void promote(item)} />
 
 			<StudySessionList
 				sessions={sessions}

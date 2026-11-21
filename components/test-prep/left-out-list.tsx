@@ -22,7 +22,9 @@ export function LeftOutList({
 	readOnly = false,
 }: {
 	items: LeftOutItem[];
-	onPromote: (item: LeftOutItem) => void;
+	/** Required unless readOnly; a read-only list (the re-sweep review card)
+	 *  has nothing to promote. */
+	onPromote?: (item: LeftOutItem) => void;
 	defaultOpen?: boolean;
 	readOnly?: boolean;
 }) {
@@ -44,12 +46,13 @@ export function LeftOutList({
 									{item.reason} · {item.source}
 								</div>
 							</div>
-							{!readOnly && (
+							{!readOnly && onPromote && (
 								<Button
 									type="button"
 									variant="outline"
 									size="sm"
 									data-testid="promote-left-out"
+									aria-label={`Promote ${item.text}`}
 									onClick={() => onPromote(item)}
 								>
 									Promote
