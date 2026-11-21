@@ -135,11 +135,27 @@ describe("POST /api/tests/[id]/sweep", () => {
 	it("is a 409 while a sweep is running", async () => {
 		stubResweep();
 		const test = testStore.create("Running", FOLDER);
-		testStore.updateSweep(test.id, { status: "running", startedAt: "2026-01-01T00:00:00.000Z" });
+		// A run started by THIS process is genuinely live: fresh startedAt.
+		testStore.updateSweep(test.id, { status: "running", startedAt: new Date().toISOString() });
 
 		const res = await postSweep(test.id);
 		assert.equal(res.status, 409);
 		assert.equal(resweepCalls.length, 0);
+	});
+
+	it("closes a sweep left running by a dead process, then starts a new one (I2)", async () => {
+		stubResweep();
+		const test = testStore.create("Interrupted", FOLDER);
+		testStore.updateSweep(test.id, { status: "running", startedAt: "2020-01-01T00:00:00.000Z" });
+
+		const res = await postSweep(test.id);
+		assert.equal(res.status, 202, "a stale running record no longer blocks a re-sweep");
+		assert.equal(resweepCalls.length, 1);
+		const sweep = res.status === 202 ? testStore.get(test.id)!.sweep! : null;
+		// The route closed the stale record before launching; the stub sweep
+		// leaves that terminal state in place.
+		assert.equal(sweep?.status, "error");
+		assert.match(sweep?.error ?? "", /Interrupted — run Re-sweep again/);
 	});
 
 	it("is a 409 while additions await the learner's review", async () => {
@@ -203,6 +219,18 @@ describe("GET /api/tests/[id]/sweep", () => {
 	it("is a 404 for an unknown test", async () => {
 		const res = await getSweep("test_never_existed");
 		assert.equal(res.status, 404);
+	});
+
+	it("reports an interrupted sweep as error with a retry hint (I2)", async () => {
+		const test = testStore.create("Interrupted view", FOLDER);
+		testStore.updateSweep(test.id, { status: "running", startedAt: "2020-01-01T00:00:00.000Z" });
+
+		const res = await getSweep(test.id);
+		assert.equal(res.status, 200);
+		const body = (await res.json()) as { sweep: { status: string; error: string } };
+		assert.equal(body.sweep.status, "error");
+		assert.match(body.sweep.error, /Interrupted — run Re-sweep again/);
+		assert.equal(testStore.get(test.id)!.sweep!.status, "error", "the stale record is closed, not just reported");
 	});
 });
 

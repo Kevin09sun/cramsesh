@@ -19,7 +19,7 @@
  * a sweep.
  */
 
-import { sameOriginAuthorized, startResweep, stores } from "@/src/server";
+import { recoverInterruptedSweep, sameOriginAuthorized, startResweep, stores } from "@/src/server";
 
 export const dynamic = "force-dynamic";
 
@@ -28,8 +28,11 @@ export async function GET(
 	ctx: { params: Promise<{ id: string }> },
 ): Promise<Response> {
 	const { id } = await ctx.params;
-	const record = stores.testStore.get(id);
+	let record = stores.testStore.get(id);
 	if (!record) return Response.json({ error: "Unknown test" }, { status: 404 });
+	// A run whose server process died still says "running"; close it here so
+	// the UI never shows a sweep that can never finish.
+	record = recoverInterruptedSweep(id, record);
 	return Response.json({
 		sweep: record.sweep ?? null,
 		pendingAdditions: record.pendingAdditions ?? null,
@@ -48,8 +51,11 @@ export async function POST(
 	}
 
 	const { id } = await ctx.params;
-	const record = stores.testStore.get(id);
+	let record = stores.testStore.get(id);
 	if (!record) return Response.json({ error: "Unknown test" }, { status: 404 });
+	// A dead process's "running" is not a running sweep: close it before the
+	// 409 gate below, or the Re-sweep button would be disabled forever.
+	record = recoverInterruptedSweep(id, record);
 	if (!record.folder) {
 		return Response.json({ error: "no folder stored for this test" }, { status: 400 });
 	}

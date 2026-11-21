@@ -572,7 +572,7 @@ describe("sweep_materials", () => {
 		assert.equal(jobs.created.length, 0, "a refusal never dispatches");
 	});
 
-	it("REFUSES while a sweep is already running (same re-sweep pointer)", async () => {
+	it("REFUSES while a sweep is already running with its own message", async () => {
 		const running = recordOf({
 			sections: [],
 			sweep: { status: "running", startedAt: "2026-11-20T00:00:00.000Z", fileHashes: {} },
@@ -584,10 +584,9 @@ describe("sweep_materials", () => {
 		const result = await tool.execute("call_sweep", { folder: os.tmpdir() } as never);
 
 		assert.equal(result.isError, true);
-		assert.match(
-			(result.details as { problems: string[] }).problems[0]!,
-			/Re-sweep folder button on the test page/,
-		);
+		const problems = (result.details as { problems: string[] }).problems;
+		assert.match(problems[0]!, /a sweep is already running for this test — wait for it to finish/);
+		assert.doesNotMatch(problems[0]!, /already has a plan/, "distinct from the plan-exists refusal");
 		assert.equal(calls.setFolder.length, 0);
 		assert.equal(jobs.created.length, 0);
 	});

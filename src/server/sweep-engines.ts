@@ -19,12 +19,45 @@ import { piEngineForSpec, type PiEngine } from "../agent/models.ts";
 import { runSweep, type SweepDeps } from "../agent/subagents/sweep/run-sweep.ts";
 import { resolveRoleSpec } from "../core/settings-resolution.ts";
 import { ROLE_SLOT, type ModelSlotName } from "../core/settings.ts";
+import type { TestRecord } from "../core/test-prep.ts";
 import { providerKeyPresent } from "./keys.ts";
 import { stores } from "./stores.ts";
 
 /** Test seam (runner.ts's override style): a test scripts the re-sweep
  *  launch without touching a folder or a model. Undefined in production. */
 export const resweepOverride: { current?: typeof runSweep } = {};
+
+/** Re-sweeps running in THIS process. A record that says "running" without a
+ *  live entry here (and started before this process did) died with a previous
+ *  server process: it must be closed as interrupted, not block re-sweeping
+ *  forever. */
+const liveResweeps = new Set<string>();
+/** Captured once at module load — the boundary between "this process could
+ *  still own that run" and "a previous process died mid-run". */
+const processStartedAt = Date.now();
+
+/** True when the record claims a running sweep that no live owner can be
+ *  advancing: no re-sweep in this process, and it started before the process
+ *  did (an initial sweep runs as a job, whose process is this one). */
+export function isInterruptedSweep(testId: string, record: Pick<TestRecord, "sweep">): boolean {
+	if (record.sweep?.status !== "running") return false;
+	if (liveResweeps.has(testId)) return false;
+	const started = Date.parse(record.sweep.startedAt);
+	return Number.isNaN(started) || started < processStartedAt;
+}
+
+export const INTERRUPTED_SWEEP_ERROR = "Interrupted — run Re-sweep again";
+
+/** Close a sweep record left "running" by a dead process (I2). Returns the
+ *  current record unchanged when it is not interrupted. */
+export function recoverInterruptedSweep(testId: string, record: TestRecord): TestRecord {
+	if (!isInterruptedSweep(testId, record)) return record;
+	return stores.testStore.updateSweep(testId, {
+		status: "error",
+		error: INTERRUPTED_SWEEP_ERROR,
+		finishedAt: new Date().toISOString(),
+	});
+}
 
 /** The settings-resolved engine for one role — the chain (role override →
  *  slot → NOTHING) may end empty, and undefined flows through to the
@@ -70,8 +103,13 @@ export function sweepEngines(
  *  route answers 202 immediately; the orchestrator owns the record's fate
  *  (a missing engine or failed stage lands on the sweep record). */
 export function startResweep(testId: string): void {
+	liveResweeps.add(testId);
 	void (resweepOverride.current ?? runSweep)(testId, "resweep", {
 		store: stores.testStore,
 		engines: sweepEngines(),
-	}).catch((error) => console.error(`[sweep ${testId}] re-sweep failed:`, error));
+	})
+		.catch((error) => console.error(`[sweep ${testId}] re-sweep failed:`, error))
+		.finally(() => {
+			liveResweeps.delete(testId);
+		});
 }

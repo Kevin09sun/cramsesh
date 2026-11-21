@@ -380,10 +380,16 @@ function sweepMaterialsTool(
 			const test = ctx.tests.get(ctx.testId);
 			if (!test) return invalidInputResult("sweep_materials", [`test "${ctx.testId}" was not found`]);
 			// Review Focus 1: a test with a plan (or a sweep already reading)
-			// never starts a second first-sweep over it.
-			if (test.sections.length > 0 || test.sweep?.status === "running") {
+			// never starts a second first-sweep over it. The two refusals are
+			// distinct so the model tells the learner the right next step.
+			if (test.sections.length > 0) {
 				return invalidInputResult("sweep_materials", [
 					"this test already has a plan — materials added later are read with the Re-sweep folder button on the test page",
+				]);
+			}
+			if (test.sweep?.status === "running") {
+				return invalidInputResult("sweep_materials", [
+					"a sweep is already running for this test — wait for it to finish",
 				]);
 			}
 
