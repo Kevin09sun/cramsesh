@@ -10,6 +10,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import JSZip from "jszip";
+import type { walkFiles } from "../src/agent/tools/fs-shared.ts";
 import { headlessOverride, type HeadlessApi } from "../src/agent/subagents/headless.ts";
 import {
 	enumerateFolder,
@@ -91,64 +92,118 @@ function imageAndTextPdf(): Uint8Array<ArrayBuffer> {
 	]);
 }
 
-async function pptxBytes(): Promise<Uint8Array> {
+interface PptxSlideSpec {
+	/** Paragraphs; a string is one run, an array splits one paragraph into runs. */
+	paragraphs: Array<string | string[]>;
+	notes?: string;
+	/** Notes part number to attach; defaults to the slide's own number. */
+	notesPart?: number;
+	/** Marker bytes for this slide's embedded picture. */
+	image?: Buffer;
+}
+
+function xmlText(text: string): string {
+	return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function paragraphsXml(paragraphs: PptxSlideSpec["paragraphs"]): string {
+	return paragraphs
+		.map((paragraph) => {
+			const runs = (Array.isArray(paragraph) ? paragraph : [paragraph])
+				.map((run) => `<a:r><a:t>${xmlText(run)}</a:t></a:r>`)
+				.join("");
+			return `<a:p>${runs}</a:p>`;
+		})
+		.join("");
+}
+
+/** Build a pptx. `listed` controls sldIdLst order/subset; every slide part is
+ *  still written, so unreferenced files exercise orderedSlides' append path. */
+async function pptxBytes(specs: PptxSlideSpec[], opts: { listed?: number[] } = {}): Promise<Uint8Array> {
 	const zip = new JSZip();
+	const listed = opts.listed ?? specs.map((_, index) => index + 1);
 	zip.file(
 		"ppt/presentation.xml",
 		`<?xml version="1.0" encoding="UTF-8"?>
 		<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-			<p:sldIdLst><p:sldId id="256" r:id="rId1"/><p:sldId id="257" r:id="rId2"/></p:sldIdLst>
+			<p:sldIdLst>${listed
+				.map((slide, index) => `<p:sldId id="${255 + index}" r:id="rId${slide}"/>`)
+				.join("")}</p:sldIdLst>
 		</p:presentation>`,
 	);
 	zip.file(
 		"ppt/_rels/presentation.xml.rels",
 		`<?xml version="1.0" encoding="UTF-8"?>
 		<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-			<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide1.xml"/>
-			<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide2.xml"/>
+			${specs
+				.map(
+					(_, index) =>
+						`<Relationship Id="rId${index + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide${index + 1}.xml"/>`,
+				)
+				.join("\n\t\t\t")}
 		</Relationships>`,
 	);
-	zip.file(
-		"ppt/slides/slide1.xml",
-		`<?xml version="1.0" encoding="UTF-8"?>
-		<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
-			<p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>Cell theory</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld>
-		</p:sld>`,
-	);
-	zip.file(
-		"ppt/slides/_rels/slide1.xml.rels",
-		`<?xml version="1.0" encoding="UTF-8"?>
-		<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-			<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesSlide" Target="../notesSlides/notesSlide1.xml"/>
-		</Relationships>`,
-	);
-	zip.file(
-		"ppt/notesSlides/notesSlide1.xml",
-		`<?xml version="1.0" encoding="UTF-8"?>
-		<p:notes xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
-			<p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>Remember: cells arise from cells.</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld>
-		</p:notes>`,
-	);
-	zip.file(
-		"ppt/slides/slide2.xml",
-		`<?xml version="1.0" encoding="UTF-8"?>
-		<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
-			<p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>Mitosis stages</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld>
-		</p:sld>`,
-	);
-	zip.file(
-		"ppt/slides/_rels/slide2.xml.rels",
-		`<?xml version="1.0" encoding="UTF-8"?>
-		<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-			<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image1.png"/>
-		</Relationships>`,
-	);
-	zip.file("ppt/media/image1.png", ONE_PX_PNG);
+	for (const [index, spec] of specs.entries()) {
+		const slide = index + 1;
+		zip.file(
+			`ppt/slides/slide${slide}.xml`,
+			`<?xml version="1.0" encoding="UTF-8"?>
+			<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+				<p:cSld><p:spTree><p:sp><p:txBody>${paragraphsXml(spec.paragraphs)}</p:txBody></p:sp></p:spTree></p:cSld>
+			</p:sld>`,
+		);
+		const rels: string[] = [];
+		if (spec.notes !== undefined) {
+			rels.push(
+				`<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesSlide" Target="../notesSlides/notesSlide${spec.notesPart ?? slide}.xml"/>`,
+			);
+		}
+		if (spec.image) {
+			rels.push(
+				`<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image${slide}.png"/>`,
+			);
+			zip.file(`ppt/media/image${slide}.png`, spec.image);
+		}
+		if (rels.length) {
+			zip.file(
+				`ppt/slides/_rels/slide${slide}.xml.rels`,
+				`<?xml version="1.0" encoding="UTF-8"?>
+				<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rels.join("")}</Relationships>`,
+			);
+		}
+		if (spec.notes !== undefined) {
+			zip.file(
+				`ppt/notesSlides/notesSlide${spec.notesPart ?? slide}.xml`,
+				`<?xml version="1.0" encoding="UTF-8"?>
+				<p:notes xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+					<p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>${xmlText(spec.notes)}</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld>
+				</p:notes>`,
+			);
+		}
+	}
 	return new Uint8Array(await zip.generateAsync({ type: "uint8array" }));
 }
 
-async function docxBytes(): Promise<Uint8Array> {
+async function docxBytes(imageCount = 1): Promise<Uint8Array> {
 	const zip = new JSZip();
+	const drawings = Array.from({ length: imageCount }, (_, index) => index + 1)
+		.map(
+			(n) => `<w:p><w:r><w:drawing>
+					<wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing">
+						<wp:docPr id="${n}" name="Picture ${n}"/>
+						<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">
+							<pic:pic><pic:blipFill><a:blip r:embed="img${n}"/></pic:blipFill></pic:pic>
+						</a:graphicData></a:graphic>
+					</wp:inline>
+				</w:drawing></w:r></w:p>`,
+		)
+		.join("");
+	const imageRels = Array.from({ length: imageCount }, (_, index) => index + 1)
+		.map(
+			(n) =>
+				`<Relationship Id="img${n}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image${n}.png"/>`,
+		)
+		.join("");
 	zip.file(
 		"[Content_Types].xml",
 		`<?xml version="1.0" encoding="UTF-8"?>
@@ -168,14 +223,7 @@ async function docxBytes(): Promise<Uint8Array> {
 			<w:body>
 				<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Chapter One</w:t></w:r></w:p>
 				<w:p><w:r><w:t>Cells are the unit of life.</w:t></w:r></w:p>
-				<w:p><w:r><w:drawing>
-					<wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing">
-						<wp:docPr id="1" name="Picture 1"/>
-						<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">
-							<pic:pic><pic:blipFill><a:blip r:embed="rId2"/></pic:blipFill></pic:pic>
-						</a:graphicData></a:graphic>
-					</wp:inline>
-				</w:drawing></w:r></w:p>
+				${drawings}
 			</w:body>
 		</w:document>`,
 	);
@@ -184,10 +232,10 @@ async function docxBytes(): Promise<Uint8Array> {
 		`<?xml version="1.0" encoding="UTF-8"?>
 		<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
 			<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
-			<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image1.png"/>
+			${imageRels}
 		</Relationships>`,
 	);
-	zip.file("word/media/image1.png", ONE_PX_PNG);
+	for (let n = 1; n <= imageCount; n++) zip.file(`word/media/image${n}.png`, ONE_PX_PNG);
 	zip.file(
 		"word/styles.xml",
 		`<?xml version="1.0" encoding="UTF-8"?>
@@ -207,17 +255,34 @@ describe("enumerateFolder", () => {
 		make("image.png", ONE_PX_PNG);
 		make("data.bin", Buffer.from([0, 1, 2, 3]));
 
-		const { files, unsupported } = await enumerateFolder(root);
+		const { files, unsupported, timedOut } = await enumerateFolder(root);
 		assert.deepEqual(
 			files.map((f) => f.rel),
 			["a.pdf", "image.png", "notes.md", "sub/ch1.txt"],
 		);
 		assert.deepEqual(unsupported, ["data.bin"]);
+		assert.equal(timedOut, false);
 		const pdf = files.find((f) => f.rel === "a.pdf")!;
 		assert.equal(pdf.ext, ".pdf");
 		assert.equal(pdf.abs, path.join(root, "a.pdf"));
 		assert.equal(pdf.hash, createHash("sha256").update(pdfBytes).digest("hex"));
 		assert.ok(files.every((f) => f.hash.length === 64));
+	});
+
+	it("reports a timed-out walk instead of silently listing a partial folder", async () => {
+		const pdfBytes = tinyPdf([{ runs: wrapRuns(LONG_TEXT) }]);
+		make("a.pdf", pdfBytes);
+		const realRoot = fs.realpathSync(root);
+		const fakeWalk: typeof walkFiles = async (_dir, visit) => {
+			await visit(path.join(realRoot, "a.pdf"));
+			return { timedOut: true, aborted: false };
+		};
+
+		const result = await enumerateFolder(root, fakeWalk);
+
+		assert.equal(result.timedOut, true);
+		assert.deepEqual(result.files.map((f) => f.rel), ["a.pdf"]);
+		assert.equal(result.files[0]!.hash, createHash("sha256").update(pdfBytes).digest("hex"));
 	});
 });
 
@@ -324,7 +389,22 @@ describe("transcribeFile — pdf", () => {
 
 describe("transcribeFile — office", () => {
 	it("pptx slide text, notes and image description land under slide markers", async () => {
-		const pptx = make("deck.pptx", await pptxBytes());
+		// sldIdLst order is slide 2 then slide 1; notes parts are cross-numbered.
+		const pptx = make(
+			"deck.pptx",
+			await pptxBytes(
+				[
+					{ paragraphs: ["Cell theory"], notes: "Cell theory speaker note", notesPart: 2 },
+					{
+						paragraphs: [["Photo", "synthesis"], "Second paragraph"],
+						notes: "Mitosis speaker note",
+						notesPart: 1,
+						image: ONE_PX_PNG,
+					},
+				],
+				{ listed: [2, 1] },
+			),
+		);
 		const calls: Array<{ images: Array<{ png: Buffer; mime: string }>; hint: string }> = [];
 		const describeStub: Describe = async (images, hint) => {
 			calls.push({ images, hint });
@@ -333,20 +413,75 @@ describe("transcribeFile — office", () => {
 
 		const transcript = await transcribeFile(sweepFile(pptx, root), { describe: describeStub });
 
-		assert.match(transcript.markdown, /<!-- source: deck\.pptx slide 1 -->/);
-		assert.match(transcript.markdown, /Cell theory/);
-		assert.match(transcript.markdown, /Remember: cells arise from cells\./);
-		assert.match(transcript.markdown, /<!-- source: deck\.pptx slide 2 -->/);
-		assert.match(transcript.markdown, /Mitosis stages/);
+		const slide1At = transcript.markdown.indexOf("<!-- source: deck.pptx slide 1 -->");
 		const slide2At = transcript.markdown.indexOf("<!-- source: deck.pptx slide 2 -->");
-		const descriptionAt = transcript.markdown.indexOf("A labelled mitosis diagram.");
-		assert.ok(descriptionAt > slide2At, "description lands under slide 2");
+		assert.ok(slide1At >= 0 && slide2At > slide1At, "slide markers in presentation order");
+		const first = transcript.markdown.slice(slide1At, slide2At);
+		const second = transcript.markdown.slice(slide2At);
+		// Displayed slide 1 = slide2.xml, with its cross-numbered notes.
+		assert.match(first, /Photosynthesis\nSecond paragraph/, "word runs join; paragraphs break");
+		assert.ok(!/Photo\nsynthesis/.test(first), "a word split across runs stays whole");
+		assert.match(first, /Mitosis speaker note/);
+		assert.match(first, /A labelled mitosis diagram\./);
+		// Displayed slide 2 = slide1.xml, with its own notes.
+		assert.match(second, /Cell theory/);
+		assert.match(second, /Cell theory speaker note/);
 		assert.equal(calls.length, 1);
 		assert.equal(calls[0]!.images.length, 1);
 		assert.equal(calls[0]!.images[0]!.mime, "image/png");
 		assert.equal(transcript.pages, 2);
 		assert.equal(transcript.visionPages, 1);
 		assert.deepEqual(transcript.unreadable, []);
+	});
+
+	it("pptx image descriptions run in a bounded pool and land in slide order", async () => {
+		const specs = Array.from({ length: 5 }, (_, index) => ({
+			paragraphs: [`Slide ${index + 1}`],
+			image: Buffer.from(`image-${index + 1}`),
+		}));
+		const pptx = make("five.pptx", await pptxBytes(specs));
+		let active = 0;
+		let maxActive = 0;
+		const describeStub: Describe = async (images) => {
+			active++;
+			maxActive = Math.max(maxActive, active);
+			await new Promise((resolve) => setTimeout(resolve, 10));
+			active--;
+			return `described ${images[0]!.png.toString()}`;
+		};
+
+		const transcript = await transcribeFile(sweepFile(pptx, root), { describe: describeStub });
+
+		assert.equal(maxActive, 4, "bounded concurrency of four");
+		for (let slide = 1; slide <= 5; slide++) {
+			const start = transcript.markdown.indexOf(`<!-- source: five.pptx slide ${slide} -->`);
+			const next = transcript.markdown.indexOf(`<!-- source: five.pptx slide ${slide + 1} -->`);
+			const section = transcript.markdown.slice(start, next === -1 ? undefined : next);
+			assert.match(section, new RegExp(`described image-${slide}`), `description for slide ${slide}`);
+		}
+		assert.equal(transcript.visionPages, 5);
+		assert.deepEqual(transcript.unreadable, []);
+	});
+
+	it("pptx slides missing from sldIdLst are appended in filename order", async () => {
+		const pptx = make(
+			"partial.pptx",
+			await pptxBytes(
+				[{ paragraphs: ["One"] }, { paragraphs: ["Two"] }, { paragraphs: ["Three"] }],
+				{ listed: [3, 1] },
+			),
+		);
+		const describeStub: Describe = async () => "unused";
+
+		const transcript = await transcribeFile(sweepFile(pptx, root), { describe: describeStub });
+
+		const order = ["Three", "One", "Two"].map((text) =>
+			transcript.markdown.indexOf(text),
+		);
+		assert.ok(order.every((at) => at >= 0), "all slides transcribed");
+		assert.deepEqual([...order].sort((a, b) => a - b), order, "listed order then appended file");
+		assert.match(transcript.markdown, /<!-- source: partial\.pptx slide 3 -->/);
+		assert.equal(transcript.pages, 3);
 	});
 
 	it("docx headings become markdown", async () => {
@@ -368,6 +503,19 @@ describe("transcribeFile — office", () => {
 		assert.equal(transcript.pages, 1);
 		assert.equal(transcript.visionPages, 1);
 		assert.deepEqual(transcript.unreadable, []);
+	});
+
+	it("docx records one (vision failed) entry for multiple failed images", async () => {
+		const docx = make("dup.docx", await docxBytes(2));
+		const describeStub: Describe = async () => {
+			throw new Error("vision down");
+		};
+
+		const transcript = await transcribeFile(sweepFile(docx, root), { describe: describeStub });
+
+		assert.deepEqual(transcript.unreadable, ["dup.docx (vision failed)"]);
+		assert.match(transcript.markdown, /Cells are the unit of life\./);
+		assert.equal(transcript.visionPages, 0);
 	});
 
 	it("corrupt pptx -> unreadable with reason, no throw", async () => {

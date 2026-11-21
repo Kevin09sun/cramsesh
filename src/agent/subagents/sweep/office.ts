@@ -59,14 +59,25 @@ function decodeXml(text: string): string {
 		.replace(/&amp;/g, "&");
 }
 
-/** DrawingML text runs. Runs are one paragraph-ish unit each; newline keeps
- *  them readable without inventing word spacing. */
+/** DrawingML text. Runs inside one `a:p` are one line of text — a word may be
+ *  split across runs by spell-check/formatting, so concatenate them with NO
+ *  separator. Paragraphs are separated by newlines. */
 function drawingText(xml: string): string {
+	const paragraphs: string[] = [];
+	for (const paragraph of xml.matchAll(/<a:p(?:\s[^>]*)?>([\s\S]*?)<\/a:p>/g)) {
+		let text = "";
+		for (const run of paragraph[1]!.matchAll(/<a:t(?:\s[^>]*)?>([\s\S]*?)<\/a:t>/g)) {
+			text += decodeXml(run[1]!);
+		}
+		if (text) paragraphs.push(text);
+	}
+	if (paragraphs.length) return paragraphs.join("\n").trim();
+	// `a:t` outside any paragraph (defensive for nonstandard producers).
 	const runs: string[] = [];
 	for (const match of xml.matchAll(/<a:t(?:\s[^>]*)?>([\s\S]*?)<\/a:t>/g)) {
 		runs.push(decodeXml(match[1]!));
 	}
-	return runs.join("\n").trim();
+	return runs.join("").trim();
 }
 
 async function readPart(zip: JSZip, name: string): Promise<string> {
@@ -91,8 +102,16 @@ function slideRelsPath(slidePath: string): string {
 	return `ppt/slides/_rels/${path.posix.basename(slidePath)}.rels`;
 }
 
+function slideFiles(zip: JSZip): string[] {
+	return Object.keys(zip.files)
+		.filter((name) => /^ppt\/slides\/slide\d+\.xml$/.test(name))
+		.sort((a, b) => slideNumber(a) - slideNumber(b));
+}
+
 /** Presentation-order slide parts: presentation.xml's sldIdLst resolved
- *  through its relationship map. Fallback: slideN.xml ascending. */
+ *  through its relationship map. Any slide part the list does not resolve
+ *  (missing rId, dangling target) is appended in filename order rather than
+ *  silently dropped. */
 async function orderedSlides(zip: JSZip): Promise<string[]> {
 	const presentation = await readPart(zip, "ppt/presentation.xml");
 	const rels = await readPart(zip, "ppt/_rels/presentation.xml.rels");
@@ -103,16 +122,20 @@ async function orderedSlides(zip: JSZip): Promise<string[]> {
 		if (id && target) relMap.set(id, resolvePart("ppt", target));
 	}
 	const order: string[] = [];
+	const seen = new Set<string>();
 	const list = /<p:sldIdLst>([\s\S]*?)<\/p:sldIdLst>/.exec(presentation)?.[1] ?? "";
 	for (const match of list.matchAll(/<p:sldId\b[^>]*>/g)) {
 		const rid = attr(match[0]!, "r:id");
 		const target = rid ? relMap.get(rid) : undefined;
-		if (target && zip.file(target)) order.push(target);
+		if (target && zip.file(target) && !seen.has(target)) {
+			order.push(target);
+			seen.add(target);
+		}
 	}
-	if (order.length) return order;
-	return Object.keys(zip.files)
-		.filter((name) => /^ppt\/slides\/slide\d+\.xml$/.test(name))
-		.sort((a, b) => slideNumber(a) - slideNumber(b));
+	for (const name of slideFiles(zip)) {
+		if (!seen.has(name)) order.push(name);
+	}
+	return order;
 }
 
 async function notesFor(zip: JSZip, slidePath: string): Promise<string> {

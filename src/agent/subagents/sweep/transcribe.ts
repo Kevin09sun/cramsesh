@@ -178,30 +178,42 @@ async function transcribePptx(file: SweepFile, deps: TranscribeDeps): Promise<Tr
 	const unreadable: string[] = [];
 	try {
 		const slides = await pptxSlides(await fs.readFile(file.abs));
+		const descriptions = new Map<number, string>();
+		const imageSlides = slides.filter((slide) => slide.images.length > 0);
+		// Same bounded pool as PDF pages; assembly below keeps slide order.
+		const outcomes = await mapLimit(imageSlides, CONCURRENCY, async (slide) => {
+			throwIfAborted(deps.signal);
+			deps.onActivity?.(`Describing ${file.rel} — slide ${slide.slide}/${slides.length}`);
+			try {
+				return {
+					slide: slide.slide,
+					description: await deps.describe(
+						slide.images.map((image) => ({ png: image.data, mime: image.mime })),
+						VISION_HINT,
+					),
+				};
+			} catch (error) {
+				if (deps.signal?.aborted) throw error;
+				return { slide: slide.slide, description: null };
+			}
+		});
+		for (const outcome of outcomes) {
+			if (outcome.description === null) unreadable.push(`${file.rel} slide ${outcome.slide} (vision failed)`);
+			else descriptions.set(outcome.slide, outcome.description);
+		}
+
 		const sections: string[] = [];
-		let describedSlides = 0;
 		for (const slide of slides) {
 			throwIfAborted(deps.signal);
 			deps.onActivity?.(`Reading ${file.rel} — slide ${slide.slide}/${slides.length}`);
 			const parts = [marker(file.rel, `slide ${slide.slide}`)];
 			if (slide.text) parts.push(slide.text);
 			if (slide.notes) parts.push(`Speaker notes: ${slide.notes}`);
-			if (slide.images.length) {
-				try {
-					parts.push(
-						await deps.describe(
-							slide.images.map((image) => ({ png: image.data, mime: image.mime })),
-							VISION_HINT,
-						),
-					);
-					describedSlides++;
-				} catch (error) {
-					if (deps.signal?.aborted) throw error;
-					unreadable.push(`${file.rel} slide ${slide.slide} (vision failed)`);
-				}
-			}
+			const description = descriptions.get(slide.slide);
+			if (description) parts.push(description);
 			sections.push(parts.join("\n\n"));
 		}
+		const describedSlides = descriptions.size;
 		return {
 			rel: file.rel,
 			markdown: sections.join("\n\n"),
@@ -229,7 +241,8 @@ async function transcribeDocx(file: SweepFile, deps: TranscribeDeps): Promise<Tr
 				described++;
 			} catch (error) {
 				if (deps.signal?.aborted) throw error;
-				unreadable.push(`${file.rel} (vision failed)`);
+				const entry = `${file.rel} (vision failed)`;
+				if (!unreadable.includes(entry)) unreadable.push(entry);
 			}
 		}
 		return {
@@ -308,9 +321,16 @@ export async function transcribeFile(file: SweepFile, deps: TranscribeDeps): Pro
 	}
 }
 
+/** Walk budget for a materials folder — generous because OneDrive trees can
+ *  be deep. Hashing happens only after the walk, so it cannot eat this. */
+const WALK_BUDGET_MS = 120_000;
+
+type EnumerateWalk = typeof walkFiles;
+
 export async function enumerateFolder(
 	folder: string,
-): Promise<{ files: SweepFile[]; unsupported: string[] }> {
+	walk: EnumerateWalk = walkFiles,
+): Promise<{ files: SweepFile[]; unsupported: string[]; timedOut: boolean }> {
 	const resolved = path.resolve(folder);
 	let root = resolved;
 	try {
@@ -318,20 +338,28 @@ export async function enumerateFolder(
 	} catch {
 		// Missing/unreadable folder: walkFiles yields nothing anyway.
 	}
-	const files: SweepFile[] = [];
+	const supported: Array<{ rel: string; abs: string; ext: string }> = [];
 	const unsupported: string[] = [];
-	await walkFiles(root, async (abs) => {
-		const rel = path.relative(root, abs).split(path.sep).join("/");
-		const ext = path.extname(abs).toLowerCase();
-		if (!SWEEP_EXTENSIONS.has(ext)) {
-			unsupported.push(rel);
+	const { timedOut } = await walk(
+		root,
+		(abs) => {
+			const rel = path.relative(root, abs).split(path.sep).join("/");
+			const ext = path.extname(abs).toLowerCase();
+			if (SWEEP_EXTENSIONS.has(ext)) supported.push({ rel, abs, ext });
+			else unsupported.push(rel);
 			return false;
-		}
-		const bytes = await fs.readFile(abs);
-		files.push({ rel, abs, ext, hash: createHash("sha256").update(bytes).digest("hex") });
-		return false;
-	});
+		},
+		undefined,
+		{ deadline: Date.now() + WALK_BUDGET_MS },
+	);
+	// Hash after the walk: a partial list from a timed-out walk is still
+	// listed and flagged, never silently reported as complete.
+	const files: SweepFile[] = [];
+	for (const entry of supported) {
+		const bytes = await fs.readFile(entry.abs);
+		files.push({ ...entry, hash: createHash("sha256").update(bytes).digest("hex") });
+	}
 	files.sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0));
 	unsupported.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-	return { files, unsupported };
+	return { files, unsupported, timedOut };
 }
