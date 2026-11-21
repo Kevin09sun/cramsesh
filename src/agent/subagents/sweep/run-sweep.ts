@@ -167,8 +167,8 @@ function unreadableCovers(marker: string, unreadable: string[]): boolean {
 	});
 }
 
-/** A transcript's heading lines, without the `#` marks. */
-function outlineHeadings(transcripts: Transcript[]): string[] {
+/** The detected outline file's heading lines, without the `#` marks. */
+function headingsFromOutline(transcripts: Transcript[]): string[] {
 	const outline = transcripts.find((transcript) => OUTLINE_FILE.test(path.basename(transcript.rel)));
 	if (!outline) return [];
 	const headings: string[] = [];
@@ -395,6 +395,11 @@ export async function runSweep(
 		status: "running",
 		startedAt,
 		activity: "Reading your materials",
+		// Explicit undefined clears a previous run's terminal fields (JSON
+		// omits them on write), so a restarted sweep never carries the old
+		// error or finish time into its "running" state.
+		error: undefined,
+		finishedAt: undefined,
 	});
 
 	try {
@@ -403,15 +408,21 @@ export async function runSweep(
 
 		const files = enumeration.files;
 		const present = new Set(files.map((file) => file.rel));
+		// A timed-out walk is not evidence of deletion: files it did not reach
+		// are neither "removed" nor dropped from the hash baseline.
 		const removed =
-			mode === "resweep"
+			mode === "resweep" && !enumeration.timedOut
 				? Object.keys(previousHashes)
 						.filter((rel) => !present.has(rel))
 						.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
 				: [];
 		const changed =
 			mode === "resweep" ? files.filter((file) => previousHashes[file.rel] !== file.hash) : files;
-		const fileHashes = hashMap(files);
+		const currentHashes = hashMap(files);
+		const fileHashes =
+			mode === "resweep" && enumeration.timedOut
+				? { ...previousHashes, ...currentHashes }
+				: currentHashes;
 
 		// Nothing new on disk: finish without any model call and record the
 		// zero-file re-sweep for the "last re-sweep: +0 files" note.
@@ -468,7 +479,12 @@ export async function runSweep(
 
 		const input: MergeInput = {
 			candidates: extracted.candidates,
-			outlineHeadings: outlineHeadings(transcripts),
+			// A re-sweep must slot additions into the plan the learner already
+			// has; only a first sweep derives headings from an outline file.
+			outlineHeadings:
+				mode === "resweep"
+					? record.sections.map((section) => section.title)
+					: headingsFromOutline(transcripts),
 			existingPoints: record.sections.flatMap((section) => section.points.map((point) => point.text)),
 			existingLeftOut: (record.leftOut ?? []).map((item) => item.text),
 		};
@@ -492,7 +508,13 @@ export async function runSweep(
 			} catch (second) {
 				if (isAbort(second, deps.signal)) throw second;
 				const message = `${reasonOf(second)}. Read ${runCoverage.files} files · ${runCoverage.pages} pages.`;
-				return fail(message, runCoverage);
+				// Keep the cumulative audit baseline: a failed re-sweep must not
+				// make the coverage report shrink to only what this run touched.
+				const failureCoverage = mergeCoverage(previousCoverage, {
+					...runCoverage,
+					readFiles: changed.map((file) => file.rel),
+				});
+				return fail(message, failureCoverage);
 			}
 		}
 

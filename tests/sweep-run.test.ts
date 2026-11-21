@@ -479,4 +479,177 @@ describe("runSweep", () => {
 		assert.equal(strong.error, "models not configured: strong");
 		assert.equal(testStore.get(record.id)!.sweep!.error, "models not configured: strong");
 	});
+
+	it("resweep passes the existing section titles as outline headings", async () => {
+		write("a.md", "alpha");
+		write("b.txt", "beta");
+		const record = testStore.create("Heading reuse", folder);
+
+		const first = await runSweep(
+			record.id,
+			"initial",
+			deps({
+				extract: extractStub([
+					{ kind: "fact", category: "definition", text: "Alpha", source: "a.md", evidence: "alpha" },
+					{ kind: "fact", category: "definition", text: "Beta", source: "b.txt", evidence: "beta" },
+				]),
+				merge: mergeStub([
+					{
+						sections: [section("Algebra", [["Alpha", "a.md"]]), section("Geometry", [["Beta", "b.txt"]])],
+						leftOut: [],
+					},
+				]),
+			}),
+		);
+		assert.equal(first.ok, true);
+
+		write("b.txt", "beta v2");
+		const captured: MergeInput[] = [];
+		const stages: Stages = {
+			extract: extractStub([
+				{ kind: "fact", category: "definition", text: "Beta two", source: "b.txt", evidence: "v2" },
+			]),
+			merge: mergeStub(
+				[{ sections: [section("Geometry", [["Beta two", "b.txt"]])], leftOut: [] }],
+				captured,
+			),
+		};
+
+		const outcome = await runSweep(record.id, "resweep", deps(stages));
+
+		assert.equal(outcome.ok, true);
+		assert.deepEqual(
+			captured[0]!.outlineHeadings,
+			["Algebra", "Geometry"],
+			"additions land under the sections the learner already has",
+		);
+	});
+
+	it("a timed-out listing marks no file removed and keeps prior hashes", async () => {
+		write("a.md", "alpha");
+		write("b.txt", "beta");
+		const record = testStore.create("Timed out", folder);
+
+		const first = await runSweep(
+			record.id,
+			"initial",
+			deps({
+				extract: extractStub([
+					{ kind: "fact", category: "definition", text: "Alpha", source: "a.md", evidence: "alpha" },
+					{ kind: "fact", category: "definition", text: "Beta", source: "b.txt", evidence: "beta" },
+				]),
+				merge: mergeStub([
+					{ sections: [section("Both", [["Alpha", "a.md"], ["Beta", "b.txt"]])], leftOut: [] },
+				]),
+			}),
+		);
+		assert.equal(first.ok, true);
+		const hashesBefore = testStore.get(record.id)!.sweep!.fileHashes;
+
+		// The partial walk reaches only b.txt; a.md must not be read as deleted.
+		fs.rmSync(path.join(folder, "a.md"));
+		const listing = await enumerateFolder(folder);
+		const stages: Stages = {
+			enumerate: async () => ({ ...listing, timedOut: true }),
+			extract: extractStub([]),
+			merge: async () => ({ sections: [], leftOut: [] }),
+		};
+
+		const outcome = await runSweep(record.id, "resweep", deps(stages));
+
+		assert.equal(outcome.ok, true);
+		assert.deepEqual(outcome.coverage.removed, [], "unseen is not removed");
+		const after = testStore.get(record.id)!;
+		assert.deepEqual(after.sweep!.coverage!.removed, []);
+		assert.equal(after.sweep!.fileHashes["a.md"], hashesBefore["a.md"], "the unseen file keeps its prior hash");
+		assert.deepEqual(Object.keys(after.sweep!.fileHashes).sort(), ["a.md", "b.txt"]);
+		assert.ok(after.sweep!.coverage!.unreadable.includes("(folder listing timed out — some files may be missing)"));
+	});
+
+	it("starting a run clears a prior error and finishedAt", async () => {
+		write("a.md", "alpha");
+		const record = testStore.create("Status hygiene", folder);
+
+		// Seed the terminal state a finished prior sweep leaves behind.
+		testStore.updateSweep(record.id, {
+			status: "done",
+			startedAt: "2020-01-01T00:00:00.000Z",
+			finishedAt: "2020-01-01T00:05:00.000Z",
+			fileHashes: {},
+		});
+
+		// A run that errors must not keep the old finish time.
+		const failed = await runSweep(record.id, "initial", {
+			store: testStore,
+			engines: {},
+			describe: async () => "unused",
+		});
+		assert.equal(failed.error, "models not configured: cheap");
+		const errored = testStore.get(record.id)!;
+		assert.equal(errored.sweep!.error, "models not configured: cheap");
+		assert.equal(errored.sweep!.finishedAt, undefined, "the prior finishedAt is cleared at start");
+
+		// A later successful run must not carry the old error.
+		const outcome = await runSweep(
+			record.id,
+			"initial",
+			deps({
+				extract: extractStub([
+					{ kind: "fact", category: "definition", text: "Alpha", source: "a.md", evidence: "alpha" },
+				]),
+				merge: mergeStub([{ sections: [section("A", [["Alpha", "a.md"]])], leftOut: [] }]),
+			}),
+		);
+		assert.equal(outcome.ok, true);
+		const done = testStore.get(record.id)!;
+		assert.equal(done.sweep!.status, "done");
+		assert.equal(done.sweep!.error, undefined, "the prior error is cleared at start");
+		assert.ok(done.sweep!.finishedAt);
+	});
+
+	it("merge failure on a resweep stores cumulative coverage", async () => {
+		write("a.md", "alpha");
+		write("b.txt", "beta");
+		const record = testStore.create("Resweep merge failure", folder);
+
+		const first = await runSweep(
+			record.id,
+			"initial",
+			deps({
+				extract: extractStub([
+					{ kind: "fact", category: "definition", text: "Alpha", source: "a.md", evidence: "alpha" },
+					{ kind: "fact", category: "definition", text: "Beta", source: "b.txt", evidence: "beta" },
+				]),
+				merge: mergeStub([
+					{ sections: [section("Basics", [["Alpha", "a.md"], ["Beta", "b.txt"]])], leftOut: [] },
+				]),
+			}),
+		);
+		assert.equal(first.ok, true);
+		const initialCoverage = testStore.get(record.id)!.sweep!.coverage!;
+		assert.equal(initialCoverage.files, 2);
+
+		write("b.txt", "beta v2");
+		const calls = { count: 0 };
+		const outcome = await runSweep(
+			record.id,
+			"resweep",
+			deps({
+				extract: extractStub([
+					{ kind: "fact", category: "definition", text: "Beta two", source: "b.txt", evidence: "v2" },
+				]),
+				merge: throwingMerge("merger exploded", calls),
+			}),
+		);
+
+		assert.equal(outcome.ok, false);
+		assert.equal(calls.count, 2);
+		assert.equal(outcome.coverage.files, 3, "the audit baseline covers the whole folder");
+		const saved = testStore.get(record.id)!;
+		const coverage = saved.sweep!.coverage!;
+		assert.equal(saved.sweep!.status, "error");
+		assert.match(saved.sweep!.error!, /Read 1 files · 1 pages\./);
+		assert.equal(coverage.files, initialCoverage.files + 1, "coverage is cumulative, not just this run");
+		assert.equal(coverage.pages, initialCoverage.pages + 1);
+	});
 });
