@@ -8,7 +8,7 @@ in-app cheat sheet. See [Getting started](getting-started.md) for setup.
 
 | Action | Binding |
 |---|---|
-| Toggle dictation | Mod+D |
+| Toggle dictation | Alt+M |
 | Open settings | Mod+, |
 | Model selector | Mod+K |
 | Cycle thinking level | Shift+Tab |
@@ -61,7 +61,7 @@ handling; this is not a guarantee for every OS/IME or layout-specific key.
   question/problem or abort a running turn. Confirmed turn abort signals the
   server, including for background turns; it also detaches any local stream.
 
-To keep dictated text, stop dictation with **Mod+D** / Stop rather than the
+To keep dictated text, stop dictation with **Alt+M** / Stop rather than the
 fallback Esc cancellation.
 
 ## Enter and submission

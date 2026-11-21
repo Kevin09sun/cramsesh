@@ -55,7 +55,7 @@ export interface KeyActionDef {
 }
 
 export const KEYBOARD_ACTIONS: readonly KeyActionDef[] = [
-	{ id: "toggle-dictation", label: "Toggle dictation", scope: "global", binding: "mod+d" },
+	{ id: "toggle-dictation", label: "Toggle dictation", scope: "global", binding: "alt+m" },
 	{ id: "open-settings", label: "Open settings", scope: "global", binding: "mod+," },
 	{ id: "open-model-picker", label: "Model selector", scope: "global", binding: "mod+k" },
 	{ id: "cycle-thinking", label: "Cycle thinking level", scope: "global", binding: "shift+tab" },

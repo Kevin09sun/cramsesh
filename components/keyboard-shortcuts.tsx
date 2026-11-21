@@ -104,47 +104,68 @@ export function KeyboardShortcuts() {
 				return;
 			}
 
-			// ── Registry dispatch.
-			const action = actionForBinding(eventBinding(e));
-			if (!action) return;
-
-			// The input guard: inside a typing surface only mod/alt combos
-			// fire (they never type a character). Bare keys — "?" included —
-			// pass through so the field keeps them. Tab already returned above.
-			if (isTypingSurface(e) && !(e.metaKey || e.ctrlKey || e.altKey)) return;
-
-			// Dispatch: global commands we own run here; surface commands
-			// ride the window event for the mounted surface to catch.
-			switch (action) {
-				case "new-session":
-					handlersRef.current.router.push("/chat/new");
-					break;
-				case "open-settings":
-					// Settings-app wave: the dialog is the surface, the URL is
-					// gone — /settings redirects to the draft shell.
-					handlersRef.current.openSettings();
-					break;
-				case "jump-graph":
-					handlersRef.current.router.push("/");
-					break;
-				case "cheat-sheet":
-					handlersRef.current.setCheatOpen(true);
-					break;
-				case "find":
-					// The mounted surface owns Find (session text / graph nodes).
-					// Claim Mod+F so Chromium's whole-window finder cannot open too.
-					e.preventDefault();
-					window.dispatchEvent(new CustomEvent(kbdEventForAction(action)));
-					break;
-				default:
-					window.dispatchEvent(new CustomEvent(kbdEventForAction(action)));
-			}
+			// ── Registry dispatch (Tab/Esc specials above).
+			dispatchRegistryAction(e, handlersRef.current);
 		};
 		window.addEventListener("keydown", onKeyDown);
 		return () => window.removeEventListener("keydown", onKeyDown);
 	}, [cheatOpen]);
 
 	return <CheatSheet open={cheatOpen} onClose={() => setCheatOpen(false)} />;
+}
+
+/** The handlers the dispatcher needs from the component (router + overlays).
+ *  Passed in so the registry branch stays testable without mounting Next. */
+export interface RegistryDispatchHandlers {
+	router: { push: (href: string) => void };
+	openSettings: () => void;
+	setCheatOpen: (open: boolean) => void;
+}
+
+/** The registry branch of the window keydown listener — map the event to an
+ *  action, apply the typing-surface guard, then run/announce it. Exported for
+ *  the dispatcher pins (tests/keyboard-dictation-default.test.tsx). */
+export function dispatchRegistryAction(e: KeyboardEvent, handlers: RegistryDispatchHandlers): void {
+	const action = actionForBinding(eventBinding(e));
+	if (!action) return;
+
+	// The input guard: inside a typing surface only mod/alt combos fire (they
+	// never type a character). Bare keys — "?" included — pass through so the
+	// field keeps them. Tab already returned in the caller.
+	if (isTypingSurface(e) && !(e.metaKey || e.ctrlKey || e.altKey)) return;
+
+	// Dictation is the one binding that must also claim the key's default:
+	// on macOS Option+M reports "µ" and would otherwise type it, and a
+	// browser could act on the chord. Scoped to dictation — every other
+	// action keeps its existing default behavior.
+	if (action === "toggle-dictation") e.preventDefault();
+
+	// Dispatch: global commands we own run here; surface commands ride the
+	// window event for the mounted surface to catch.
+	switch (action) {
+		case "new-session":
+			handlers.router.push("/chat/new");
+			break;
+		case "open-settings":
+			// Settings-app wave: the dialog is the surface, the URL is
+			// gone — /settings redirects to the draft shell.
+			handlers.openSettings();
+			break;
+		case "jump-graph":
+			handlers.router.push("/");
+			break;
+		case "cheat-sheet":
+			handlers.setCheatOpen(true);
+			break;
+		case "find":
+			// The mounted surface owns Find (session text / graph nodes).
+			// Claim Mod+F so Chromium's whole-window finder cannot open too.
+			e.preventDefault();
+			window.dispatchEvent(new CustomEvent(kbdEventForAction(action)));
+			break;
+		default:
+			window.dispatchEvent(new CustomEvent(kbdEventForAction(action)));
+	}
 }
 
 /** The ? overlay — the registry rendered as a table (grouped by scope).
