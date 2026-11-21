@@ -1,9 +1,9 @@
 "use client";
 
 import { CheckIcon, CircleX } from "lucide-react";
-import type { ApIndexResult, PdfResult, ResearchResult, SubagentArtifactData } from "@/src/core";
+import type { ApIndexResult, PdfResult, ResearchResult, SubagentArtifactData, SweepResult } from "@/src/core";
 import type { LhViewMessage } from "@/src/core";
-import { isSubagentFailure } from "@/src/core";
+import { coverageLine, isSubagentFailure } from "@/src/core";
 import { DemoOutputCard } from "@/components/artifacts/demo-card";
 import { PdfBriefCard, ResearchBriefCard } from "@/components/artifacts/job-card";
 import { VisualOutputCard } from "@/components/artifacts/visual-card";
@@ -61,6 +61,10 @@ export function SubagentSteerCard({ message }: { message: LhViewMessage }) {
 			// Its title carries the outcome — "Indexing failed" is the
 			// failure shape's own opening (`/^Indexing failed:/i`).
 			return <ApIndexBriefCard output={data.result} />;
+		case "sweep":
+			// Test material sweep: the plan itself lives on the test page in
+			// review; the steer is the transcript's quiet summary.
+			return <SweepSteerCard result={data.result as SweepResult} />;
 		case "demo":
 			return <DemoOutputCard output={data.result} messageId={message.id} initialInverted={data.ui?.inverted ?? false} />;
 		case "visual":
@@ -132,6 +136,33 @@ function ApIndexBriefCard({ output }: { output: unknown }) {
 			<div className="text-sm [&_p:first-child]:mt-0 [&_p:last-child]:mb-0">
 				<MessageResponse>{result.brief}</MessageResponse>
 			</div>
+		</div>
+	);
+}
+
+/** The sweep summary (test material sweep): how much the plan proposes and
+ *  what the folder contained. The plan itself is reviewed on the test page,
+ *  so the transcript stays a quiet card. Failure shows the error alone. */
+function SweepSteerCard({ result }: { result: SweepResult }) {
+	if (isSubagentFailure("sweep", result)) {
+		return (
+			<div className="rounded-xl border bg-card p-4 text-card-foreground" data-testid="sweep-steer-card">
+				<div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+					Sweep failed
+				</div>
+				<div className="text-sm">{result.error ?? "unknown error"}</div>
+			</div>
+		);
+	}
+	return (
+		<div className="rounded-xl border bg-card p-4 text-card-foreground" data-testid="sweep-steer-card">
+			<div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+				Materials swept
+			</div>
+			<div className="text-sm">
+				{result.points} points proposed · {result.leftOut} left out
+			</div>
+			<div className="mt-1 text-xs text-muted-foreground">{coverageLine(result.coverage)}</div>
 		</div>
 	);
 }

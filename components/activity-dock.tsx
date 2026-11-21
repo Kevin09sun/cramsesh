@@ -405,7 +405,9 @@ function ActivityBlobRow({
 							? "PDF reader"
 							: blob.jobKind === "ap_index"
 								? "Paper indexer"
-								: "Sub-agent";
+								: blob.jobKind === "sweep"
+									? "Reading your materials"
+									: "Sub-agent";
 	return (
 		<div
 			data-testid={`activity-blob-${blob.process}`}

@@ -583,6 +583,40 @@ describe("sweep_materials", () => {
 		assert.equal(jobs.created.length, 0);
 	});
 
+	it("REFUSES an empty folder — an empty path would sweep the home directory", async () => {
+		const { tests, calls } = fakeTests(recordOf({ sections: [] }));
+		const jobs = fakeJobs();
+		const tool = testPrepTools({ ...ctxOf(tests), jobs: jobs.ctx }).sweep_materials!;
+
+		for (const folder of ["", "   "]) {
+			const result = await tool.execute("call_sweep", { folder } as never);
+			assert.equal(result.isError, true, `"${folder}" must be refused`);
+			assert.match(
+				(result.details as { problems: string[] }).problems[0]!,
+				/folder is required — pass the folder the learner attached/,
+			);
+		}
+		assert.equal(calls.setFolder.length, 0, "an empty folder never touches the record");
+		assert.equal(jobs.created.length, 0, "an empty folder never dispatches");
+	});
+
+	it("REFUSES the home folder or a drive root — never sweeps the whole home", async () => {
+		const { tests, calls } = fakeTests(recordOf({ sections: [] }));
+		const jobs = fakeJobs();
+		const tool = testPrepTools({ ...ctxOf(tests), jobs: jobs.ctx }).sweep_materials!;
+
+		for (const folder of [os.homedir(), path.parse(os.homedir()).root]) {
+			const result = await tool.execute("call_sweep", { folder } as never);
+			assert.equal(result.isError, true, `${folder} must be refused`);
+			assert.match(
+				(result.details as { problems: string[] }).problems[0]!,
+				/that is your whole home folder \/ drive — pass the folder with the test materials/,
+			);
+		}
+		assert.equal(calls.setFolder.length, 0);
+		assert.equal(jobs.created.length, 0);
+	});
+
 	it("REFUSES a missing folder without touching the record", async () => {
 		const { tests, calls } = fakeTests(recordOf({ sections: [] }));
 		const jobs = fakeJobs();

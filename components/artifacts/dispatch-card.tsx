@@ -38,6 +38,16 @@ export function ApIndexJobCard({ part }: ArtifactPartProps) {
 	return <DispatchCard toolCallId={part.toolCallId} kind="ap_index" />;
 }
 
+/**
+ * The sweep dispatch box (test material sweep): the ack drives a
+ * DispatchCard showing live activity ("Reading your materials"); the plan
+ * arrives on the test page and the transcript summary rides the steer.
+ */
+export function SweepMaterialsJobCard({ part }: ArtifactPartProps) {
+	if (part.state !== "output-available") return null;
+	return <DispatchCard toolCallId={part.toolCallId} kind="sweep" />;
+}
+
 export function DispatchCard({ toolCallId, kind }: { toolCallId: string; kind: JobKind }) {
 	const jobs = useContext(JobsContext);
 	const job = jobs.find((j) => j.toolCallId === toolCallId) ?? null;

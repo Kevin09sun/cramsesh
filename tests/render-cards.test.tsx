@@ -18,7 +18,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { MessageResponse } from "../components/ai-elements/message.tsx";
 import { QuestionDock } from "../components/question-dock.tsx";
 import { ProbeDoneCard } from "../components/artifacts/probe-done-card.tsx";
-import { DispatchCard } from "../components/artifacts/dispatch-card.tsx";
+import { DispatchCard, SweepMaterialsJobCard } from "../components/artifacts/dispatch-card.tsx";
+import { artifactRenderers } from "../components/artifacts/index.ts";
 import { JobsContext } from "../components/jobs-context.ts";
 import { ChatActionsContext } from "../components/chat.tsx";
 import type { JobRecord } from "../src/core/contracts.ts";
@@ -798,5 +799,38 @@ describe("question context renders as markdown everywhere (owner, 2026-10-12)", 
 		assert.match(html, /Very/, "the card renders");
 		assert.equal((html.match(/class="katex"/g) ?? []).length, 0, "no context slot appears from nothing");
 		assert.ok(!html.includes("lh-prose block text-xs"), "no description slot without an ask input");
+	});
+});
+
+describe("sweep_materials dispatch card (test material sweep)", () => {
+	const part = {
+		type: "tool-sweep_materials",
+		toolCallId: "call-sweep",
+		state: "output-available",
+		output: "Reading every file in the folder now.",
+	} as never;
+
+	it("renders the running sweep with its label and activity line", () => {
+		const job: JobRecord = {
+			id: "js1",
+			kind: "sweep",
+			chatId: "c1",
+			toolCallId: "call-sweep",
+			status: "running",
+			activity: "Reading a.pdf",
+			createdAt: new Date().toISOString(),
+			updatedAt: new Date().toISOString(),
+		};
+		const html = renderToStaticMarkup(
+			<JobsContext.Provider value={[job]}>
+				<SweepMaterialsJobCard part={part} />
+			</JobsContext.Provider>,
+		);
+		assert.match(html, /Reading your materials/);
+		assert.match(html, /Reading a\.pdf/);
+	});
+
+	it("is registered for the sweep_materials tool part", () => {
+		assert.equal(artifactRenderers.sweep_materials, SweepMaterialsJobCard);
 	});
 });

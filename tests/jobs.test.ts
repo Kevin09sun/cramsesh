@@ -909,6 +909,16 @@ describe("sweep runner (test material sweep)", () => {
 		} as import("../src/agent/subagents/sweep/run-sweep.ts").SweepStore;
 	}
 
+	/** A store that tolerates writes (the runner wraps it for job progress). */
+	function inertSweepStore() {
+		return {
+			get: () => null,
+			updateSweep: () => ({}) as never,
+			saveSweepPlan: () => ({}) as never,
+			setPendingAdditions: () => ({}) as never,
+		} as import("../src/agent/subagents/sweep/run-sweep.ts").SweepStore;
+	}
+
 	it("runs runSweep(testId, \"initial\") and steers the outcome with the coverage line", async () => {
 		const chat = chatStore.createChat("Test: sweep runner");
 		trackChat(chat.id);
@@ -1005,6 +1015,105 @@ describe("sweep runner (test material sweep)", () => {
 		assert.equal(done.status, "error");
 		assert.equal(done.error, "sweep store not wired");
 		assert.equal(delivery.steers[0]!.content, "Sweep failed: sweep store not wired");
+	});
+
+	it("mirrors the sweep's activity patches onto the job record while it runs", async () => {
+		const chat = chatStore.createChat("Test: sweep progress");
+		trackChat(chat.id);
+		const job = jobStore.createJob({ kind: "sweep", chatId: chat.id, toolCallId: "call-sweep4" });
+		trackJob(job.id);
+
+		const delivery = fakeDeliver();
+		const runner = createJobRunner({
+			chatStore,
+			jobStore,
+			deliver: delivery.deliver,
+			engineFor: () => fauxEngine([]),
+			sweepStore: inertSweepStore(),
+		});
+		let activityDuringSweep: string | undefined;
+		sweepOverride.current = async (_testId, mode, deps) => {
+			deps.store.updateSweep("test_1", { activity: "Reading a.pdf" });
+			activityDuringSweep = jobStore.getJob(job.id)!.activity;
+			return { ok: true, mode, points: 0, leftOut: 0, coverage: emptyCoverage() };
+		};
+		try {
+			await runner.runJob(job.id, { testId: "test_1", folder: "C:/materials" });
+		} finally {
+			sweepOverride.current = undefined;
+		}
+
+		assert.equal(activityDuringSweep, "Reading a.pdf", "the poll shows the sweep's live activity");
+		assert.equal(jobStore.getJob(job.id)!.activity, "finished", "the terminal line still wins");
+	});
+
+	it("refuses when the extractor engine's provider key is gone", async () => {
+		const chat = chatStore.createChat("Test: sweep extractor keyless");
+		trackChat(chat.id);
+		const job = jobStore.createJob({ kind: "sweep", chatId: chat.id, toolCallId: "call-sweep5" });
+		trackJob(job.id);
+
+		const engine = fauxEngine([]);
+		const envelope = providerKeyMissing(engine.model.provider, ["cheap"]);
+		let sweepCalls = 0;
+		const delivery = fakeDeliver();
+		const runner = createJobRunner({
+			chatStore,
+			jobStore,
+			deliver: delivery.deliver,
+			engineFor: () => engine,
+			sweepStore: stubSweepStore(),
+			providerKeyMissing: (provider, tier) => (tier === "cheap" ? providerKeyMissing(provider, ["cheap"]) : null),
+		});
+		sweepOverride.current = async (_testId, mode) => {
+			sweepCalls++;
+			return { ok: true, mode, points: 0, leftOut: 0, coverage: emptyCoverage() };
+		};
+		try {
+			await runner.runJob(job.id, { testId: "test_1", folder: "C:/materials" });
+		} finally {
+			sweepOverride.current = undefined;
+		}
+
+		const done = jobStore.getJob(job.id)!;
+		assert.equal(done.status, "error");
+		assert.equal(done.error, envelope.error);
+		assert.equal(sweepCalls, 0, "the sweep never starts without its extractor key");
+		assert.equal(delivery.steers[0]!.content, `Sweep failed: ${envelope.error}`);
+	});
+
+	it("omits a reader whose provider key is gone — the sweep runs, vision pages fail per page", async () => {
+		const chat = chatStore.createChat("Test: sweep reader keyless");
+		trackChat(chat.id);
+		const job = jobStore.createJob({ kind: "sweep", chatId: chat.id, toolCallId: "call-sweep6" });
+		trackJob(job.id);
+
+		const engine = fauxEngine([]);
+		const delivery = fakeDeliver();
+		const runner = createJobRunner({
+			chatStore,
+			jobStore,
+			deliver: delivery.deliver,
+			engineFor: () => engine,
+			sweepStore: stubSweepStore(),
+			providerKeyMissing: (provider, tier) => (tier === "vision" ? providerKeyMissing(provider, ["vision"]) : null),
+		});
+		let seenReader: unknown = "unset";
+		let seenExtractor: unknown = "unset";
+		sweepOverride.current = async (_testId, mode, deps) => {
+			seenReader = deps.engines.reader;
+			seenExtractor = deps.engines.extractor;
+			return { ok: true, mode, points: 0, leftOut: 0, coverage: emptyCoverage() };
+		};
+		try {
+			await runner.runJob(job.id, { testId: "test_1", folder: "C:/materials" });
+		} finally {
+			sweepOverride.current = undefined;
+		}
+
+		assert.equal(seenReader, undefined, "no reader engine reaches the sweep");
+		assert.ok(seenExtractor, "the extractor engine is unaffected");
+		assert.equal(jobStore.getJob(job.id)!.status, "done");
 	});
 });
 

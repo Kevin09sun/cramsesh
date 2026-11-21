@@ -652,4 +652,50 @@ describe("runSweep", () => {
 		assert.equal(coverage.files, initialCoverage.files + 1, "coverage is cumulative, not just this run");
 		assert.equal(coverage.pages, initialCoverage.pages + 1);
 	});
+
+	it("initial mode finishes from the record when the plan save landed before a crash", async () => {
+		const record = testStore.create("Crash recovery", folder);
+		write("a.md", "# Algebra\nSolve for x.");
+		testStore.saveSweepPlan(
+			record.id,
+			[section("Math", [["Solve for x", "a.md"]])],
+			[{ text: "Chapter heading", source: "a.md", reason: "heading" }],
+		);
+		const coverage = { files: 1, pages: 2, visionPages: 0, unsupported: [], unreadable: [], empty: [], removed: [] };
+		testStore.updateSweep(record.id, {
+			status: "running",
+			startedAt: "2026-11-20T00:00:00.000Z",
+			fileHashes: { "a.md": "hash" },
+			coverage,
+		});
+
+		const calls = { enumerate: 0, extract: 0, merge: 0 };
+		const outcome = await runSweep(
+			record.id,
+			"initial",
+			deps({
+				enumerate: async () => {
+					calls.enumerate++;
+					return { files: [], unsupported: [], timedOut: false };
+				},
+				extract: (async () => {
+					calls.extract++;
+					return { candidates: [], markersSeen: [] };
+				}) as ExtractFn,
+				merge: (async () => {
+					calls.merge++;
+					return { sections: [], leftOut: [] };
+				}) as MergeFn,
+			}),
+		);
+
+		assert.equal(outcome.ok, true);
+		assert.equal(outcome.points, 1);
+		assert.equal(outcome.leftOut, 1);
+		assert.deepEqual(outcome.coverage, coverage, "the stored coverage is reported, not recomputed");
+		assert.deepEqual(calls, { enumerate: 0, extract: 0, merge: 0 }, "nothing re-ran");
+		const saved = testStore.get(record.id)!;
+		assert.equal(saved.sweep!.status, "done", "the interrupted sweep is closed");
+		assert.equal(saved.sections.length, 1, "the already-saved plan is untouched");
+	});
 });

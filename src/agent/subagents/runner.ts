@@ -734,16 +734,46 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 			return;
 		}
 
+		// The sweep's other two engines (2026-11-20): the extractor is
+		// load-bearing — its provider key gone refuses the job before any
+		// folder is read. The reader is best-effort: without its key the
+		// sweep still runs and the affected pages carry "(vision failed)".
+		const extractor = deps.engineFor?.("sweepExtractor");
+		const extractorRefusal =
+			extractor ? deps.providerKeyMissing?.(extractor.model.provider, ROLE_SLOT.sweepExtractor) ?? null : null;
+		if (extractorRefusal) {
+			await fail(extractorRefusal.error);
+			return;
+		}
+		const reader = deps.engineFor?.("sweepReader");
+		const readerKeyless =
+			reader !== undefined &&
+			(deps.providerKeyMissing?.(reader.model.provider, ROLE_SLOT.sweepReader) ?? null) !== null;
+
+		// Mirror the sweep's own progress patches onto the job record so the
+		// dispatch card and activity dock show the live line.
+		const progressStore: SweepStore = {
+			get: (id) => store.get(id),
+			updateSweep: (id, patch) => {
+				if (patch.activity !== undefined && stillRunning(jobId)) {
+					jobStore.updateJob(jobId, { activity: patch.activity });
+				}
+				return store.updateSweep(id, patch);
+			},
+			saveSweepPlan: (id, draft, leftOut) => store.saveSweepPlan(id, draft, leftOut),
+			setPendingAdditions: (id, additions) => store.setPendingAdditions(id, additions),
+		};
+
 		try {
 			jobStore.updateJob(jobId, { activity: "reading materials" });
 			// Reader/extractor are separate vision/cheap tiers; the picked engine
 			// (KIND_ROLE.sweep = sweepMerger) merges. The orchestrator catches its
 			// own errors into an outcome; the try/catch is a last-resort guard.
 			const outcome: SweepResult = await (sweepOverride.current ?? runSweep)(testId, "initial", {
-				store,
+				store: progressStore,
 				engines: {
-					reader: deps.engineFor?.("sweepReader"),
-					extractor: deps.engineFor?.("sweepExtractor"),
+					reader: readerKeyless ? undefined : reader,
+					extractor,
 					merger: model,
 				},
 				signal: loop.abortSignal,

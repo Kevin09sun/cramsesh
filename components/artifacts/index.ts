@@ -1,7 +1,7 @@
 import type { ComponentType } from "react";
 import type { ArtifactPartProps } from "@/src/core";
 import { DemoCard } from "@/components/artifacts/demo-card";
-import { ApIndexJobCard } from "@/components/artifacts/dispatch-card";
+import { ApIndexJobCard, SweepMaterialsJobCard } from "@/components/artifacts/dispatch-card";
 import { JobCard, PdfJobCard } from "@/components/artifacts/job-card";
 import { VisualCard } from "@/components/artifacts/visual-card";
 import { ImageCard } from "@/components/artifacts/image-card";
@@ -67,6 +67,9 @@ export const artifactRenderers: Record<string, ComponentType<ArtifactPartProps>>
 	propose_plan: PlanReviewCard,
 	test_progress: ToolCallCard,
 	record_result: ToolCallCard,
+	// The material sweep (2026-11-20): the ack drives the same live dispatch
+	// card as pdf/research; the plan summary arrives via the steer.
+	sweep_materials: SweepMaterialsJobCard,
 	// AP prep (2026-11-13): the units-and-topics proposal is the course's
 	// plan-review artifact (the same card, AP words and endpoints). Every
 	// other AP tool is trace-only in the quiet expanded-card register. The
