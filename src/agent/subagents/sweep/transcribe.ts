@@ -387,7 +387,8 @@ type EnumerateWalk = typeof walkFiles;
 export async function enumerateFolder(
 	folder: string,
 	walk: EnumerateWalk = walkFiles,
-): Promise<{ files: SweepFile[]; unsupported: string[]; timedOut: boolean }> {
+	signal?: AbortSignal,
+): Promise<{ files: SweepFile[]; unsupported: string[]; unreadable: string[]; timedOut: boolean }> {
 	const resolved = path.resolve(folder);
 	let root = resolved;
 	try {
@@ -406,17 +407,25 @@ export async function enumerateFolder(
 			else unsupported.push(rel);
 			return false;
 		},
-		undefined,
+		signal,
 		{ deadline: Date.now() + WALK_BUDGET_MS },
 	);
 	// Hash after the walk: a partial list from a timed-out walk is still
-	// listed and flagged, never silently reported as complete.
+	// listed and flagged, never silently reported as complete. One file that
+	// cannot be read (a OneDrive placeholder, a permissions edge) is reported
+	// unreadable instead of failing the whole enumeration (I10).
 	const files: SweepFile[] = [];
+	const unreadable: string[] = [];
 	for (const entry of supported) {
-		const bytes = await fs.readFile(entry.abs);
-		files.push({ ...entry, hash: createHash("sha256").update(bytes).digest("hex") });
+		try {
+			const bytes = await fs.readFile(entry.abs);
+			files.push({ ...entry, hash: createHash("sha256").update(bytes).digest("hex") });
+		} catch {
+			unreadable.push(`${entry.rel} (could not read file)`);
+		}
 	}
 	files.sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0));
+	unreadable.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 	unsupported.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-	return { files, unsupported, timedOut };
+	return { files, unsupported, unreadable, timedOut };
 }

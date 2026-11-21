@@ -314,13 +314,13 @@ async function enumerateWithRetry(
 	folder: string,
 	enumerate: typeof enumerateFolder,
 	signal?: AbortSignal,
-): Promise<{ files: SweepFile[]; unsupported: string[]; timedOut: boolean }> {
+): Promise<{ files: SweepFile[]; unsupported: string[]; unreadable: string[]; timedOut: boolean }> {
 	try {
-		return await enumerate(folder);
+		return await enumerate(folder, undefined, signal);
 	} catch (first) {
 		if (isAbort(first, signal)) throw first;
 		try {
-			return await enumerate(folder);
+			return await enumerate(folder, undefined, signal);
 		} catch (second) {
 			if (isAbort(second, signal)) throw second;
 			throw new Error(`could not list the folder: ${reasonOf(second)}`);
@@ -510,7 +510,10 @@ export async function runSweep(
 				pages: 0,
 				visionPages: 0,
 				unsupported: [...enumeration.unsupported],
-				unreadable: enumeration.timedOut ? [FOLDER_TIMEOUT_ENTRY] : [],
+				unreadable: [
+					...enumeration.unreadable,
+					...(enumeration.timedOut ? [FOLDER_TIMEOUT_ENTRY] : []),
+				],
 				empty: [],
 				removed,
 			};
@@ -550,6 +553,7 @@ export async function runSweep(
 		const unreadable = [
 			...transcripts.flatMap((transcript) => transcript.unreadable),
 			...extracted.failures,
+			...enumeration.unreadable,
 			...(enumeration.timedOut ? [FOLDER_TIMEOUT_ENTRY] : []),
 		];
 		const cited = new Set(extracted.candidates.map((candidate) => candidate.source));

@@ -538,6 +538,30 @@ describe("runSweep", () => {
 		assert.ok(!coverage.empty.includes("a.md"), "an extraction failure is not 'nothing found'");
 	});
 
+	it("an enumeration-unreadable file lands in coverage, not fatal (I10)", async () => {
+		write("a.md", "alpha");
+		const record = testStore.create("Unreadable file", folder);
+		const listing = await enumerateFolder(folder);
+		const stages: Stages = {
+			enumerate: async () => ({
+				...listing,
+				unreadable: ["ghost.md (could not read file)"],
+			}),
+			extract: extractStub([
+				{ kind: "fact", category: "definition", text: "Alpha", source: "a.md", evidence: "alpha" },
+			]),
+			merge: mergeStub([{ sections: [section("A", [["Alpha", "a.md"]])], leftOut: [] }]),
+		};
+
+		const outcome = await runSweep(record.id, "initial", deps(stages));
+
+		assert.equal(outcome.ok, true);
+		assert.ok(outcome.coverage.unreadable.includes("ghost.md (could not read file)"));
+		const coverage = testStore.get(record.id)!.sweep!.coverage!;
+		assert.deepEqual(coverage.files, 1, "the unreadable file is not counted as read");
+		assert.ok(coverage.unreadable.includes("ghost.md (could not read file)"));
+	});
+
 	it("retries enumeration once, then ends in error", async () => {
 		write("a.md", "alpha");
 		const record = testStore.create("Enumeration failure", folder);
@@ -783,7 +807,7 @@ describe("runSweep", () => {
 			deps({
 				enumerate: async () => {
 					calls.enumerate++;
-					return { files: [], unsupported: [], timedOut: false };
+					return { files: [], unsupported: [], unreadable: [], timedOut: false };
 				},
 				extract: (async () => {
 					calls.extract++;

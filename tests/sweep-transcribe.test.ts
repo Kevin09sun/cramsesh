@@ -285,6 +285,34 @@ describe("enumerateFolder", () => {
 		assert.deepEqual(result.files.map((f) => f.rel), ["a.pdf"]);
 		assert.equal(result.files[0]!.hash, createHash("sha256").update(pdfBytes).digest("hex"));
 	});
+
+	it("a file that cannot be read is reported unreadable, not fatal (I10)", async () => {
+		make("a.pdf", tinyPdf([{ runs: wrapRuns(LONG_TEXT) }]));
+		const realRoot = fs.realpathSync(root);
+		const fakeWalk: typeof walkFiles = async (_dir, visit) => {
+			await visit(path.join(realRoot, "a.pdf"));
+			await visit(path.join(realRoot, "ghost.md"));
+			return { timedOut: false, aborted: false };
+		};
+
+		const result = await enumerateFolder(root, fakeWalk);
+
+		assert.deepEqual(result.files.map((f) => f.rel), ["a.pdf"], "the readable file is still listed");
+		assert.deepEqual(result.unreadable, ["ghost.md (could not read file)"]);
+	});
+
+	it("passes the abort signal to the walk", async () => {
+		const controller = new AbortController();
+		let seen: AbortSignal | undefined;
+		const fakeWalk: typeof walkFiles = async (_dir, _visit, signal) => {
+			seen = signal;
+			return { timedOut: false, aborted: false };
+		};
+
+		await enumerateFolder(root, fakeWalk, controller.signal);
+
+		assert.equal(seen, controller.signal);
+	});
 });
 
 describe("transcribeFile — pdf", () => {
