@@ -62,6 +62,13 @@ describe("testprep prompt composition", () => {
 		assert.ok(doctrine.includes("Never use the web to decide what the test covers."));
 	});
 
+	it("scopes with sweep_materials, never by reading the outline itself", () => {
+		const doctrine = promptText("testprep/10-doctrine.md");
+		assert.ok(doctrine.includes("sweep_materials"), "the doctrine must name the sweep tool");
+		assert.ok(doctrine.includes("Never invent scope from general knowledge."));
+		assert.doesNotMatch(doctrine, /outline first/i);
+	});
+
 	it("lists own fragments first, then exactly the five allowlisted shared files", () => {
 		assert.deepEqual(
 			listSourceSegments("testprep").map((segment) => segment.path),

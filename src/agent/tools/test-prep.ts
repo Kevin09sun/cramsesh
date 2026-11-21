@@ -56,9 +56,10 @@ export interface TestPrepToolContext {
 	testId: string;
 	tests: TestPrepStore;
 	/** THE RARELY-NEEDED SET (the practice-tools idiom, 2026-11-10): the
-	 *  research + pdf jobs, injected by the composition root. Outlines and
-	 *  slides are usually PDFs, so the pdf job matters here. Absent (tests,
-	 *  wiring bugs) = absent from the registry. */
+	 *  research + pdf + sweep jobs, injected by the composition root. The
+	 *  sweep job reads the materials folder and proposes the plan; pdf
+	 *  remains for ad-hoc reads. Absent (tests, wiring bugs) = absent from
+	 *  the registry. */
 	jobs?: JobToolContext;
 	/** Direct web tools (2026-11-12): the live search provider seam. Present
 	 *  = web_search/web_fetch are registered (behind the settings `web`
@@ -115,7 +116,7 @@ const planPointInputObject = Type.Object({
 	),
 	text: Type.String({ description: "REQUIRED — one individually testable item." }),
 	source: Type.String({
-		description: "REQUIRED — the outline line or slide this point came from, so the learner can audit coverage.",
+		description: "REQUIRED — the file and page or slide this point came from, so the learner can audit coverage.",
 	}),
 });
 
@@ -134,8 +135,7 @@ const planSectionInputObject = Type.Object({
 
 export const proposePlanInputObject = Type.Object({
 	sections: Type.Array(planSectionInputObject, {
-		description:
-			"REQUIRED — sections from the outline's headings, each with the individual points the test covers.",
+		description: "REQUIRED — sections, each with the individual points the test covers.",
 	}),
 });
 
@@ -146,8 +146,8 @@ function proposePlanTool(ctx: TestPrepToolContext): AgentTool<typeof proposePlan
 		name: "propose_plan",
 		label: "propose_plan",
 		description:
-			"Propose (or revise) the test plan for learner review: sections from the outline's headings, each holding " +
-			"the individual points the test covers, every point carrying the outline line or slide it came from. " +
+			"Propose (or revise) the test plan for learner review: sections, each holding " +
+			"the individual points the test covers, every point carrying the file and page or slide it came from. " +
 			"Validates that every section has a title and at least one point, and that every point has text. Saves the " +
 			"plan UNCONFIRMED and ends your move: say nothing further that assumes scope, wait for the learner to review " +
 			"and confirm. Call it again whenever the learner asks for changes — including after confirmation; a revision " +
@@ -430,8 +430,8 @@ function sweepMaterialsTool(
 export function testPrepTools(ctx: TestPrepToolContext, enabled?: EnabledTools): Record<string, AgentTool<any>> {
 	// THE RARELY-NEEDED SET (the practice-tools idiom): the research + pdf
 	// jobs (demo/visual stay teach-only), absent when no jobs context was
-	// injected. Outlines and slides are usually PDFs, so the pdf job is how
-	// the agent reads the folder it was pointed at.
+	// injected. The sweep job (below) reads the materials folder to build the
+	// initial plan; pdf remains for ad-hoc reads.
 	const jobs = ctx.jobs ? jobTools(ctx.jobs) : null;
 	// healToolRecord — the standard argument heal over the WHOLE registry
 	// (the practice/teacher/prober convention). The per-tool prepareArguments

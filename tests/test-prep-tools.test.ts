@@ -25,6 +25,7 @@ import { QUESTION_TOOLS, toolQuestionKind } from "../src/core/pending.ts";
 import { createTestPrepAgent } from "../src/agent/teacher-agent.ts";
 import {
 	checkPointInputObject,
+	proposePlanInputObject,
 	testPrepTools,
 	type TestPrepToolContext,
 } from "../src/agent/tools/test-prep.ts";
@@ -270,6 +271,14 @@ describe("propose_plan", () => {
 		const result = await tool.execute("call_plan", { sections: DRAFT } as never);
 		assert.equal(result.isError, undefined);
 		assert.equal(calls.savePlan.length, 1);
+	});
+
+	it("describes the sweep-built plan: sections, source as the file and page or slide", () => {
+		const tool = testPrepTools(ctxOf(fakeTests(recordOf()).tests)).propose_plan!;
+		const schema = JSON.stringify(proposePlanInputObject);
+		assert.match(tool.description, /the file and page or slide it came from/);
+		assert.doesNotMatch(tool.description + schema, /outline/i);
+		assert.match(schema, /the file and page or slide this point came from/);
 	});
 
 	it("REFUSES a missing test with a clean invalid-input result instead of throwing", async () => {
