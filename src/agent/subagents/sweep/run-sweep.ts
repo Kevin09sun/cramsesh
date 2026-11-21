@@ -418,10 +418,11 @@ export async function runSweep(
 	}
 
 	// Crash recovery (initial mode, 2026-11-20): the plan save landed and the
-	// process died before the sweep closed. The record is the truth — report
-	// what it holds instead of re-reading the folder and re-proposing a plan
-	// over one that already exists.
-	if (mode === "initial" && record.sections.length > 0 && Object.keys(record.sweep?.fileHashes ?? {}).length > 0) {
+	// process died before the sweep closed. The record is the truth — saved
+	// sections alone prove the plan was written (the sweep_materials tool gate
+	// already prevents a genuine second initial sweep), so report what it
+	// holds instead of re-reading the folder and re-proposing over it.
+	if (mode === "initial" && record.sections.length > 0) {
 		const coverage = record.sweep?.coverage ?? emptyCoverage();
 		if (record.sweep?.status === "running") {
 			deps.store.updateSweep(testId, { status: "done", finishedAt: nowIso(), coverage });

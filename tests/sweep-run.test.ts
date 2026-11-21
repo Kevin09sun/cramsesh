@@ -784,6 +784,40 @@ describe("runSweep", () => {
 		assert.equal(coverage.pages, initialCoverage.pages, "a failed re-sweep adds no pages");
 	});
 
+	it("initial mode recovers from saved sections alone, even with no file hashes (I11)", async () => {
+		const record = testStore.create("Plan-only recovery", folder);
+		write("a.md", "# Algebra\nSolve for x.");
+		testStore.saveSweepPlan(record.id, [section("Math", [["Solve for x", "a.md"]])], []);
+		testStore.updateSweep(record.id, { status: "running", startedAt: "2026-11-20T00:00:00.000Z" });
+
+		const calls = { enumerate: 0, extract: 0, merge: 0 };
+		const outcome = await runSweep(
+			record.id,
+			"initial",
+			deps({
+				enumerate: async () => {
+					calls.enumerate++;
+					return { files: [], unsupported: [], unreadable: [], timedOut: false };
+				},
+				extract: (async () => {
+					calls.extract++;
+					return { candidates: [], markersSeen: [] };
+				}) as ExtractFn,
+				merge: (async () => {
+					calls.merge++;
+					return { sections: [], leftOut: [] };
+				}) as MergeFn,
+			}),
+		);
+
+		assert.equal(outcome.ok, true);
+		assert.equal(outcome.points, 1);
+		assert.deepEqual(calls, { enumerate: 0, extract: 0, merge: 0 }, "nothing re-ran");
+		const saved = testStore.get(record.id)!;
+		assert.equal(saved.sweep!.status, "done", "the interrupted sweep is closed");
+		assert.equal(saved.sections.some((section) => section.points.some((point) => point.text === "Solve for x")), true);
+	});
+
 	it("initial mode finishes from the record when the plan save landed before a crash", async () => {
 		const record = testStore.create("Crash recovery", folder);
 		write("a.md", "# Algebra\nSolve for x.");
