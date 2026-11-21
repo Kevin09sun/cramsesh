@@ -328,23 +328,54 @@ async function enumerateWithRetry(
 	}
 }
 
+/** The `<!-- source: … -->` markers present in one chunk, first-appearance
+ *  order (used when a chunk's extraction fails and extractCandidates never
+ *  returns). */
+function markersInChunk(chunk: string): string[] {
+	const markers: string[] = [];
+	for (const line of chunk.split("\n")) {
+		const match = /^<!-- source: (.+?) -->$/.exec(line.trim());
+		if (match && !markers.includes(match[1]!)) markers.push(match[1]!);
+	}
+	return markers;
+}
+
 async function extractAll(
 	chunks: string[],
 	deps: SweepDeps,
 	extract: typeof extractCandidates,
 	activity: (line: string) => void,
 	signal: AbortSignal | undefined,
-): Promise<{ candidates: Candidate[]; markers: string[] }> {
-	if (chunks.length === 0) return { candidates: [], markers: [] };
+): Promise<{ candidates: Candidate[]; markers: string[]; failures: string[] }> {
+	if (chunks.length === 0) return { candidates: [], markers: [], failures: [] };
 
 	const results = await mapLimit(chunks, EXTRACT_CONCURRENCY, async (chunk, index) => {
 		throwIfAborted(signal);
 		activity(`Finding testable items — chunk ${index + 1}/${chunks.length}`);
-		return extract(chunk, {
+		const options = {
 			engine: deps.engines.extractor,
 			signal,
-			onUsage: (usage) => deps.onUsage?.("sweepExtractor", usage),
-		});
+			onUsage: (usage: Usage) => deps.onUsage?.("sweepExtractor", usage),
+		};
+		try {
+			return { ...(await extract(chunk, options)), failures: [] as string[] };
+		} catch (first) {
+			if (isAbort(first, signal)) throw first;
+			// One chunk's model call must never kill the whole sweep: retry
+			// once, then record its markers as unreadable and move on (I7).
+			activity(`Finding testable items — chunk ${index + 1}/${chunks.length} — retrying`);
+			try {
+				return { ...(await extract(chunk, options)), failures: [] as string[] };
+			} catch (second) {
+				if (isAbort(second, signal)) throw second;
+				const markers = markersInChunk(chunk);
+				return {
+					candidates: [] as Candidate[],
+					markersSeen: markers,
+					failures: markers.map((marker) => `${marker} (extraction failed)`),
+				};
+			}
+		}
 	});
 
 	const candidates = results.flatMap((result) => result.candidates);
@@ -354,7 +385,7 @@ async function extractAll(
 			if (!markers.includes(marker)) markers.push(marker);
 		}
 	}
-	return { candidates, markers };
+	return { candidates, markers, failures: results.flatMap((result) => result.failures) };
 }
 
 // ─── the sweep ──────────────────────────────────────────────────────────────
@@ -518,6 +549,7 @@ export async function runSweep(
 
 		const unreadable = [
 			...transcripts.flatMap((transcript) => transcript.unreadable),
+			...extracted.failures,
 			...(enumeration.timedOut ? [FOLDER_TIMEOUT_ENTRY] : []),
 		];
 		const cited = new Set(extracted.candidates.map((candidate) => candidate.source));

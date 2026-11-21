@@ -505,6 +505,39 @@ describe("runSweep", () => {
 		assert.match(fs.readFileSync(path.join(cacheDir, cached[0]!), "utf8"), /A labelled cell diagram\./);
 	});
 
+	it("retries a failed extraction chunk once, then marks it unreadable and continues (I7)", async () => {
+		write("a.md", "alpha material that cannot be extracted");
+		write("b.txt", "beta material that extracts fine");
+		const record = testStore.create("Chunk failure", folder);
+		const calls = { a: 0, b: 0 };
+
+		const stages: Stages = {
+			extract: async (chunk) => {
+				if (chunk.includes("a.md")) {
+					calls.a++;
+					throw new Error("extractor exploded");
+				}
+				calls.b++;
+				return {
+					candidates: [
+						{ kind: "fact", category: "definition", text: "Beta", source: "b.txt", evidence: "beta" },
+					],
+					markersSeen: markersIn(chunk),
+				};
+			},
+			merge: mergeStub([{ sections: [section("B", [["Beta", "b.txt"]])], leftOut: [] }]),
+		};
+
+		const outcome = await runSweep(record.id, "initial", deps(stages));
+
+		assert.equal(outcome.ok, true, "one bad chunk does not kill the sweep");
+		assert.equal(calls.a, 2, "the failed chunk is retried exactly once");
+		assert.equal(outcome.points, 1, "the other chunk still contributes its points");
+		const coverage = testStore.get(record.id)!.sweep!.coverage!;
+		assert.ok(coverage.unreadable.includes("a.md (extraction failed)"));
+		assert.ok(!coverage.empty.includes("a.md"), "an extraction failure is not 'nothing found'");
+	});
+
 	it("retries enumeration once, then ends in error", async () => {
 		write("a.md", "alpha");
 		const record = testStore.create("Enumeration failure", folder);
