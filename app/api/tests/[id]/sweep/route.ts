@@ -6,9 +6,11 @@
  * is optional JSON `{ folder: string }`: a test that has no stored folder can
  * pick one here, which is validated with resolveSweepFolder (the same
  * validation sweep_materials runs), stored on the record, and swept in the
- * same launch. No body means "use the stored folder". A test with no stored
- * folder and no body is a 400; offering a folder to a test that already has
- * one is a 409, as is a body that is not `{ folder: string }`.
+ * same launch. An absent or empty body, or an object without `folder`, means
+ * "use the stored folder". Offering a folder to a test that already has one
+ * is a 409. A non-empty body that is not JSON, not an object, or whose
+ * `folder` is not a string is a 400, as is a test with no stored folder and
+ * no body.
  *
  * The orchestrator owns the record's fate (progress, proposals, errors), so
  * this route only admits the launch: an unknown test is a 404, and a sweep
@@ -31,6 +33,11 @@ import { resolveSweepFolder } from "@/src/agent/tools/sweep-folder.ts";
 import { recoverInterruptedSweep, sameOriginAuthorized, startResweep, stores } from "@/src/server";
 
 export const dynamic = "force-dynamic";
+
+/** 400 for a body that is present but not `{ folder: string }`. */
+function badBody(): Response {
+	return Response.json({ error: "Body must be JSON { folder: string }." }, { status: 400 });
+}
 
 export async function GET(
 	_request: Request,
@@ -75,14 +82,14 @@ export async function POST(
 		try {
 			body = JSON.parse(bodyText);
 		} catch {
-			return Response.json({ error: "Body must be JSON { folder: string }." }, { status: 400 });
+			return badBody();
 		}
 		if (!body || typeof body !== "object" || Array.isArray(body)) {
-			return Response.json({ error: "Body must be JSON { folder: string }." }, { status: 400 });
+			return badBody();
 		}
 		const offered = (body as Record<string, unknown>).folder;
 		if (offered !== undefined && typeof offered !== "string") {
-			return Response.json({ error: "Body must be JSON { folder: string }." }, { status: 400 });
+			return badBody();
 		}
 		folder = offered;
 	}
