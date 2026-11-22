@@ -119,9 +119,17 @@ interface SeenRequest {
 	body: unknown;
 }
 
-/** Mounts against a mock API, returning every request and the navigation. */
+/** Mounts against a mock API, returning every request and the navigation.
+ *  `picker` stubs POST /api/path-picker (absent = an unexpected request);
+ *  `sweepLaunch` stubs the sweep POST's answer (default: the 202 launch). */
 async function mount(
-	options: { navigate?: (target: string) => void; test?: TestRecord; sessions?: ChatSummary[] } = {},
+	options: {
+		navigate?: (target: string) => void;
+		test?: TestRecord;
+		sessions?: ChatSummary[];
+		picker?: { status: number; paths?: string[] };
+		sweepLaunch?: { status: number; body?: unknown };
+	} = {},
 ) {
 	const seen: SeenRequest[] = [];
 	const navigated: string[] = [];
@@ -132,6 +140,12 @@ async function mount(
 		const method = init?.method ?? "GET";
 		const body = init?.body === undefined ? undefined : JSON.parse(String(init.body));
 		seen.push({ url, method, body });
+		if (url === "/api/path-picker" && method === "POST") {
+			const reply = options.picker;
+			if (!reply) throw new Error(`unexpected request ${method} ${url}`);
+			if (reply.status !== 200) return new Response(null, { status: reply.status });
+			return Response.json({ paths: reply.paths ?? [] });
+		}
 		if (url === "/api/chats" && method === "POST") return Response.json({ id: "chat_new", testId: "test_1" });
 		if (url === "/api/tests/test_1/plan" && method === "PUT") {
 			const draft = (body as { sections: TestRecord["sections"]; confirm: boolean });
@@ -145,8 +159,11 @@ async function mount(
 			});
 		}
 		if (url === "/api/tests/test_1/sweep" && method === "POST") {
+			const reply = options.sweepLaunch ?? { status: 202, body: { started: true } };
+			if (reply.status >= 400) return Response.json(reply.body ?? {}, { status: reply.status });
 			current = {
 				...current,
+				folder: current.folder ?? (body as { folder?: string } | undefined)?.folder,
 				sweep: {
 					status: "running",
 					activity: "Reading your materials",
@@ -154,7 +171,7 @@ async function mount(
 					fileHashes: {},
 				},
 			};
-			return Response.json({ started: true }, { status: 202 });
+			return Response.json(reply.body ?? { started: true }, { status: reply.status });
 		}
 		if (url === "/api/tests/test_1/additions" && method === "POST") {
 			current = { ...current, pendingAdditions: undefined };
@@ -347,13 +364,86 @@ async function openFirstLeftOut(): Promise<void> {
 	await act(async () => trigger!.click());
 }
 
-test("Re-sweep folder is disabled without a stored folder", async () => {
+test("a test with no stored folder offers Choose folder… instead of Re-sweep", async () => {
 	await mount();
 
-	const button = document.querySelector<HTMLButtonElement>('[data-testid="resweep-folder"]');
-	assert.ok(button, "the header offers Re-sweep folder");
-	assert.equal(button!.disabled, true);
-	assert.equal(button!.getAttribute("title"), "This test has no stored folder");
+	const choose = document.querySelector<HTMLButtonElement>('[data-testid="choose-folder"]');
+	assert.ok(choose, "the header offers Choose folder…");
+	assert.match(choose!.textContent ?? "", /Choose folder…/);
+	assert.equal(
+		document.querySelector('[data-testid="resweep-folder"]'),
+		null,
+		"Re-sweep folder needs a stored folder",
+	);
+});
+
+test("a test with a stored folder offers Re-sweep folder, not Choose folder…", async () => {
+	await mount({ test: record({ folder: "materials" }) });
+
+	assert.ok(document.querySelector('[data-testid="resweep-folder"]'));
+	assert.equal(document.querySelector('[data-testid="choose-folder"]'), null);
+});
+
+test("choosing a folder launches the sweep with that folder", async () => {
+	const { seen } = await mount({ picker: { status: 200, paths: ["C:\\notes\\sbi4u"] } });
+
+	await act(async () =>
+		document.querySelector<HTMLButtonElement>('[data-testid="choose-folder"]')!.click(),
+	);
+
+	const post = seen.find((request) => request.method === "POST" && request.url === "/api/tests/test_1/sweep");
+	assert.ok(post, "the chosen folder starts a sweep");
+	assert.deepEqual(post!.body, { folder: "C:\\notes\\sbi4u" });
+	assert.equal(document.querySelector('[data-testid="choose-folder"]'), null, "the test now has a folder");
+	assert.ok(document.querySelector('[data-testid="resweep-folder"]'), "the normal re-sweep button takes over");
+});
+
+test("cancelling the folder picker launches nothing", async () => {
+	const { seen } = await mount({ picker: { status: 200, paths: [] } });
+
+	await act(async () =>
+		document.querySelector<HTMLButtonElement>('[data-testid="choose-folder"]')!.click(),
+	);
+
+	assert.equal(
+		seen.filter((request) => request.method === "POST" && request.url === "/api/tests/test_1/sweep").length,
+		0,
+		"an empty pick is a cancellation",
+	);
+	assert.ok(document.querySelector('[data-testid="choose-folder"]'), "the picker stays on offer");
+});
+
+test("a system without a folder picker says so and launches nothing", async () => {
+	const { seen } = await mount({ picker: { status: 501 } });
+
+	await act(async () =>
+		document.querySelector<HTMLButtonElement>('[data-testid="choose-folder"]')!.click(),
+	);
+
+	assert.equal(
+		seen.filter((request) => request.method === "POST" && request.url === "/api/tests/test_1/sweep").length,
+		0,
+	);
+	assert.match(document.body.textContent ?? "", /The folder picker is not available on this system\./);
+	assert.ok(document.querySelector('[data-testid="choose-folder"]'), "the picker stays on offer");
+});
+
+test("a rejected folder shows the server's reason and keeps Choose folder…", async () => {
+	const message = "folder not found or not a readable directory: x (y)";
+	const { seen } = await mount({
+		picker: { status: 200, paths: ["C:\\nope"] },
+		sweepLaunch: { status: 400, body: { error: message } },
+	});
+
+	await act(async () =>
+		document.querySelector<HTMLButtonElement>('[data-testid="choose-folder"]')!.click(),
+	);
+
+	const post = seen.find((request) => request.method === "POST" && request.url === "/api/tests/test_1/sweep");
+	assert.ok(post, "the chosen folder is still offered to the route");
+	assert.deepEqual(post!.body, { folder: "C:\\nope" });
+	assert.ok((document.body.textContent ?? "").includes(message), "the server's reason is shown");
+	assert.ok(document.querySelector('[data-testid="choose-folder"]'), "the folder was not recorded");
 });
 
 test("Re-sweep folder is disabled while additions await review", async () => {

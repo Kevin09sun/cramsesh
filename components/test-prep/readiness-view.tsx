@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { OPENING_PROMPT_FAILURE } from "@/components/opening-prompt";
+import { FilePickerBusy, PICKER_BUSY_NOTICE, requestNativePaths } from "@/components/attach-files-button";
 import { SidebarToggle } from "@/components/sidebar";
 import { SessionStarter } from "@/components/start-session";
 import { StudySessionList } from "@/components/study-session-list";
@@ -94,6 +95,10 @@ export function ReadinessView({
 	const [starting, setStarting] = useState(false);
 	const [accepting, setAccepting] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	// The test prop only gains `folder` when the page reloads. A folder chosen
+	// here is followed locally from the moment its sweep launch is accepted.
+	const [chosenFolder, setChosenFolder] = useState<string | null>(null);
+	const [choosing, setChoosing] = useState(false);
 
 	const ready = readiness(test);
 	const totals = ready.sections.reduce(
@@ -105,12 +110,11 @@ export function ReadinessView({
 	const sweep = test.sweep;
 	const pendingAdditions = test.pendingAdditions;
 	const sweepRunning = sweep?.status === "running";
-	const resweepDisabled = !test.folder || pendingAdditions !== undefined || sweepRunning;
-	const resweepTitle = !test.folder
-		? "This test has no stored folder"
-		: pendingAdditions !== undefined
-			? "Review the new items first"
-			: undefined;
+	const folder = chosenFolder ?? test.folder;
+	const resweepDisabled = !folder || pendingAdditions !== undefined || sweepRunning;
+	// Re-sweep folder only renders once a folder is known, so the only
+	// remaining reason to disable it is the additions review.
+	const resweepTitle = pendingAdditions !== undefined ? "Review the new items first" : undefined;
 
 	// A re-sweep is background work: poll its progress only while it runs, and
 	// let the first non-running answer tear the interval down.
@@ -218,11 +222,23 @@ export function ReadinessView({
 		}));
 	}
 
-	async function resweep(): Promise<void> {
-		if (resweepDisabled) return;
+	/** Start a re-sweep, optionally offering a folder for a test that has none.
+	 *  Resolves true when the launch was accepted; errors (including the
+	 *  route's own message) land in the page's error line. */
+	async function resweep(folderOverride?: string): Promise<boolean> {
+		if (folderOverride === undefined && resweepDisabled) return false;
 		setError(null);
 		try {
-			const response = await fetch(`/api/tests/${test.id}/sweep`, { method: "POST" });
+			const response = await fetch(
+				`/api/tests/${test.id}/sweep`,
+				folderOverride === undefined
+					? { method: "POST" }
+					: {
+							method: "POST",
+							headers: { "Content-Type": "application/json" },
+							body: JSON.stringify({ folder: folderOverride }),
+						},
+			);
 			if (!response.ok) {
 				const payload = (await response.json().catch(() => null)) as { error?: unknown } | null;
 				throw new Error(
@@ -230,8 +246,40 @@ export function ReadinessView({
 				);
 			}
 			await refreshSweep();
+			return true;
 		} catch (reason) {
 			setError(errorText(reason, "The re-sweep could not start."));
+			return false;
+		}
+	}
+
+	/** Choose the materials folder a test with none needs. The desktop bridge
+	 *  opens its native dialog; a browser asks the server for one. A cancelled
+	 *  pick is a no-op; an accepted launch records the folder locally so the
+	 *  header switches to the ordinary Re-sweep folder action. */
+	async function chooseFolder(): Promise<void> {
+		if (choosing) return;
+		setChoosing(true);
+		setError(null);
+		try {
+			let path: string | null;
+			const choose = window.lh?.chooseAttachmentFolder;
+			if (choose) {
+				path = await choose();
+			} else {
+				const paths = await requestNativePaths("folder");
+				if (paths === null) {
+					setError("The folder picker is not available on this system.");
+					return;
+				}
+				path = paths[0] ?? null;
+			}
+			if (path === null) return; // Native cancellation changes nothing.
+			if (await resweep(path)) setChosenFolder(path);
+		} catch (reason) {
+			setError(reason instanceof FilePickerBusy ? PICKER_BUSY_NOTICE : "Could not choose a folder. Try again.");
+		} finally {
+			setChoosing(false);
 		}
 	}
 
@@ -308,17 +356,30 @@ export function ReadinessView({
 					>
 						{editing ? "Close editor" : "Edit plan"}
 					</Button>
-					<Button
-						type="button"
-						variant="outline"
-						size="sm"
-						data-testid="resweep-folder"
-						disabled={resweepDisabled}
-						title={resweepTitle}
-						onClick={() => void resweep()}
-					>
-						{sweepRunning ? (sweep?.activity ?? "Re-sweeping…") : "Re-sweep folder"}
-					</Button>
+					{folder ? (
+						<Button
+							type="button"
+							variant="outline"
+							size="sm"
+							data-testid="resweep-folder"
+							disabled={resweepDisabled}
+							title={resweepTitle}
+							onClick={() => void resweep()}
+						>
+							{sweepRunning ? (sweep?.activity ?? "Re-sweeping…") : "Re-sweep folder"}
+						</Button>
+					) : (
+						<Button
+							type="button"
+							variant="outline"
+							size="sm"
+							data-testid="choose-folder"
+							disabled={choosing}
+							onClick={() => void chooseFolder()}
+						>
+							Choose folder…
+						</Button>
+					)}
 					{test.planConfirmed ? (
 						<Button
 							type="button"
