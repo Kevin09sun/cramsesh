@@ -17,9 +17,6 @@
  * (prompts/testprep/10-doctrine.md).
  */
 
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
-import * as path from "node:path";
 import { Type } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { explainInputBase, explainInputProblems } from "../../core/question-core.ts";
@@ -34,8 +31,7 @@ import { lsTool } from "./ls.ts";
 import { findTool } from "./find.ts";
 import { grepTool } from "./grep.ts";
 import { dispatchJob, jobTools, type JobToolContext } from "./jobs.ts";
-import { resolveSourcePath } from "./fs-shared.ts";
-import { comparisonPath, resolvePolicy } from "./file-access.ts";
+import { resolveSweepFolder } from "./sweep-folder.ts";
 import { tutorWebTools } from "./web.ts";
 
 /** The storage port this toolset closes over — the three test-record
@@ -351,13 +347,6 @@ export const sweepMaterialsInputObject = Type.Object({
 	}),
 });
 
-/** Same path, case-insensitively on Windows (where drive casing varies). */
-function samePath(a: string, b: string): boolean {
-	const left = comparisonPath(a);
-	const right = comparisonPath(b);
-	return process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
-}
-
 const SWEEP_MATERIALS_TEXT =
 	"Reading every file in the folder now. End your turn; the plan arrives when the sweep finishes.";
 
@@ -393,35 +382,12 @@ function sweepMaterialsTool(
 				]);
 			}
 
-			// Empty input would resolve to the home directory (ls's default) —
-			// a first sweep must never read the learner's entire home.
-			if (!input.folder.trim()) {
-				return invalidInputResult("sweep_materials", [
-					"folder is required — pass the folder the learner attached",
-				]);
-			}
-
-			// Same resolution/denial as ls (resolveSourcePath), then the
-			// directory must actually be readable.
-			let folder: string;
-			try {
-				folder = resolveSourcePath(input.folder, resolvePolicy());
-				// Home or a drive/filesystem root is the same mistake with a
-				// non-empty string: refuse it with the same guidance.
-				if (samePath(folder, os.homedir()) || samePath(folder, path.parse(folder).root)) {
-					return invalidInputResult("sweep_materials", [
-						"that is your whole home folder / drive — pass the folder with the test materials",
-					]);
-				}
-				const stat = await fs.stat(folder);
-				if (!stat.isDirectory()) throw new Error("not a directory");
-				await fs.readdir(folder);
-			} catch (error) {
-				const reason = error instanceof Error ? error.message : String(error);
-				return invalidInputResult("sweep_materials", [
-					`folder not found or not a readable directory: ${input.folder} (${reason})`,
-				]);
-			}
+			// The shared validation: empty (would resolve to home), home/root,
+			// and not-a-readable-directory all refuse with the same messages
+			// the picker route (sweep-folder.ts) uses.
+			const resolved = await resolveSweepFolder(input.folder);
+			if (!resolved.ok) return invalidInputResult("sweep_materials", [resolved.error]);
+			const folder = resolved.folder;
 
 			ctx.tests.setFolder(ctx.testId, folder);
 			dispatchJob(jobs, "sweep", toolCallId, SWEEP_MATERIALS_TEXT, { testId: ctx.testId, folder });
