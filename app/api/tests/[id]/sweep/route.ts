@@ -29,8 +29,13 @@
  * a sweep.
  */
 
-import { resolveSweepFolder } from "@/src/agent/tools/sweep-folder.ts";
-import { recoverInterruptedSweep, sameOriginAuthorized, startResweep, stores } from "@/src/server";
+import {
+	recoverInterruptedSweep,
+	resolveSweepFolder,
+	sameOriginAuthorized,
+	startResweep,
+	stores,
+} from "@/src/server";
 
 export const dynamic = "force-dynamic";
 

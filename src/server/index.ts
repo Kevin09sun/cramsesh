@@ -19,6 +19,8 @@ export * from "./stores.ts";
 // Test material sweep (2026-11-20): the settings-resolved reader/extractor/
 // merger engines and the re-sweep launch seam behind the browser route.
 export * from "./sweep-engines.ts";
+// The test-folder route reuses the sweep tool's folder validation verbatim.
+export { resolveSweepFolder } from "../agent/tools/sweep-folder.ts";
 // Official AP papers live outside the synced data repo (data/ap-papers/<courseId>/).
 export * from "./ap-papers.ts";
 // Page images are rendered once into the same local tree's pages/ folder.
