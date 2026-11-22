@@ -31,6 +31,8 @@ delete process.env.LH_DESKTOP_API_SECRET;
 const { testStore } = await import("../src/store/tests.ts");
 const { emptyCoverage } = await import("../src/core/test-prep.ts");
 const sweepServer = await import("../src/server/sweep-engines.ts");
+const { resolvePolicy } = await import("../src/agent/tools/file-access.ts");
+const { resolveSourcePath } = await import("../src/agent/tools/fs-shared.ts");
 
 type SweepRoute = typeof import("../app/api/tests/[id]/sweep/route.ts");
 type AdditionsRoute = typeof import("../app/api/tests/[id]/additions/route.ts");
@@ -53,6 +55,9 @@ type PlanDraftSection = import("../src/core/test-prep.ts").PlanDraftSection;
 
 const BASE = "http://localhost";
 const FOLDER = path.join(TMP_DATA, "materials");
+fs.mkdirSync(FOLDER, { recursive: true });
+/** The spelling the route stores: resolveSweepFolder canonicalizes the path. */
+const RESOLVED_FOLDER = resolveSourcePath(FOLDER, resolvePolicy());
 
 function draft(): PlanDraftSection[] {
 	return [
@@ -84,6 +89,21 @@ function stubResweep(): void {
 function postSweep(id: string, origin = BASE): Promise<Response> {
 	return sweepRoute.POST(
 		new Request(`${BASE}/api/tests/${id}/sweep`, { method: "POST", headers: { origin } }),
+		{ params: Promise.resolve({ id }) },
+	);
+}
+
+function postSweepWithBody(id: string, body: unknown, origin = BASE): Promise<Response> {
+	return postSweepRaw(id, JSON.stringify(body), origin);
+}
+
+function postSweepRaw(id: string, body: string, origin = BASE): Promise<Response> {
+	return sweepRoute.POST(
+		new Request(`${BASE}/api/tests/${id}/sweep`, {
+			method: "POST",
+			headers: { origin, "content-type": "application/json" },
+			body,
+		}),
 		{ params: Promise.resolve({ id }) },
 	);
 }
@@ -190,6 +210,79 @@ describe("POST /api/tests/[id]/sweep", () => {
 		const res = await postSweep(test.id, "https://evil.example");
 		assert.equal(res.status, 403);
 		assert.equal(resweepCalls.length, 0, "a refused request never launches a sweep");
+	});
+
+	it("stores the chosen folder and starts a re-sweep", async () => {
+		stubResweep();
+		const test = testStore.create("No folder picks one");
+
+		const res = await postSweepWithBody(test.id, { folder: FOLDER });
+		assert.equal(res.status, 202);
+		assert.deepEqual(await res.json(), { started: true });
+		assert.equal(testStore.get(test.id)!.folder, RESOLVED_FOLDER);
+		assert.equal(resweepCalls.length, 1);
+		assert.equal(resweepCalls[0]!.testId, test.id);
+	});
+
+	it("is a 409 when a folder is already stored", async () => {
+		stubResweep();
+		const test = testStore.create("Already has folder", FOLDER);
+
+		// The gate runs before validation, so the offered folder need not exist.
+		const res = await postSweepWithBody(test.id, { folder: path.join(TMP_DATA, "other") });
+		assert.equal(res.status, 409);
+		const body = (await res.json()) as { error: string };
+		assert.equal(body.error, "This test already has a folder.");
+		assert.equal(testStore.get(test.id)!.folder, FOLDER, "the stored folder is unchanged");
+		assert.equal(resweepCalls.length, 0);
+	});
+
+	it("is a 400 for a folder that does not exist", async () => {
+		stubResweep();
+		const test = testStore.create("Missing folder");
+		const missing = path.join(TMP_DATA, "no-such-materials");
+
+		const res = await postSweepWithBody(test.id, { folder: missing });
+		assert.equal(res.status, 400);
+		const body = (await res.json()) as { error: string };
+		assert.match(body.error, /^folder not found or not a readable directory: /);
+		assert.equal(testStore.get(test.id)!.folder, undefined, "a refused folder is never stored");
+		assert.equal(resweepCalls.length, 0);
+	});
+
+	it("is a 400 when folder is not a string", async () => {
+		stubResweep();
+		const test = testStore.create("Bad folder type");
+
+		const res = await postSweepWithBody(test.id, { folder: 5 });
+		assert.equal(res.status, 400);
+		const body = (await res.json()) as { error: string };
+		assert.equal(body.error, "Body must be JSON { folder: string }.");
+		assert.equal(testStore.get(test.id)!.folder, undefined);
+		assert.equal(resweepCalls.length, 0);
+	});
+
+	it("is a 400 for an unparseable body", async () => {
+		stubResweep();
+		const test = testStore.create("Broken body");
+
+		const res = await postSweepRaw(test.id, "{not json");
+		assert.equal(res.status, 400);
+		const body = (await res.json()) as { error: string };
+		assert.equal(body.error, "Body must be JSON { folder: string }.");
+		assert.equal(testStore.get(test.id)!.folder, undefined);
+		assert.equal(resweepCalls.length, 0);
+	});
+
+	it("does not store the folder while additions await review", async () => {
+		stubResweep();
+		const test = testStore.create("Pending review picks folder");
+		testStore.setPendingAdditions(test.id, { sections: [], leftOut: [] });
+
+		const res = await postSweepWithBody(test.id, { folder: FOLDER });
+		assert.equal(res.status, 409);
+		assert.equal(testStore.get(test.id)!.folder, undefined, "a refused request never stores a folder");
+		assert.equal(resweepCalls.length, 0);
 	});
 });
 
