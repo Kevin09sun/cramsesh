@@ -75,6 +75,8 @@ A point fixed in one sitting becomes solid only when answered correctly in a dif
 
 ## Editing the plan later
 
+You can change the plan by talking to the tutor in a session's chat — at any point, including after confirmation and while a sitting is under way. Ask for the sections or points you want added, removed or reworded, and the tutor proposes a revised plan; confirm it on the card to apply it. Unchanged points keep their status and history, added points start `unchecked`, and removed points stop counting toward readiness. Answering pauses until you confirm the revision.
+
 **Edit plan** on the readiness page reopens the same plan editor on the confirmed plan. Saving always confirms the plan, so answering can continue immediately.
 
 - Edited points keep their status and history.

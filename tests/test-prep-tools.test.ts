@@ -458,6 +458,27 @@ describe("test_progress", () => {
 		assert.ok(text.indexOf("p_gap · gap · Genetics › Punnett squares") > unchecked, "gaps come last");
 	});
 
+	it("lists every section and point with its id, text and source when full is true", async () => {
+		const { tests } = fakeTests(recordOf());
+		const tool = testPrepTools(ctxOf(tests)).test_progress!;
+		const result = await tool.execute("call_p", { full: true } as never);
+		assert.equal(result.isError, undefined);
+		const text = (result.content[0] as { text: string }).text;
+		assert.match(text, /^Plan:$/m);
+		assert.match(text, /^sec_cells · Cells$/m);
+		assert.match(text, /^  p_solid · ATP · outline 1$/m);
+		assert.match(text, /^sec_genetics · Genetics$/m);
+		assert.match(text, /^  p_gap · Punnett squares · slides 9$/m);
+	});
+
+	it("omits the full plan by default", async () => {
+		const { tests } = fakeTests(recordOf());
+		const tool = testPrepTools(ctxOf(tests)).test_progress!;
+		const result = await tool.execute("call_p", {} as never);
+		const text = (result.content[0] as { text: string }).text;
+		assert.doesNotMatch(text, /^Plan:$/m);
+	});
+
 	it("never rounds a near-perfect ratio up to 100% (100% = every point solid)", async () => {
 		const many: TestRecord = recordOf({
 			sections: [

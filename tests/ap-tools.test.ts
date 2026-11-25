@@ -903,19 +903,23 @@ describe("propose_units", () => {
 		assert.equal(fake.calls.savePlan.length, 0);
 	});
 
-	it("REFUSES inside a practice sitting without touching the record", async () => {
+	it("revises the confirmed list inside a practice sitting, saved UNCONFIRMED", async () => {
 		const fake = fakeCourses(courseOf({ documents: [CED] }));
 		const papers = fakePapers();
 		const tool = apTools(ctxOf(fake.courses, papers.papers, WEAK)).propose_units!;
 		const result = await tool.execute("call_plan", { sections: DRAFT } as never);
-		assert.equal(result.isError, true);
+		assert.equal(result.isError, undefined);
+		assert.equal(fake.calls.savePlan.length, 1);
+		assert.equal(fake.calls.savePlan[0]!.confirm, false);
+		assert.deepEqual(fake.calls.savePlan[0]!.draft, DRAFT);
 		assert.equal(
-			(result.details as { problems: string[] }).problems[0],
-			"The unit and topic list changes only in the course's setup session or on the course page, not during a sitting.",
+			fake.current().planConfirmed,
+			false,
+			"a revision in a sitting pauses questions until the learner confirms",
 		);
-		assert.equal(fake.calls.savePlan.length, 0);
-		assert.equal(fake.calls.get.length, 0, "a sitting refusal never reads the course record");
-		assert.equal(fake.current().planConfirmed, true, "a sitting call never unconfirms the course");
+		const text = (result.content[0] as { text: string }).text;
+		assert.match(text, /UNCONFIRMED/);
+		assert.match(text, /sitting pauses/);
 	});
 });
 
@@ -946,6 +950,28 @@ describe("ap_progress", () => {
 		assert.match(text, /Unit 1 Limits: 33% \(1\/3\)/);
 		assert.match(text, /Unit 2 Derivatives: 0% \(0\/1\)/);
 		assert.match(text, /^t_solid · review · Unit 1 Limits › 1\.3 Estimating$/m);
+	});
+
+	it("lists every unit and topic with its id, text and source when full is true", async () => {
+		const fake = fakeCourses(courseOf());
+		const papers = fakePapers();
+		const tool = apTools(ctxOf(fake.courses, papers.papers)).ap_progress!;
+		const result = await tool.execute("call_p", { full: true } as never);
+		const text = (result.content[0] as { text: string }).text;
+		assert.match(text, /^Units and topics:$/m);
+		assert.match(text, /^unit_limits · Unit 1 Limits$/m);
+		assert.match(text, /^  t_solid · 1\.3 Estimating · p\. 16$/m);
+		assert.match(text, /^unit_deriv · Unit 2 Derivatives$/m);
+		assert.match(text, /^  t_gap · 2\.1 Definition · p\. 30$/m);
+	});
+
+	it("says when no list has been proposed yet", async () => {
+		const fake = fakeCourses(courseOf({ planConfirmed: false, sections: [] }));
+		const papers = fakePapers();
+		const tool = apTools(ctxOf(fake.courses, papers.papers)).ap_progress!;
+		const result = await tool.execute("call_p", {} as never);
+		const text = (result.content[0] as { text: string }).text;
+		assert.match(text, /Units and topics: none proposed yet/);
 	});
 
 	it("marks a recorded document missing on this computer", async () => {

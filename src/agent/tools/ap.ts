@@ -640,20 +640,13 @@ function proposeUnitsTool(ctx: ApToolContext): AgentTool<typeof proposeUnitsInpu
 			"every topic has text and a source. Refused until the course description has been stored with " +
 			"ap_save_document and is present on this computer. Saves the list UNCONFIRMED and ends your move: say " +
 			"nothing further that assumes scope, wait for the learner to review and confirm. Call it again whenever " +
-			"the learner asks for changes; a revision is unconfirmed again, so ap_mcq and ap_record_result refuse " +
-			"until the learner confirms it.",
+			"the learner asks for changes — at any point, including after the list is confirmed and during a " +
+			"practice sitting; a revision is unconfirmed again, so ap_mcq and ap_record_result refuse (and the " +
+			"sitting waits) until the learner confirms it.",
 		parameters: proposeUnitsInputObject,
 		prepareArguments: (args: unknown) => healEncodedArguments(args, proposeUnitsInputObject) as never,
 		executionMode: "sequential",
 		execute: async (_toolCallId, input) => {
-			// The design's law: the tutor never changes the unit and topic
-			// list during practice — that belongs to the setup session or the
-			// course page. Refuse before any store call.
-			if (ctx.sitting) {
-				return invalidInputResult("propose_units", [
-					"The unit and topic list changes only in the course's setup session or on the course page, not during a sitting.",
-				]);
-			}
 			const course = ctx.courses.get(ctx.courseId);
 			if (!course) return invalidInputResult("propose_units", [`course "${ctx.courseId}" was not found`]);
 			const ced = course.documents.find((document) => document.kind === "ced");
@@ -667,8 +660,8 @@ function proposeUnitsTool(ctx: ApToolContext): AgentTool<typeof proposeUnitsInpu
 			return textResult(
 				`Units proposed with ${saved.sections.length} unit(s) and ${topics} topic(s). ` +
 					"The list is UNCONFIRMED: end your turn now and wait for the learner to review it — ap_mcq and " +
-					"ap_record_result refuse until the learner confirms. If the learner asks for changes, call " +
-					"propose_units again with the revised units; the revision is unconfirmed again.",
+					"ap_record_result refuse until the learner confirms, so a practice sitting pauses here. If the learner " +
+					"asks for changes, call propose_units again with the revised units; the revision is unconfirmed again.",
 			);
 		},
 	};
@@ -678,7 +671,18 @@ function proposeUnitsTool(ctx: ApToolContext): AgentTool<typeof proposeUnitsInpu
 
 const emptyInputObject = Type.Object({});
 
-function apProgressTool(ctx: ApToolContext): AgentTool<typeof emptyInputObject> {
+const apProgressInputObject = Type.Object({
+	full: Type.Optional(
+		Type.Boolean({
+			description:
+				"Optional. Pass true when the learner asks to change the list: besides the usual report, list every unit and " +
+				"topic with its id, text and source. A propose_units revision replaces the whole list, so read the current " +
+				"one first and keep every item you are not changing.",
+		}),
+	),
+});
+
+function apProgressTool(ctx: ApToolContext): AgentTool<typeof apProgressInputObject> {
 	return {
 		name: "ap_progress",
 		label: "ap_progress",
@@ -689,12 +693,13 @@ function apProgressTool(ctx: ApToolContext): AgentTool<typeof emptyInputObject> 
 			"indexed, and — in a practice sitting — the topic queue in work order " +
 			"(`topicId · reason · unit › topic`, capped at 30). In a `frq` or `mixed` sitting it also lists the " +
 			"eligible released questions (at most 20) as `<id> · <unused|used> · <part>→<topic>`, marking a paper " +
-			"missing on this computer, or says none for this scope. Read-only. Call it at the start of every " +
+			"missing on this computer, or says none for this scope. Pass `full: true` before revising the list: it " +
+			"also lists every unit and topic with its id, text and source. Read-only. Call it at the start of every " +
 			"session, then work the queue in order.",
-		parameters: emptyInputObject,
-		prepareArguments: (args: unknown) => healEncodedArguments(args, emptyInputObject) as never,
+		parameters: apProgressInputObject,
+		prepareArguments: (args: unknown) => healEncodedArguments(args, apProgressInputObject) as never,
 		executionMode: "sequential",
-		execute: async () => {
+		execute: async (_toolCallId, input) => {
 			const course = ctx.courses.get(ctx.courseId);
 			if (!course) return invalidInputResult("ap_progress", [`course "${ctx.courseId}" was not found`]);
 
@@ -708,7 +713,9 @@ function apProgressTool(ctx: ApToolContext): AgentTool<typeof emptyInputObject> 
 			}
 			if (!course.planConfirmed) {
 				lines.push(
-					"Units and topics: UNCONFIRMED — propose them with propose_units and wait for the learner to confirm before asking questions.",
+					course.sections.length === 0
+						? "Units and topics: none proposed yet — propose them with propose_units and wait for the learner to confirm before asking questions."
+						: "Units and topics: UNCONFIRMED — the proposed list awaits the learner's confirmation on its card; questions wait until then.",
 				);
 			}
 
@@ -720,6 +727,16 @@ function apProgressTool(ctx: ApToolContext): AgentTool<typeof emptyInputObject> 
 			lines.push(`Ready: ${pct(totals.solid, totals.total)} (${totals.solid}/${totals.total} points solid)`);
 			for (const unit of ready.sections) {
 				lines.push(`${unit.title}: ${pct(unit.solid, unit.total)} (${unit.solid}/${unit.total})`);
+			}
+
+			if (input.full) {
+				lines.push("", "Units and topics:");
+				for (const unit of course.sections) {
+					lines.push(`${unit.id} · ${unit.title}`);
+					for (const topic of unit.points) {
+						lines.push(`  ${topic.id} · ${topic.text} · ${topic.source}`);
+					}
+				}
 			}
 
 			lines.push("", "Documents:");

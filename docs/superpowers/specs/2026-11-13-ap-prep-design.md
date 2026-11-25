@@ -217,11 +217,12 @@ sessions are ordinary Teach sessions and behave as Teach does.
 - **Asking for help counts as a miss.** As in Test prep, asking for a hint,
   for help, or for the answer before answering is recorded as a miss, and
   "I don't know" as don't-know; the diagnosis and fresh question follow.
-- **The list can be edited after confirmation**, from the course page, as a
-  Test prep plan can. Topics keep stable identities: an edited or reordered
-  topic keeps its status and history, a removed topic's history is dropped,
-  a new topic starts as not yet asked. The tutor itself never changes the
-  list during practice.
+- **The list can be edited after confirmation**, from the course page or by
+  asking the tutor in chat (it revises the list and the learner confirms the
+  revision), as a Test prep plan can. Topics keep stable identities: an
+  edited or reordered topic keeps its status and history, a removed topic's
+  history is dropped, a new topic starts as not yet asked. The tutor never
+  changes the list unless the learner asked for it.
 - **Stage 1 builds the document store for all stages.** The course record
   lists each official document (kind, edition or year, source link, download
   state), and the local store and the "download missing documents" path are
@@ -296,7 +297,7 @@ is built. The rules they must carry:
 - After a miss: correct answer, where the thinking went wrong, then a fresh
   question on the same topic. No hints before an answer.
 - Label every question real (with year and number) or generated.
-- Never credit self-assessment. Never change the confirmed topic list.
+- Never credit self-assessment. Never change the confirmed topic list unless the learner asked for it; a revision is confirmed before questions resume.
 
 ## Left to the builder
 

@@ -62,6 +62,12 @@ describe("testprep prompt composition", () => {
 		assert.ok(doctrine.includes("Never use the web to decide what the test covers."));
 	});
 
+	it("keeps the confirmed plan editable by chat, mid-sitting included", () => {
+		const doctrine = promptText("testprep/10-doctrine.md");
+		assert.ok(doctrine.includes("The plan is never frozen"));
+		assert.match(doctrine, /when the learner asks to change the plan instead of answering, do not record a result/i);
+	});
+
 	it("scopes with sweep_materials, never by reading the outline itself", () => {
 		const doctrine = promptText("testprep/10-doctrine.md");
 		assert.ok(doctrine.includes("sweep_materials"), "the doctrine must name the sweep tool");
