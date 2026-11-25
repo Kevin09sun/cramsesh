@@ -72,7 +72,7 @@ describe("ap prompt composition", () => {
 	it("keeps the confirmed list editable by chat, including in a practice sitting", () => {
 		const doctrine = promptText("ap/10-doctrine.md");
 		assert.ok(doctrine.includes("Confirmation does not freeze the list."));
-		assert.match(doctrine, /when the learner asks to change the unit and topic list instead of answering, do not record a result/i);
+		assert.match(doctrine, /when the learner asks to change the unit and topic list instead of answering a question, do not record a result/i);
 	});
 
 	it("pins the stage 2 instructions for released free-response questions", () => {

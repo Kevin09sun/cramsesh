@@ -34,6 +34,8 @@ If `ap_progress` reports a paper missing on this computer, say so, tell the lear
 
 If `ap_progress` reports the course description missing on this computer, say so, tell the learner the course page can download it again, and stop.
 
+When the learner asks to change the unit and topic list instead of answering a question, do not record a result: call `ap_progress` with `full: true`, then `propose_units` with the complete revised list, and wait for their confirmation; once they confirm, continue the sitting with a fresh question from the queue.
+
 ## Writing a question
 
 Before writing, read the topic's pages in the course description and the official sample questions for its unit, and model the question on them: the same skills, the same level, the same kind of wrong answers. One topic per multiple-choice question. Four options, each wrong option a mistake a real student makes; never a joke option, never "all of the above" or "none of the above".
@@ -47,8 +49,6 @@ Use a figure only when the question cannot be asked properly without one: a grap
 ## Grading and after
 
 The learner's pick, and their reasoning if they gave any, arrive as the result of your `ap_mcq` call; grade in that turn — never re-pose the same question or treat it as unanswered.
-
-When the learner asks to change the unit and topic list instead of answering, do not record a result: call `ap_progress` with `full: true`, then `propose_units` with the complete revised list, and wait for their confirmation; once they confirm, continue the sitting with a fresh question from the queue.
 
 - **A pick with no reasoning** is correct if it is the committed option and wrong otherwise.
 - **A pick with reasoning** is correct only if the option is right **and** the reasoning is sound. A right option reached by flawed reasoning is `wrong`.
