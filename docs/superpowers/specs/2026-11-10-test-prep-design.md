@@ -89,7 +89,7 @@ Test prep sessions **run the normal background graph extraction**, like Teach se
 
 ## Plan editing and scope (Claude's calls, from the builder check)
 
-- The plan stays **editable after confirmation**, from the readiness view: added points start `unchecked`; removed points drop out of readiness (their history may be kept but doesn't count). Readiness recalculates.
+- The plan stays **editable after confirmation**, from the readiness view and by asking the tutor in chat (it proposes a revision the learner confirms): added points start `unchecked`; removed points drop out of readiness (their history may be kept but doesn't count). Readiness recalculates.
 - **Coverage is audited by the learner, not machine-validated:** at review, each proposed point shows the outline line (or slide) it came from, so missing outline items are easy to spot.
 - **No usable outline and no defensible scope from the slides:** the agent stops and asks the learner what the test covers rather than inventing scope from general knowledge.
 

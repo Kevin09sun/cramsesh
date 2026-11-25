@@ -25,6 +25,7 @@ export const AP_PLAN_CONFIG: PlanReviewConfig = {
 	submitLabel: "Confirm units and topics",
 	proposedTitle: "Proposed units and topics",
 	confirmedTitle: "Units and topics confirmed",
+	confirmedHint: "To change them, ask the tutor in chat — it revises the list and you confirm the revision.",
 	openPage: "Open course page",
 	superseded: "This list was revised below.",
 	loading: "Loading the units and topics…",

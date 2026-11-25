@@ -171,20 +171,31 @@ function proposePlanTool(ctx: TestPrepToolContext): AgentTool<typeof proposePlan
 
 // ─── test_progress ──────────────────────────────────────────────────────────
 
-const emptyInputObject = Type.Object({});
+const testProgressInputObject = Type.Object({
+	full: Type.Optional(
+		Type.Boolean({
+			description:
+				"Optional. Pass true when the learner asks to change the plan: besides readiness and the queue, list every " +
+				"section and point with its id, text and source. A propose_plan revision replaces the whole plan, so read " +
+				"the current one first and keep every item you are not changing.",
+		}),
+	),
+});
 
-function testProgressTool(ctx: TestPrepToolContext): AgentTool<typeof emptyInputObject> {
+function testProgressTool(ctx: TestPrepToolContext): AgentTool<typeof testProgressInputObject> {
 	return {
 		name: "test_progress",
 		label: "test_progress",
 		description:
 			"Report where this test stands: overall readiness and one line per section, then the question queue in " +
 			"work order (`pointId · reason · section › point text`, capped at 30 lines). Read-only. Call it at the " +
-			"start of every sitting, then work the queue in order.",
-		parameters: emptyInputObject,
-		prepareArguments: (args: unknown) => healEncodedArguments(args, emptyInputObject) as never,
+			"start of every sitting, then work the queue in order. Pass `full: true` before revising the plan: it also " +
+			"lists every section and point with its id, text and source, so a revision can keep what the learner is " +
+			"not changing.",
+		parameters: testProgressInputObject,
+		prepareArguments: (args: unknown) => healEncodedArguments(args, testProgressInputObject) as never,
 		executionMode: "sequential",
-		execute: async () => {
+		execute: async (_toolCallId, input) => {
 			const test = ctx.tests.get(ctx.testId);
 			if (!test) return invalidInputResult("test_progress", [`test "${ctx.testId}" was not found`]);
 
@@ -199,6 +210,16 @@ function testProgressTool(ctx: TestPrepToolContext): AgentTool<typeof emptyInput
 					(section) => `${section.title}: ${pct(section.solid, section.total)} (${section.solid}/${section.total})`,
 				),
 			];
+
+			if (input.full) {
+				lines.push("", "Plan:");
+				for (const section of test.sections) {
+					lines.push(`${section.id} · ${section.title}`);
+					for (const point of section.points) {
+						lines.push(`  ${point.id} · ${point.text} · ${point.source}`);
+					}
+				}
+			}
 
 			const byPoint = new Map<string, { sectionTitle: string; text: string }>();
 			for (const section of test.sections) {

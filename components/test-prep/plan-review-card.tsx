@@ -68,6 +68,8 @@ export interface PlanReviewConfig {
 	submitLabel: string;
 	proposedTitle: string;
 	confirmedTitle: string;
+	/** How to change a confirmed plan: the tutor revises it in chat. */
+	confirmedHint: string;
 	openPage: string;
 	superseded: string;
 	loading: string;
@@ -95,6 +97,7 @@ export const TEST_PREP_PLAN_CONFIG: PlanReviewConfig = {
 	submitLabel: "Confirm plan",
 	proposedTitle: "Proposed plan",
 	confirmedTitle: "Plan confirmed",
+	confirmedHint: "To change it, ask the tutor in chat — it revises the plan and you confirm the revision.",
 	openPage: "Open readiness",
 	superseded: "This plan was revised below.",
 	loading: "Loading the plan…",
@@ -342,6 +345,7 @@ export function PlanReviewCard({
 				<div className="mt-0.5 text-sm text-muted-foreground">
 					{countLine(config, record.sections.length, points)}
 				</div>
+				<div className="mt-1 text-sm text-muted-foreground">{config.confirmedHint}</div>
 				<a
 					href={`${config.pageBase}/${record.id}`}
 					className="mt-2 inline-block text-sm font-medium text-primary underline-offset-4 hover:underline"

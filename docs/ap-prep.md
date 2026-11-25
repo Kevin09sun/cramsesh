@@ -23,6 +23,8 @@ The proposed list appears as a card in the conversation. In the card you can:
 
 Then choose **Confirm units and topics**. Confirming saves the list and the card collapses to a summary with a link to the course page. Nothing can be practised until the list is confirmed.
 
+You can change the list at any time by talking to the tutor in a session — including during a practice sitting. Ask for the units or topics you want added, removed, reworded or reordered, and the tutor proposes a revised list; confirm it on the card to apply it. Unchanged topics keep their status and history, new topics start as not yet asked, and removed topics stop counting toward readiness. Practice questions pause until you confirm the revision.
+
 A topic you add yourself has no page in the course description. It is saved with the source **Added by you**, and Learn teaches it without a page reference.
 
 ## Released papers and the question index

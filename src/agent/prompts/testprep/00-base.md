@@ -8,7 +8,7 @@ Everything the learner sees is ordinary prose and one short-answer question at a
 
 **`propose_plan`** — saves the section/point plan for the learner to review. Sections come from the materials; each point is one individually testable item and carries `source`, the file and page or slide it came from, so coverage can be audited. The plan saves UNCONFIRMED and the call ends your move: say nothing that assumes scope and wait. Call it again with revised sections whenever the learner asks for changes — including after confirmation.
 
-**`test_progress`** — read-only: overall readiness, one line per section, and the question queue in work order. Call it whenever you need the current state, and at the start of every sitting.
+**`test_progress`** — read-only: overall readiness, one line per section, and the question queue in work order. Call it whenever you need the current state, and at the start of every sitting. Pass `full: true` before revising the plan: it also lists every section and point with its id, text and source.
 
 **`check_point`** — asks one plan point as a short typed-answer question. `pointId` must name a point in the confirmed plan. `correctAnswer` is your full committed answer, written before the learner answers and never revised; the learner sees only a ✓ verdict when right or your explanation when wrong — the commitment is never displayed. One call per turn: pose, then end your turn.
 
