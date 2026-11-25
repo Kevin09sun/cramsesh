@@ -52,4 +52,12 @@ Register-ScheduledTask -TaskName 'LearnHarness Data Sync' -Force -Principal $pri
 	-Trigger (New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5)) `
 	-Description 'Backs up LearnHarness learning data to its private GitHub repo every 5 minutes.' | Out-Null
 
+$shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path ([Environment]::GetFolderPath('Desktop')) 'Update Cramsesh.lnk'))
+$shortcut.TargetPath = 'powershell.exe'
+$shortcut.Arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + (Join-Path $PSScriptRoot 'update.ps1') + '"'
+$shortcut.WorkingDirectory = $repo
+$shortcut.IconLocation = (Join-Path $repo 'build\icon.ico')
+$shortcut.Description = 'Update Cramsesh to the newest version on GitHub and restart it'
+$shortcut.Save()
+
 Write-Host 'Done. Log out and back in, or run: Start-ScheduledTask LearnHarness'
