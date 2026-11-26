@@ -254,6 +254,27 @@ export function nextQueue(
 	return [...rechecks, ...unchecked, ...gaps];
 }
 
+/**
+ * This sitting's progress (one chat = one sitting): `remaining` is the
+ * chat's queue; `done` is every point answered in this chat that has left
+ * the queue (right first time, or fixed after a miss). A missed point stays
+ * remaining until it is answered right, so a full bar means every question
+ * of the run was answered right.
+ */
+export function sittingProgress(
+	test: Pick<TestRecord, "sections">,
+	chatId: string,
+): { done: number; total: number } {
+	const queued = new Set(nextQueue(test, chatId).map((entry) => entry.pointId));
+	let done = 0;
+	for (const section of test.sections) {
+		for (const point of section.points) {
+			if (!queued.has(point.id) && point.history.some((attempt) => attempt.chatId === chatId)) done++;
+		}
+	}
+	return { done, total: done + queued.size };
+}
+
 // ─── plan editing ───────────────────────────────────────────────────────────
 
 /**

@@ -15,6 +15,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { SessionHomeDoor } from "../components/chat.tsx";
+import { SittingProgressPill } from "../components/test-prep/sitting-progress.tsx";
 
 describe("the chat header's session door (AP prep, 2026-11-13)", () => {
 	it("an AP session links back to its course", () => {
@@ -34,5 +35,16 @@ describe("the chat header's session door (AP prep, 2026-11-13)", () => {
 	it("no door when the session carries no linked record", () => {
 		assert.equal(renderToStaticMarkup(<SessionHomeDoor kind="ap" />), "");
 		assert.equal(renderToStaticMarkup(<SessionHomeDoor kind="teach" />), "");
+	});
+});
+
+describe("the test-prep sitting progress pill", () => {
+	it("shows done/total and fills the bar to match", () => {
+		const html = renderToStaticMarkup(<SittingProgressPill done={7} total={18} />);
+		assert.match(html, /data-testid="sitting-progress"/);
+		assert.match(html, />7\/18</);
+		assert.match(html, /width:39%/);
+		assert.match(html, /aria-valuenow="7"/);
+		assert.match(html, /11 of 18 questions left/);
 	});
 });

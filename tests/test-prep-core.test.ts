@@ -15,6 +15,7 @@ import {
 	planProblems,
 	readiness,
 	readinessPercent,
+	sittingProgress,
 	type PlanDraftSection,
 	type TestPoint,
 	type TestSection,
@@ -406,6 +407,36 @@ describe("planProblems — the plan must be answerable", () => {
 		assert.notDeepEqual(
 			planProblems([{ title: "Section", points: [{ text: "A point", source: "  " }] }]),
 			[],
+		);
+	});
+});
+describe("sittingProgress — this chat's run", () => {
+	const at = "2026-11-25T10:00:00.000Z";
+	const hit = (chatId: string, result: "correct" | "wrong" = "correct") => [{ at, chatId, result }];
+
+	it("counts a point done once it leaves the queue after an answer in this chat", () => {
+		const progress = sittingProgress(
+			{
+				sections: [
+					section("s1", "One", [
+						point({ id: "right", status: "solid", history: hit("c1") }),
+						point({ id: "fixed", status: "fixed-recheck", fixedIn: "c1", history: hit("c1") }),
+						point({ id: "missed", status: "gap", history: hit("c1", "wrong") }),
+						point({ id: "todo" }),
+						point({ id: "old", status: "solid", history: hit("c0") }),
+					]),
+				],
+			},
+			"c1",
+		);
+		// done: right + fixed; left: missed + todo; the earlier sitting's solid point is not in this run
+		assert.deepEqual(progress, { done: 2, total: 4 });
+	});
+
+	it("a fresh chat starts at 0 of its whole queue", () => {
+		assert.deepEqual(
+			sittingProgress({ sections: [section("s1", "One", [point({ id: "a" }), point({ id: "b", status: "gap" })])] }, "c9"),
+			{ done: 0, total: 2 },
 		);
 	});
 });

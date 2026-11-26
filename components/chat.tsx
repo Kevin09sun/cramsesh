@@ -36,6 +36,7 @@ import { useFieldCycle } from "@/components/field-cycle";
 import { JobsContext } from "@/components/jobs-context";
 import { StatsBar } from "@/components/stats-bar";
 import { useServerEvent, useServerResync } from "@/components/server-events";
+import { SittingProgress } from "@/components/test-prep/sitting-progress";
 import {
 	isProviderKeyRefusal,
 	firstSourceTextParts,
@@ -1442,6 +1443,7 @@ export function Chat({
 					    works one sitting; progress across sittings lives there),
 					    an AP session to its course page (AP prep, 2026-11-13). */}
 					<SessionHomeDoor kind={kind} testId={testId} apCourseId={apCourseId} />
+					{kind === "testprep" && testId && <SittingProgress testId={testId} chatId={chatId} />}
 					{/* The extraction ring (owner-locked redesign, 2026-09-24): fills
 					    with uncovered vs the chunk threshold, pulses while a run is in
 					    flight, vanishes when the graph is off. Click → the exact
