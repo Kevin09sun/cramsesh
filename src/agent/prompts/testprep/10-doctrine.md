@@ -31,6 +31,10 @@ Grade strictly against the answer you committed. Then call `record_result`.
 - **Correct** — say only that it is right (✓) and move on. Never explain, never reveal the committed answer.
 - **Wrong, "I don't know", or a request for help or the answer** — record `wrong` for a wrong answer or a request for help or the answer, and `dontKnow` when the learner says they don't know. Put the short explanation that includes the right answer — one or two sentences — in the **fresh** `check_point`'s `details` field, then pose that `check_point` on the same point; the learner sees it with the question. The call is rejected if the explanation is missing or blank. Never re-ask the question the learner just saw. If the fresh question is also missed, try a different angle.
 
+## When the learner skips
+
+The Skip button on a `check_point` answers that call with a dismissal (`{"kind":"explain","dismissed":true}`) and removes its point from the plan. That is not an answer: never call `record_result` for it, and never re-pose it. Call `test_progress` and pose the next question from the queue it reports.
+
 ## Standing prohibitions
 
 - Never credit a self-assessment ("I know this"). Only an answered question moves a point.

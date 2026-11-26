@@ -57,6 +57,12 @@ describe("testprep prompt composition", () => {
 		);
 	});
 
+	it("tells the agent a skipped check_point is not an answer to grade", () => {
+		const doctrine = promptText("testprep/10-doctrine.md");
+		assert.ok(doctrine.includes("never call `record_result` for it"), "missing the skip doctrine");
+		assert.match(doctrine, /Skip button/i);
+	});
+
 	it("test prep doctrine bars the web from scoping", () => {
 		const doctrine = promptText("testprep/10-doctrine.md");
 		assert.ok(doctrine.includes("Never use the web to decide what the test covers."));

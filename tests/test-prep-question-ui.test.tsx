@@ -97,6 +97,38 @@ describe("test prep: check_point is explain-shaped", () => {
 	});
 });
 
+describe("test prep: the Skip affordance (issue #13)", () => {
+	const dock = (overrides: Partial<Parameters<typeof QuestionDock>[0]> = {}) => (
+		<QuestionDock
+			toolName="check_point"
+			toolCallId="c1"
+			input={checkPointInput as never}
+			expanded={true}
+			onExpand={() => {}}
+			onSubmit={() => {}}
+			{...overrides}
+		/>
+	);
+
+	it("offers Skip on a check_point when the sitting supplies the seam", () => {
+		const html = renderToStaticMarkup(dock({ onSkip: async () => {} }));
+		assert.match(html, /data-testid="skip-point"/);
+		assert.match(html, /Skip/);
+	});
+
+	it("no Skip without the seam — a check_point outside test prep stays as before", () => {
+		const html = renderToStaticMarkup(dock());
+		assert.ok(!html.includes('data-testid="skip-point"'), "no skip button without the callback");
+	});
+
+	it("no Skip on other question tools even when the seam is present", () => {
+		const html = renderToStaticMarkup(
+			dock({ toolName: "explain", input: { question: "Why?", correctAnswer: "Because." } as never, onSkip: async () => {} }),
+		);
+		assert.ok(!html.includes('data-testid="skip-point"'), "the skip action is check_point-only");
+	});
+});
+
 describe("test prep: no answer reveal", () => {
 	it('renders a check_point answer as "Check" with no "The answer:" block', () => {
 		const html = renderToStaticMarkup(<AnsweredCard answer={answeredCheckPoint()} />);

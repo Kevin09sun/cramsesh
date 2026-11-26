@@ -20,6 +20,7 @@ import {
 	forgetChatInPoint,
 	mergePlan,
 	readiness,
+	removePoint,
 } from "../core/test-prep.ts";
 import type {
 	AnswerResult,
@@ -320,6 +321,50 @@ function setLeftOut(id: string, items: LeftOutInput[]): TestRecord {
 	return next;
 }
 
+/**
+ * The sitting's Skip action: erase one point from the plan and keep it
+ * recoverable — it lands in leftOut as "skipped by you", promotable from the
+ * readiness page like any other left-out item. Only ever removes scope, so
+ * it carries no confirmation gate. An unknown point is a no-op (a retried
+ * skip after the point already left) and returns the record untouched;
+ * emptying the plan is refused.
+ */
+function skipPoint(id: string, pointId: string): TestRecord {
+	const record = loadOrThrow(id);
+
+	let skipped: { text: string; source: string; section: string } | undefined;
+	for (const section of record.sections) {
+		const point = section.points.find((candidate) => candidate.id === pointId);
+		if (point) {
+			skipped = { text: point.text, source: point.source, section: section.title };
+			break;
+		}
+	}
+	if (!skipped) return record;
+
+	const sections = removePoint(record.sections, pointId);
+	if (!sections || sections.length === 0) throw new Error("the plan's last point cannot be skipped");
+
+	const next: TestRecord = {
+		...record,
+		sections,
+		leftOut: [
+			...(record.leftOut ?? []),
+			{
+				id: newId(),
+				text: skipped.text,
+				source: skipped.source,
+				reason: "skipped by you",
+				suggestedSection: skipped.section,
+			},
+		],
+		updatedAt: new Date().toISOString(),
+	};
+	writeTest(next);
+	emit("tests-changed", {});
+	return next;
+}
+
 /** First sweep only: a test that already has sections keeps them. The saved
  *  plan stays unconfirmed — it is a proposal, not an approved scope. */
 function saveSweepPlan(id: string, draft: PlanDraftSection[], leftOut: LeftOutInput[]): TestRecord {
@@ -437,6 +482,7 @@ export const testStore = {
 	list,
 	savePlan,
 	recordResult,
+	skipPoint,
 	forgetChat,
 	setFolder,
 	updateSweep,

@@ -112,6 +112,13 @@ export interface QuestionDockProps {
 	 *  and say so in the hint row. The server registry is the real gate;
 	 *  this is the affordance. */
 	compactionRunning?: boolean;
+	/**
+	 * Test prep's Skip (issue #13): offered on a check_point question in a
+	 * test-prep sitting. Resolves once the point has left the plan and the
+	 * session is moving on; a rejection is shown quietly in the hint row.
+	 * Absent = no Skip affordance (every other tool and session kind).
+	 */
+	onSkip?: () => Promise<void>;
 }
 
 export function QuestionDock({
@@ -130,6 +137,7 @@ export function QuestionDock({
 	phase = "probe",
 	dictationClaim = true,
 	compactionRunning = false,
+	onSkip,
 }: QuestionDockProps) {
 	// The probe-phase names (owner, 2026-10-09) canonicalize onto their
 	// teach twins for every dock concern — parse dispatch, labels, kinds:
@@ -255,6 +263,7 @@ export function QuestionDock({
 						onEscape={onEscape}
 						dictationClaim={dictationClaim}
 						compactionRunning={compactionRunning}
+						onSkip={onSkip}
 					/>
 				)}
 			</div>
@@ -354,6 +363,7 @@ function QuestionDockForm({
 	onEscape,
 	dictationClaim = true,
 	compactionRunning = false,
+	onSkip,
 }: Omit<QuestionDockProps, "expanded" | "onExpand" | "reveal">) {
 	const kind = toolQuestionKind(toolName);
 	// AP multiple choice is quiz-shaped mechanically, but the verdict is the
@@ -436,6 +446,23 @@ function QuestionDockForm({
 	// between questions, so each question starts fresh at 50.
 	const [confIdx, setConfIdx] = useState<number>(initialDraft?.confidenceIndex ?? DEFAULT_CONFIDENCE_INDEX);
 	const selectMode: SelectMode = qd.mode === "multi-select" ? "multi-select" : "single-select";
+
+	/* TEST PREP'S SKIP (issue #13): one click erases the point from the plan
+	   and moves the sitting on — the owner's "it seems irrelevant, skip it"
+	   case. The callback owns the plan write and the dismissal; a rejection
+	   leaves the question up and says so in the hint row. Offered on
+	   check_point only, and only where the session supplied the seam. */
+	const [skipping, setSkipping] = useState(false);
+	const [skipError, setSkipError] = useState<string | null>(null);
+	const canSkip = toolName === "check_point" && onSkip !== undefined;
+	const skip = () => {
+		if (!onSkip || skipping || compactionRunning) return;
+		setSkipping(true);
+		setSkipError(null);
+		void onSkip()
+			.catch(() => setSkipError("Couldn't remove this point. Try again."))
+			.finally(() => setSkipping(false));
+	};
 
 	// The PRIMARY dictation input (owner, STT round 1): while a question
 	// waits, dictated finals land HERE, never in the hidden composer — text
@@ -1021,17 +1048,38 @@ function QuestionDockForm({
 							)}
 						/>
 					)}
+					{skipError && (
+						<p role="alert" className="px-1.5 pt-1 text-xs text-destructive">
+							{skipError}
+						</p>
+					)}
 					<div className="flex items-center justify-between gap-2 p-1">
-						<span aria-hidden className="pl-1.5 text-xs text-muted-foreground">
+						<span aria-hidden className="min-w-0 truncate pl-1.5 text-xs text-muted-foreground">
 								{compactionRunning ? "compacting session…" : "↵ submits · ⇧↵ newline"}
 						</span>
-						<Button
-							type="submit"
-							disabled={!canSubmit || compactionRunning}
-							className="ml-auto h-9 rounded-[6px] px-3.5 text-sm font-medium"
-						>
-							Submit answer
-						</Button>
+						<div className="flex shrink-0 items-center gap-1.5">
+							{canSkip && (
+								<Button
+									type="button"
+									variant="ghost"
+									size="sm"
+									data-testid="skip-point"
+									title="Skip this question and remove it from the plan"
+									aria-label="Skip this question and remove it from the plan"
+									disabled={skipping || compactionRunning}
+									onClick={skip}
+								>
+									{skipping ? "Skipping…" : "Skip"}
+								</Button>
+							)}
+							<Button
+								type="submit"
+								disabled={!canSubmit || compactionRunning}
+								className="ml-auto h-9 rounded-[6px] px-3.5 text-sm font-medium"
+							>
+								Submit answer
+							</Button>
+						</div>
 					</div>
 				</div>
 			</form>
