@@ -512,3 +512,56 @@ describe("test store — material sweep (2026-11-20)", () => {
 		off();
 	});
 });
+
+describe("test store — the sitting's Skip (issue #13)", () => {
+	it("erases the point from the plan and keeps it recoverable in leftOut", () => {
+		const test = testStore.create("Skip one");
+		const saved = testStore.savePlan(test.id, draft(), true);
+		const [first, second] = saved.sections[0]!.points;
+
+		const next = testStore.skipPoint(test.id, first!.id);
+
+		assert.deepEqual(next.sections[0]!.points.map((point) => point.id), [second!.id]);
+		assert.equal(next.planConfirmed, true, "skipping never unconfirms the plan");
+		const item = next.leftOut?.[0];
+		assert.ok(item, "the skipped point lands in leftOut");
+		assert.equal(item.text, "Point one");
+		assert.equal(item.source, "notes.md");
+		assert.equal(item.reason, "skipped by you");
+		assert.equal(item.suggestedSection, "Section A");
+		assert.deepEqual(testStore.get(test.id), next, "the skip is persisted");
+	});
+
+	it("drops a section left with no points", () => {
+		const test = testStore.create("Skip section");
+		const saved = testStore.savePlan(
+			test.id,
+			[...draft(), { title: "Section B", points: [{ text: "Only B point", source: "b.md" }] }],
+			true,
+		);
+		const bPoint = saved.sections[1]!.points[0]!;
+
+		const next = testStore.skipPoint(test.id, bPoint.id);
+		assert.deepEqual(next.sections.map((section) => section.title), ["Section A"]);
+	});
+
+	it("an unknown point is a no-op that does not write", () => {
+		const test = testStore.create("Skip unknown");
+		testStore.savePlan(test.id, draft(), true);
+		const before = testStore.get(test.id);
+
+		assert.deepEqual(testStore.skipPoint(test.id, "test_point_never_existed"), before);
+	});
+
+	it("refuses to skip the plan's last point", () => {
+		const test = testStore.create("Skip last");
+		const saved = testStore.savePlan(
+			test.id,
+			[{ title: "Only", points: [{ text: "The only point", source: "notes.md" }] }],
+			true,
+		);
+
+		assert.throws(() => testStore.skipPoint(test.id, saved.sections[0]!.points[0]!.id), /last point/);
+		assert.deepEqual(testStore.get(test.id), saved, "a refused skip never writes");
+	});
+});

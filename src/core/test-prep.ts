@@ -354,6 +354,27 @@ export function mergePlan(
 	});
 }
 
+/**
+ * Remove one point from the plan (the sitting's Skip action): returns new
+ * sections with the point gone, a section left with no points dropped.
+ * `null` when the point is not in the plan (nothing to remove — the caller
+ * decides whether that is already-done or an error). Never mutates.
+ */
+export function removePoint(sections: TestSection[], pointId: string): TestSection[] | null {
+	let found = false;
+	const next: TestSection[] = [];
+	for (const section of sections) {
+		if (!section.points.some((point) => point.id === pointId)) {
+			next.push(section);
+			continue;
+		}
+		found = true;
+		const points = section.points.filter((point) => point.id !== pointId);
+		if (points.length > 0) next.push({ ...section, points });
+	}
+	return found ? next : null;
+}
+
 // ─── plan validation ────────────────────────────────────────────────────────
 
 /** Human-readable problems with a proposed plan; empty means it is valid. */

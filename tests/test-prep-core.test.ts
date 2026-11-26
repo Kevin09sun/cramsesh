@@ -15,6 +15,7 @@ import {
 	planProblems,
 	readiness,
 	readinessPercent,
+	removePoint,
 	sittingProgress,
 	type PlanDraftSection,
 	type TestPoint,
@@ -369,6 +370,36 @@ describe("mergePlan — editing keeps progress", () => {
 		const merged = mergePlan(existing, draft, () => "gen-1");
 		assert.equal(merged[0]!.points[0]!.id, "p2");
 		assert.equal(merged[0]!.points[0]!.status, "gap");
+	});
+});
+
+describe("removePoint — the sitting's Skip", () => {
+	it("removes the point and keeps the rest of its section", () => {
+		const sections = [
+			section("s1", "A", [point({ id: "p1" }), point({ id: "p2" })]),
+			section("s2", "B", [point({ id: "p3" })]),
+		];
+		const next = removePoint(sections, "p1");
+		assert.ok(next);
+		assert.deepEqual(next.map((entry) => entry.points.map((p) => p.id)), [["p2"], ["p3"]]);
+		// pure: the input is untouched
+		assert.deepEqual(sections[0]!.points.map((p) => p.id), ["p1", "p2"]);
+	});
+
+	it("drops a section that has no points left", () => {
+		const next = removePoint(
+			[section("s1", "A", [point({ id: "p1" })]), section("s2", "B", [point({ id: "p2" })])],
+			"p1",
+		);
+		assert.deepEqual(next?.map((entry) => entry.id), ["s2"]);
+	});
+
+	it("returns null for a point that is not in the plan", () => {
+		assert.equal(removePoint([section("s1", "A", [point({ id: "p1" })])], "nope"), null);
+	});
+
+	it("returns empty sections when the last point leaves (the caller refuses)", () => {
+		assert.deepEqual(removePoint([section("s1", "A", [point({ id: "p1" })])], "p1"), []);
 	});
 });
 

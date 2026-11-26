@@ -601,6 +601,44 @@ export function Chat({
 		readingThinkingRef.current = "";
 		setReadingThinkingSeed((previous) => ({ ...previous, value: "", revision: previous.revision + 1 }));
 	}, []);
+
+	/* TEST PREP'S SKIP (issue #13, owner request): the learner reads a
+	   check_point question, finds it irrelevant, and removes it from the plan
+	   in one click. Two steps, in this order so a failed plan write never
+	   throws the question away:
+	     1. POST the point to the test's skip route — it leaves the plan
+	        (recoverable as a left-out item on the readiness page).
+	     2. Answer the open call with a DISMISSAL through the ordinary answer
+	        route — a turn runs, the agent reads "skipped" and poses the next
+	        queue item. (The silent dismissal route would park the sitting
+	        until the learner typed something; "move on quickly" is the ask.)
+	   The dock shows its own quiet failure if this rejects. */
+	const skipPendingPoint = useCallback(async () => {
+		const p = pendingRef.current;
+		if (!p || !testId || p.tool !== "check_point") return;
+		const input = p.input as { pointId?: unknown; question?: unknown } | null;
+		const pointId = typeof input?.pointId === "string" ? input.pointId : null;
+		if (pointId === null) return;
+
+		const response = await fetch(`/api/tests/${testId}/skip`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ pointId }),
+		});
+		if (!response.ok) {
+			const payload = (await response.json().catch(() => null)) as { error?: unknown } | null;
+			throw new Error(
+				typeof payload?.error === "string" ? payload.error : "The point could not be skipped.",
+			);
+		}
+
+		const question = typeof input?.question === "string" ? input.question : "";
+		const reading = readingThinkingRef.current.trim() || undefined;
+		clearReadingThinking();
+		const answer = dismissedAnswer(toolQuestionKind(p.tool), question);
+		submitAnswer(p.tool, p.toolCallId, reading ? { ...answer, readingThinking: reading } : answer, p.key);
+	}, [testId, submitAnswer, clearReadingThinking]);
+
 	const pendingQuestionId = pending?.key ?? null;
 	useLayoutEffect(() => {
 		// Different calls never share a draft; a failed submission of THIS
@@ -1772,6 +1810,7 @@ export function Chat({
 					compactionRunning={compacting}
 					onSubmitThinking={submitThinking}
 					chatId={chatId}
+					onSkip={kind === "testprep" && testId !== undefined ? skipPendingPoint : undefined}
 					onModelChange={setSelectedModel}
 					plan={hasPlan ? <PlanMarginalia messages={messages} /> : undefined}
 					onOpenPlan={() => setPlanOpen(true)}
@@ -2020,6 +2059,7 @@ function DockOverlay({
 	composer,
 	onSubmitAnswer,
 	chatId,
+	onSkip,
 	onModelChange,
 	onReserve,
 	plan,
@@ -2063,6 +2103,9 @@ function DockOverlay({
 	onSubmitAnswer: (output: QuestionAnswerData) => void;
 	/** The model control's pass-through (the stats bar hosts it). */
 	chatId: string;
+	/** Test prep's Skip (issue #13): present only in a test-prep sitting —
+	 *  the dock offers it on a check_point question. */
+	onSkip?: () => Promise<void>;
 	onModelChange: (model: string | undefined) => void;
 	/** Reports the dock's settled height (block + gradient) — ChatView's
 	 *  dockReserve state feeds the transcript's spacer from it. */
@@ -2489,6 +2532,7 @@ function DockOverlay({
 									onEscape={dictationCancel}
 									dictationClaim={!revealPending}
 									compactionRunning={compactionRunning}
+									onSkip={onSkip}
 								/>
 							) : practice ? (
 								<PracticeDock
