@@ -38,7 +38,7 @@ Today's Teach mode explains its way up to a goal; Practice poses problems from g
 ### 1. Start a test
 The learner picks **Test prep** (where Teach/Practice are chosen today), points it at a folder using the existing file/folder picker, and names the test (e.g. "Bio midterm").
 
-The agent reads the outline (or, failing that, the slides) and **proposes a plan**: sections (from the outline's headings) each containing points (the individual things the test covers). The learner reviews it — edit, add, remove points — and confirms, the same way the current teaching plan is shown for review. Nothing is diagnosed before the plan is confirmed.
+The agent reads the outline (or, failing that, the slides) and **proposes a plan**: sections (from the outline's headings) each containing points (one per kind of question the test asks, with facts and vocab folded in — about 10–20 in all). The learner reviews it — edit, add, remove points — and confirms, the same way the current teaching plan is shown for review. Nothing is diagnosed before the plan is confirmed.
 
 ### 2. Diagnose fast
 One quick short-answer question per point, spread across all sections. A correct answer marks the point **solid** and the agent moves on with no explanation. A wrong answer marks it a **gap**.

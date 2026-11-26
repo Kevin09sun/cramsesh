@@ -143,7 +143,8 @@ function proposePlanTool(ctx: TestPrepToolContext): AgentTool<typeof proposePlan
 		label: "propose_plan",
 		description:
 			"Propose (or revise) the test plan for learner review: sections, each holding " +
-			"the individual points the test covers, every point carrying the file and page or slide it came from. " +
+			"one point per kind of question the test asks (facts and vocab folded into the point that tests them, about " +
+			"10–20 points in all), every point carrying the file and page or slide it came from. " +
 			"Validates that every section has a title and at least one point, and that every point has text. Saves the " +
 			"plan UNCONFIRMED and ends your move: say nothing further that assumes scope, wait for the learner to review " +
 			"and confirm. Call it again whenever the learner asks for changes — including after confirmation; a revision " +

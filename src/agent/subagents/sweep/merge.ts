@@ -2,9 +2,9 @@
  * Test-material sweep, stage 3 (Task 5) — merge every extracted candidate
  * into one plan: sections of points plus a Left out list.
  *
- * The product owner's rule: one question for every archetype of question
- * that can be asked on the test — no noise — but each vocab term is its own
- * point. The strong merger model reads all candidates at once; when that
+ * The product owner's rule: one point for every archetype of question that
+ * can be asked on the test — no noise — with facts and vocab folded into the
+ * archetype that tests them, about 10–20 points per test. The strong merger model reads all candidates at once; when that
  * input is pathologically large (> 150k chars serialized) it is first
  * deduped by fact text, then merged per source file and the group outputs
  * are concatenated by section title.
@@ -138,7 +138,7 @@ async function mergeOnce(
 		toolName: "submit_plan",
 		toolDescription:
 			"Submit the merged study plan: sections of testable points and a Left out list of noise. " +
-			"One point per skill archetype, one point per must-know fact (each vocab term its own point), " +
+			"One point per skill archetype with its facts and vocab folded in (about 10–20 points), " +
 			"and noise goes to Left out with a reason.",
 		parameters: planSchema,
 		fill: fillPlan,

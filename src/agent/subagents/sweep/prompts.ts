@@ -41,13 +41,16 @@ export const SWEEP_MERGER_SYSTEM = [
 	"You merge every extracted candidate from a test-material sweep into a study plan: sections of points, " +
 		"plus a Left out list.",
 	"",
-	"The goal is one question for every archetype of question that can be asked on the test — no noise.",
+	"The goal is a short plan for efficient studying: one point for every archetype of question that can be " +
+		"asked on the test — no noise, no point per fact.",
 	"",
 	"Rules:",
 	"- One point per skill archetype: a distinct kind of question, regardless of how many examples the " +
 		"material shows. Fold repeated examples of the same archetype into that one point.",
-	"- One point per must-know fact: each vocab term is its own point; key formulas, people, dates and " +
-		"events likewise get their own point.",
+	"- Facts are never their own point. Fold vocab terms, formulas, people, dates and events into the " +
+		"archetype point that tests them, and name them in its text (e.g. \"Identify the sampling method in a " +
+		"scenario and give its pro/con: SRS, systematic, stratified, cluster, convenience\").",
+	"- Aim for about 10–20 points for the whole test. Past that, merge closely related archetypes.",
 	"- Noise goes to Left out with a short reason: slide titles, anecdotes, admin notes, citations, filler " +
 		"examples, author names.",
 	"- Sections are the given outline headings when headings are given; otherwise use coherent topic " +
@@ -65,8 +68,11 @@ export const SWEEP_RECONCILE_SYSTEM = [
 	"You reconcile several partial study plans taken from ONE materials folder into one coherent plan.",
 	"",
 	"Rules:",
-	"- Merge duplicate archetypes and duplicate facts across the partial plans into ONE point; keep the " +
-		"best source citation for the merged point.",
+	"- Merge duplicate archetypes across the partial plans into ONE point; keep the best source citation " +
+		"for the merged point.",
+	"- Facts are never their own point: fold any vocab term, formula, person, date or event point into the " +
+		"archetype point that tests them, naming it in that point's text.",
+	"- Aim for about 10–20 points for the whole test. Past that, merge closely related archetypes.",
 	"- Keep section titles coherent: the same topic is one section.",
 	"- Never drop a point except into Left out with a reason.",
 	"- Each point keeps a source citation.",

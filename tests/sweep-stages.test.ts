@@ -4,7 +4,7 @@
  * chunkTranscripts carries the marker in force into every chunk; the
  * extractor rejects a source that is not one of the chunk's markers and
  * accepts the retry; the merger turns candidates into sections + Left out,
- * and its system prompt states the archetype / vocab / noise rules. Scripted
+ * and its system prompt states the archetype / folded-fact / noise rules. Scripted
  * faux engines stand in for both models — no network, no stores.
  */
 
@@ -190,13 +190,15 @@ describe("sweep stages", () => {
 		assert.deepEqual(out.leftOut, plan.leftOut);
 	});
 
-	it("mergeCandidates prompt contains the archetype, must-know-fact and noise rules", () => {
+	it("mergeCandidates prompt contains the archetype, folded-fact, size and noise rules", () => {
 		assert.match(SWEEP_MERGER_SYSTEM, /skill archetype/);
-		assert.match(SWEEP_MERGER_SYSTEM, /each vocab term/);
+		assert.match(SWEEP_MERGER_SYSTEM, /Facts are never their own point/);
+		assert.match(SWEEP_MERGER_SYSTEM, /10–20 points/);
 		assert.match(SWEEP_MERGER_SYSTEM, /noise/);
 		assert.match(SWEEP_MERGER_SYSTEM, /Left out/);
 		assert.match(SWEEP_EXTRACTOR_SYSTEM, /recall over precision/);
-		assert.match(SWEEP_RECONCILE_SYSTEM, /duplicate archetypes and duplicate facts/);
+		assert.match(SWEEP_RECONCILE_SYSTEM, /duplicate archetypes/);
+		assert.match(SWEEP_RECONCILE_SYSTEM, /Facts are never their own point/);
 		assert.match(SWEEP_RECONCILE_SYSTEM, /Never drop a point except into Left out/);
 	});
 

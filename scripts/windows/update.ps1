@@ -18,12 +18,13 @@ function Fail($message) {
 }
 
 Write-Host 'Getting the newest version from GitHub...'
-$before = git rev-parse HEAD
 $lockBefore = (Get-FileHash package-lock.json).Hash
 git pull --ff-only origin main
 if ($LASTEXITCODE -ne 0) { Fail 'Could not get the newest version. Local changes or a different branch may be in the way.' }
-$after = git rev-parse HEAD
-$changed = $before -ne $after -or -not (Test-Path '.next\BUILD_ID')
+$head = git rev-parse HEAD
+$builtFile = '.next\BUILT_COMMIT'
+$built = if (Test-Path $builtFile) { (Get-Content $builtFile -Raw).Trim() } else { '' }
+$changed = $built -ne $head
 
 Write-Host 'Stopping the server...'
 # Disabled so the 5-minute relaunch can't start the old server in the middle of the build.
@@ -46,6 +47,7 @@ if ($changed) {
 		npm run build
 		if ($LASTEXITCODE -ne 0) { Fail 'The build failed.' }
 	}
+	Set-Content $builtFile $head
 } else {
 	Write-Host 'Already on the newest version.'
 }
