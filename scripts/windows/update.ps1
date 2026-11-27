@@ -11,7 +11,6 @@ function Fail($message) {
 	Write-Host ''
 	Write-Host $message -ForegroundColor Red
 	Write-Host 'The server was not updated.' -ForegroundColor Red
-	Enable-ScheduledTask $task | Out-Null
 	Start-ScheduledTask $task
 	Read-Host 'Press Enter to close'
 	exit 1
@@ -27,8 +26,6 @@ $built = if (Test-Path $builtFile) { (Get-Content $builtFile -Raw).Trim() } else
 $changed = $built -ne $head
 
 Write-Host 'Stopping the server...'
-# Disabled so the 5-minute relaunch can't start the old server in the middle of the build.
-Disable-ScheduledTask $task | Out-Null
 Stop-ScheduledTask $task
 Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue |
 	ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
@@ -39,7 +36,7 @@ if ($changed) {
 		npm ci --no-fund --no-audit
 		if ($LASTEXITCODE -ne 0) { Fail 'Installing dependencies failed.' }
 	}
-	Write-Host 'Building (takes a minute or two)...'
+	Write-Host 'Building (takes a minute or two). A "Next.js security vulnerability" error may appear; it retries on its own, so keep this window open.' -ForegroundColor Yellow
 	npm run build
 	if ($LASTEXITCODE -ne 0) {
 		# The first build after a pull often fails Next.js's security check; a second try passes.
@@ -53,7 +50,6 @@ if ($changed) {
 }
 
 Write-Host 'Starting the server...'
-Enable-ScheduledTask $task | Out-Null
 Start-ScheduledTask $task
 for ($i = 0; $i -lt 60; $i++) {
 	try {
