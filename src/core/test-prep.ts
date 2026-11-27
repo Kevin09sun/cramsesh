@@ -10,6 +10,8 @@
  * answer. No fs, no framework imports: deterministic and unit-testable.
  */
 
+import type { CheatSheet, CheatSheetBuild } from "./cheat-sheet.ts";
+
 // ─── records ────────────────────────────────────────────────────────────────
 
 export type PointStatus = "unchecked" | "solid" | "gap" | "fixed-recheck";
@@ -52,6 +54,11 @@ export interface TestRecord {
 	sweep?: SweepState;
 	/** Re-sweep additions awaiting the learner's accept/drop review. */
 	pendingAdditions?: PendingAdditions;
+	/** The revision sheet built from the confirmed plan and read materials. */
+	cheatSheet?: CheatSheet;
+	/** The latest sheet build; absent once a build succeeds (or was never
+	 *  started). A build failure leaves the last good sheet in place. */
+	cheatSheetBuild?: CheatSheetBuild;
 }
 
 /** The plan-review draft: ids are optional because they are minted on merge. */

@@ -22,6 +22,8 @@ import {
 	readiness,
 	removePoint,
 } from "../core/test-prep.ts";
+import { normalizeCheatSheet } from "../core/cheat-sheet.ts";
+import type { CheatSheet, CheatSheetBuild } from "../core/cheat-sheet.ts";
 import type {
 	AnswerResult,
 	LeftOutItem,
@@ -105,11 +107,24 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
  * hand-edit or foreign writer cannot corrupt the next mutation.
  */
 function withoutMalformedSweepFields(record: TestRecord): TestRecord {
-	const strip: Array<"leftOut" | "sweep" | "pendingAdditions"> = [];
+	const strip: Array<"leftOut" | "sweep" | "pendingAdditions" | "cheatSheet" | "cheatSheetBuild"> = [];
 	if (record.leftOut !== undefined && !Array.isArray(record.leftOut)) strip.push("leftOut");
 	if (record.sweep !== undefined && !isPlainObject(record.sweep)) strip.push("sweep");
 	if (record.pendingAdditions !== undefined && !isPlainObject(record.pendingAdditions)) {
 		strip.push("pendingAdditions");
+	}
+	// A sheet is derived content: only a shape the page can render is kept.
+	if (record.cheatSheet !== undefined && normalizeCheatSheet(record.cheatSheet) === null) {
+		strip.push("cheatSheet");
+	}
+	const build = record.cheatSheetBuild;
+	if (
+		build !== undefined &&
+		(!isPlainObject(build) ||
+			(build.status !== "running" && build.status !== "error") ||
+			typeof build.startedAt !== "string")
+	) {
+		strip.push("cheatSheetBuild");
 	}
 	if (strip.length === 0) return record;
 
@@ -476,6 +491,43 @@ function promoteLeftOut(id: string, itemId: string): TestRecord {
 	return next;
 }
 
+/** Replace the stored revision sheet after a successful build. The build
+ *  marker is cleared in the same write, so the page never shows "building"
+ *  over a finished sheet. */
+function setCheatSheet(id: string, sheet: CheatSheet): TestRecord {
+	const record = loadOrThrow(id);
+	const { cheatSheetBuild: _finished, ...rest } = record;
+	const next: TestRecord = {
+		...rest,
+		cheatSheet: sheet,
+		updatedAt: new Date().toISOString(),
+	};
+	writeTest(next);
+	emit("tests-changed", {});
+	return next;
+}
+
+/** Patch the sheet build's state. A running build keeps its startedAt (and
+ *  drops any earlier error); an error records when it failed. */
+function updateCheatSheetBuild(id: string, patch: Partial<CheatSheetBuild>): TestRecord {
+	const record = loadOrThrow(id);
+	const startedAt = patch.startedAt ?? record.cheatSheetBuild?.startedAt ?? new Date().toISOString();
+	const status = patch.status ?? "running";
+	const build: CheatSheetBuild =
+		status === "running"
+			? { status, startedAt }
+			: {
+					status,
+					startedAt,
+					...(patch.finishedAt === undefined ? { finishedAt: new Date().toISOString() } : { finishedAt: patch.finishedAt }),
+					...(patch.error === undefined ? {} : { error: patch.error }),
+				};
+	const next: TestRecord = { ...record, cheatSheetBuild: build, updatedAt: new Date().toISOString() };
+	writeTest(next);
+	emit("tests-changed", {});
+	return next;
+}
+
 export const testStore = {
 	create,
 	get,
@@ -491,4 +543,6 @@ export const testStore = {
 	setPendingAdditions,
 	resolveAdditions,
 	promoteLeftOut,
+	setCheatSheet,
+	updateCheatSheetBuild,
 };

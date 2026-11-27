@@ -19,6 +19,9 @@ export * from "./stores.ts";
 // Test material sweep (2026-11-20): the settings-resolved reader/extractor/
 // merger engines and the re-sweep launch seam behind the browser route.
 export * from "./sweep-engines.ts";
+// The revision sheet's background build (issue #15): launch, stale-build
+// close and the model gate behind the cheat-sheet route.
+export * from "./cheat-sheet.ts";
 // The test-folder route reuses the sweep tool's folder validation verbatim.
 export { resolveSweepFolder } from "../agent/tools/sweep-folder.ts";
 // Official AP papers live outside the synced data repo (data/ap-papers/<courseId>/).

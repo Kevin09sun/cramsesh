@@ -356,6 +356,18 @@ export function ReadinessView({
 					>
 						{editing ? "Close editor" : "Edit plan"}
 					</Button>
+					{test.planConfirmed && (
+						<Button
+							type="button"
+							variant="outline"
+							size="sm"
+							data-testid="open-cheat-sheet"
+							disabled={starting}
+							onClick={() => go(`/tests/${test.id}/cheat-sheet`)}
+						>
+							Cheat sheet
+						</Button>
+					)}
 					{folder ? (
 						<Button
 							type="button"

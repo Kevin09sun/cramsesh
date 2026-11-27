@@ -71,6 +71,10 @@ export interface PlanReviewConfig {
 	/** How to change a confirmed plan: the tutor revises it in chat. */
 	confirmedHint: string;
 	openPage: string;
+	/** Optional: the revision sheet's page, linked beside Open readiness
+	 *  once the plan is confirmed (test prep only). */
+	sheetPage?: (id: string) => string;
+	sheetLabel?: string;
 	superseded: string;
 	loading: string;
 	notLinked: string;
@@ -99,6 +103,8 @@ export const TEST_PREP_PLAN_CONFIG: PlanReviewConfig = {
 	confirmedTitle: "Plan confirmed",
 	confirmedHint: "To change it, ask the tutor in chat — it revises the plan and you confirm the revision.",
 	openPage: "Open readiness",
+	sheetPage: (id) => `/tests/${id}/cheat-sheet`,
+	sheetLabel: "Cheat sheet",
 	superseded: "This plan was revised below.",
 	loading: "Loading the plan…",
 	notLinked: "This session is not linked to a test.",
@@ -346,12 +352,23 @@ export function PlanReviewCard({
 					{countLine(config, record.sections.length, points)}
 				</div>
 				<div className="mt-1 text-sm text-muted-foreground">{config.confirmedHint}</div>
-				<a
-					href={`${config.pageBase}/${record.id}`}
-					className="mt-2 inline-block text-sm font-medium text-primary underline-offset-4 hover:underline"
-				>
-					{config.openPage}
-				</a>
+				<div className="mt-2 flex flex-wrap gap-4">
+					<a
+						href={`${config.pageBase}/${record.id}`}
+						className="inline-block text-sm font-medium text-primary underline-offset-4 hover:underline"
+					>
+						{config.openPage}
+					</a>
+					{config.sheetPage && (
+						<a
+							href={config.sheetPage(record.id)}
+							data-testid="plan-cheat-sheet-link"
+							className="inline-block text-sm font-medium text-primary underline-offset-4 hover:underline"
+						>
+							{config.sheetLabel ?? "Cheat sheet"}
+						</a>
+					)}
+				</div>
 			</div>
 		);
 	}
