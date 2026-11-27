@@ -26,7 +26,7 @@ Cramsesh is a fork of LearnHarness rebuilt around AP exam prep, with a light mod
 - **Drawn figures.** A question that needs a graph, diagram or construction gets a figure drawn and checked before the question is asked.
 - **Grading of your reasoning.** Free-response work is graded every scoring point, point by point, against the official rubric or the tutor's committed rubric. A right answer with missing working or justification earns no point. Multiple-choice reasoning is graded too: a right pick reached by flawed reasoning counts as a miss.
 - **Direct web search.** Every conversation tutor can search the web and read a page inside its reply when a fact may have changed. A switch under Settings → Agent turns this off.
-- **The rest of the fork's work.** Light mode and readability fixes, a running token counter for each session, Teach from your materials (the teacher uses the files and folders you point it at), Test prep mode with an outline and readiness tracking, a visual file and folder picker in the web version, and Windows scripts for setup, autostart and data sync.
+- **The rest of the fork's work.** Light mode and readability fixes, a running token counter for each session, Teach from your materials (the teacher uses the files and folders you point it at), Test prep mode with an outline, readiness tracking and a printable cheat sheet built from the confirmed plan, a visual file and folder picker in the web version, and Windows scripts for setup, autostart and data sync.
 
 ## Screenshots
 

@@ -211,6 +211,15 @@ test("a confirmed plan collapses to a summary linking to the readiness page", as
 	assert.match(document.body.textContent ?? "", /Plan confirmed/);
 });
 
+test("a confirmed plan also links to its cheat sheet", async () => {
+	await mount(record({ planConfirmed: true }));
+
+	const sheet = document.querySelector<HTMLAnchorElement>('[data-testid="plan-cheat-sheet-link"]');
+	assert.ok(sheet, "the confirmed summary offers the sheet");
+	assert.equal(sheet!.getAttribute("href"), "/tests/test_1/cheat-sheet");
+	assert.match(sheet!.textContent ?? "", /Cheat sheet/);
+});
+
 test("only the latest propose_plan card offers the editor; an earlier proposal collapses", async () => {
 	const messages = proposalMessages(["call_old", "call_new"]);
 

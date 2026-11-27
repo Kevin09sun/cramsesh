@@ -132,6 +132,32 @@
 	--lh-heading-weight: 900;
 }
 
+/* The revision sheet (issue #15): a paper document, not app chrome. One warm
+   stock in both app themes, so what prints is exactly what was read. The
+   amber is darkened from the brand sunflower so it stays legible as text on
+   paper (the brand token is a surface colour, not an ink). */
+:root {
+	--sheet-paper: #fbf7ec;
+	--sheet-ink: #16233a;
+	--sheet-ink-soft: #5a6375;
+	--sheet-rule: #e3d9c3;
+	--sheet-wash: #f4ecd8;
+	--sheet-accent: #8a5a0a;
+	--sheet-shadow: 0 20px 50px -32px rgba(22, 35, 58, 0.55);
+}
+
+/* The app's global border-color reset (`* { border-color }`) beats utility
+   border colours (unlayered CSS wins over the utilities layer). Inside the
+   document, paper rules take over; the accent rule is opted into by class. */
+.cheat-sheet,
+.cheat-sheet * {
+	border-color: var(--sheet-rule);
+}
+
+.cheat-sheet .sheet-accent-rule {
+	border-color: var(--sheet-accent);
+}
+
 /* Light mode readability. Faded text (text-…/70 and friends) was tuned for
    the dark page; on the light one it falls under 4.5:1 contrast. Show it at
    full muted strength instead. In the utilities layer with :where() so the
@@ -633,4 +659,51 @@ body {
 	background-color: var(--accent);
 	outline: 1px solid var(--border);
 	border-radius: 0.25rem;
+}
+
+/* ── Print: the revision sheet (issue #15) ──────────────────────────────────
+   Only the cheat sheet is a printed document. The app shell is a fixed-
+   height, inner-scrolling frame (`h-dvh` wrappers, an `overflow-y-auto`
+   main), which would clip every page after the first; print releases the
+   frame, hides chrome, and lets the sheet flow across pages. The sheet uses
+   the printer's own paper size (Letter in the US, A4 elsewhere) — the two
+   columns are fluid — so only the margins are fixed. The block sits at the
+   END of the file so it beats the app's unlayered body colour and page
+   rules by source order. */
+@media print {
+	@page {
+		margin: 12mm;
+	}
+
+	/* Pure white is the correct print stock: an off-white tint prints as a
+	   wash over the whole page. This is paper, not a screen surface. */
+	html,
+	body {
+		height: auto !important;
+		background: #fff !important;
+	}
+
+	.h-dvh {
+		height: auto !important;
+	}
+
+	main {
+		height: auto !important;
+		overflow: visible !important;
+	}
+
+	.sidebar-motion,
+	.lh-no-print {
+		display: none !important;
+	}
+
+	.cheat-sheet {
+		background: #fff !important;
+		box-shadow: none !important;
+	}
+
+	.cheat-sheet a {
+		color: inherit;
+		text-decoration: none;
+	}
 }
