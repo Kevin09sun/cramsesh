@@ -14,7 +14,7 @@ import { LeftOutList } from "@/components/test-prep/left-out-list";
 import { PlanEditor } from "@/components/test-prep/plan-editor";
 import { ResweepAdditionsCard } from "@/components/test-prep/resweep-additions-card";
 import { Button } from "@/components/ui/button";
-import { readiness, readinessPercent } from "@/src/core";
+import { readiness, readinessPercent, formatStudySpan } from "@/src/core";
 import type { ChatSummary, LeftOutItem, PlanDraftSection, PointStatus, TestRecord } from "@/src/core";
 
 /**
@@ -106,6 +106,10 @@ export function ReadinessView({
 		{ solid: 0, total: 0 },
 	);
 	const percent = readinessPercent(totals.solid, totals.total);
+	// The test's study time is the sum of its sittings (issue #16) — each
+	// session's own clock wrote its per-day log; this is the same fold the
+	// session rows show, one level up.
+	const studyMs = sessions.reduce((sum, session) => sum + (session.timeMs ?? 0), 0);
 
 	const sweep = test.sweep;
 	const pendingAdditions = test.pendingAdditions;
@@ -339,6 +343,9 @@ export function ReadinessView({
 								{" "}
 								· {totals.solid}/{totals.total} points solid
 							</span>
+						)}
+						{studyMs > 0 && (
+							<span data-testid="test-study-time"> · {formatStudySpan(studyMs)} studied</span>
 						)}
 					</p>
 				</div>

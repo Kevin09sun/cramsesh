@@ -4,7 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { SessionRenameInput, useSessionContextMenu } from "@/components/session-context-menu";
-import { ClipboardListIcon, DumbbellIcon, PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon, SettingsIcon } from "lucide-react";
+import { ClipboardListIcon, ClockIcon, DumbbellIcon, PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon, SettingsIcon } from "lucide-react";
 import { ActivitySection } from "@/components/activity-dock";
 import { CramseshMark } from "@/components/cramsesh-mark";
 import { BrailleSpinner } from "@/components/braille-spinner";
@@ -18,7 +18,7 @@ import { sidebarSessions } from "@/src/core";
 import { useServerEvent, useServerResync } from "@/components/server-events";
 import type { ChatListItem } from "@/src/core";
 import { formatTokens, tokenBreakdown } from "@/components/usage-format";
-import { kbdEventForAction } from "@/src/core";
+import { kbdEventForAction, formatStudySpan } from "@/src/core";
 import { notifySettingsSaved } from "@/components/settings-signal";
 
 /**
@@ -272,7 +272,10 @@ export function timeAgo(iso: string, now = new Date()): string {
  *  ever wanted. */
 function sessionMeta(chat: ChatListItem): string {
 	const tokens = chat.tokens?.total ? ` · ${formatTokens(chat.tokens.total)} tokens` : "";
-	return sessionState(chat) + tokens;
+	// Study time (issue #16): shown once the clock has counted something —
+	// an absent/zero total stays off the row rather than reading "0m".
+	const time = chat.timeMs ? ` · ${formatStudySpan(chat.timeMs)}` : "";
+	return sessionState(chat) + time + tokens;
 }
 
 function sessionState(chat: ChatListItem): string {
@@ -420,6 +423,11 @@ export function SessionDoorLinks({
 				<ClipboardListIcon className="size-3" />
 				AP
 				<span className="sr-only">view your AP courses</span>
+			</Link>
+			<Link href="/time" data-testid="study-time-link" className={DOOR_CLASS}>
+				<ClockIcon className="size-3" />
+				Study time
+				<span className="sr-only">view your study time</span>
 			</Link>
 		</div>
 	);

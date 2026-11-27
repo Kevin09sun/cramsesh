@@ -63,6 +63,7 @@ import { PracticeDock } from "@/components/practice-dock";
 import { ThinkingCard, type PracticeThinkingData } from "@/components/practice-cards";
 import { GraphContextCard, type GraphContextData } from "@/components/graph-context-card";
 import { TopBar } from "@/components/top-bar";
+import { SessionClock } from "@/components/study-clock";
 import type { ArtifactPartProps, ChatKind, JobRecord, Phase3, QuestionAnswerData, QuestionFormDraft, TokenTotals, TurnUsage, SessionPricing } from "@/src/core";
 import type { LhViewMessage } from "@/src/core";
 import { PhaseChip, PhaseDivider } from "@/components/phase-divider";
@@ -272,6 +273,7 @@ export function Chat({
 	initialError,
 	initialPrompt,
 	initiallyInFlight,
+	initialTimeMs = 0,
 	initiallyCompacting = false,
 	initialConfigured = false,
 	kind = "teach",
@@ -295,6 +297,9 @@ export function Chat({
 	/** The linked course (ap only) — the course-page link target. */
 	apCourseId?: string;
 	initialPrompt?: string;
+	/** The session's counted study time on load (issue #16) — the header
+	 *  clock's starting total; the clock takes over from there. */
+	initialTimeMs?: number;
 	/** A teacher turn is running server-side but attached to no client
 	 * (navigated away mid-turn, returned while in flight). */
 	initiallyInFlight?: boolean;
@@ -325,6 +330,20 @@ export function Chat({
 	const sessionFindScopeRef = useRef<HTMLDivElement | null>(null);
 	const scrollContextRef = useRef<StickToBottomContext | null>(null);
 	const sourceTextParts = useMemo(() => firstSourceTextParts(messages), [messages]);
+
+	// THE SESSION CLOCK'S TRIGGER (issue #16): time starts at the first
+	// prompt/upload of a visit — the learner's first message on this mount.
+	// SessionClock owns the ticking (a child, so the header's timer never
+	// re-renders Chat); Chat only hands it the start trigger.
+	const clockStartRef = useRef<(() => void) | null>(null);
+	const learnerMessages = useMemo(
+		() => nativeMessages.filter((m) => (m as { role?: string }).role === "user").length,
+		[nativeMessages],
+	);
+	const learnerMessagesAtMount = useRef(learnerMessages);
+	useEffect(() => {
+		if (learnerMessages > learnerMessagesAtMount.current) clockStartRef.current?.();
+	}, [learnerMessages]);
 
 	// The reattach settled terminal → the sync-and-continue seam (below).
 	setReattachSettled(() => reattachSettledRef.current());
@@ -1457,7 +1476,10 @@ export function Chat({
 							<div className="min-w-4 flex-1" aria-hidden="true" />
 					</>
 					)}
-					{/* The plan chip (owner, plan-placement round): session-level
+					{/* Study time (issue #16): counted from this visit's first
+						    prompt, while the page stays open and active. */}
+						<SessionClock chatId={chatId} initialMs={initialTimeMs} startRef={clockStartRef} />
+						{/* The plan chip (owner, plan-placement round): session-level
 					    structure beside the phase chip — access to the full-DAG popup
 					    at every width; the marginalia is the wide-screen glance view. */}
 					{planTree && (

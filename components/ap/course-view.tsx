@@ -11,7 +11,7 @@ import { SessionStarter } from "@/components/start-session";
 import { StudySessionList } from "@/components/study-session-list";
 import { PlanEditor } from "@/components/test-prep/plan-editor";
 import { Button } from "@/components/ui/button";
-import { AP_ADDED_TOPIC_SOURCE, apPaperPair, fillAddedTopicSources, quoteFilePath, readiness, readinessPercent } from "@/src/core";
+import { AP_ADDED_TOPIC_SOURCE, apPaperPair, fillAddedTopicSources, formatStudySpan, quoteFilePath, readiness, readinessPercent } from "@/src/core";
 import type { ApCourseRecord, ApDocument, ApLearnScope, ApSittingScope, ChatSummary, PlanDraftSection, PointStatus } from "@/src/core";
 
 /**
@@ -173,6 +173,8 @@ export function CourseView({
 		{ solid: 0, total: 0 },
 	);
 	const percent = readinessPercent(totals.solid, totals.total);
+	// The course's study time is the sum of its sessions (issue #16).
+	const studyMs = sessions.reduce((sum, session) => sum + (session.timeMs ?? 0), 0);
 
 	async function save(sections: PlanDraftSection[], confirm: boolean): Promise<void> {
 		setSaving(true);
@@ -279,6 +281,9 @@ export function CourseView({
 								{" "}
 								· {totals.solid}/{totals.total} topics solid
 							</span>
+						)}
+						{studyMs > 0 && (
+							<span data-testid="course-study-time"> · {formatStudySpan(studyMs)} studied</span>
 						)}
 					</p>
 				</div>

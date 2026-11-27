@@ -16,6 +16,7 @@ import type {
 	ChatSettings,
 	ChatSummary,
 	GraphChain,
+	StudyTimeDay,
 	GraphNode,
 	JobKind,
 	JobRecord,
@@ -64,6 +65,14 @@ export interface ChatStore {
 	appendTurnUsage(id: string, entry: TurnUsage): void;
 	/** Append one extraction-run usage entry — idempotent per startedAt. */
 	appendExtractionUsage(id: string, entry: ExtractionRunUsage): void;
+	/** Merge one counted study-time chunk into the record's per-day log
+	 *  (issue #16) and return the session's new total in milliseconds. NOT
+	 *  conversation activity: updatedAt stays put, so heartbeats never
+	 *  churn the sidebar order. */
+	addStudyTime(id: string, day: string, ms: number): number;
+	/** Every session's study time folded per local calendar day (the Study
+	 *  time tracker's one read), days ascending. */
+	studyTimeByDay(): StudyTimeDay[];
 	/** Persist the per-chat model/thinking settings (the model control).
 	 *  Replace-whole: the picker sends the complete settings object. */
 	saveSettings(id: string, settings: ChatSettings): void;
