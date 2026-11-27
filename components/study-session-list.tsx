@@ -5,6 +5,7 @@ import Link from "next/link";
 import { SessionRenameInput, useSessionContextMenu } from "@/components/session-context-menu";
 import { timeAgo } from "@/components/sidebar";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { formatStudySpan } from "@/src/core";
 import type { ChatSummary } from "@/src/core";
 
 /**
@@ -21,12 +22,19 @@ import type { ChatSummary } from "@/src/core";
  * deleting a session from its box never navigates away.
  */
 
+/** The row's right side: counted study time (issue #16) when there is any,
+ *  then the relative age. */
+function sessionTail(session: { updatedAt: string; timeMs?: number }): string {
+	const time = session.timeMs ? `${formatStudySpan(session.timeMs)} · ` : "";
+	return `${time}${timeAgo(session.updatedAt)}`;
+}
+
 export function StudySessionList({
 	sessions,
 	newSession,
 	onSessionsChanged,
 }: {
-	sessions: ReadonlyArray<Pick<ChatSummary, "id" | "title" | "updatedAt">>;
+	sessions: ReadonlyArray<Pick<ChatSummary, "id" | "title" | "updatedAt" | "timeMs">>;
 	newSession: { label: string; onClick: () => void; disabled?: boolean; testId: string };
 	/** After a rename or delete from the row menu — the page refetches. */
 	onSessionsChanged?: () => void;
@@ -67,8 +75,8 @@ export function StudySessionList({
 										onCancel={cancelRename}
 										className="lh-input min-w-0 flex-1 truncate border-0 border-b border-border bg-transparent px-0 text-sm text-foreground outline-none"
 									/>
-									<span className="shrink-0 text-xs text-muted-foreground" suppressHydrationWarning>
-										{timeAgo(session.updatedAt)}
+									<span className="shrink-0 text-xs tabular-nums text-muted-foreground" suppressHydrationWarning>
+										{sessionTail(session)}
 									</span>
 								</div>
 							) : (
@@ -79,8 +87,8 @@ export function StudySessionList({
 									className="flex items-center justify-between gap-3 rounded-md px-2 py-1.5 transition-colors hover:bg-accent"
 								>
 									<span className="min-w-0 truncate text-sm">{session.title}</span>
-									<span className="shrink-0 text-xs text-muted-foreground" suppressHydrationWarning>
-										{timeAgo(session.updatedAt)}
+									<span className="shrink-0 text-xs tabular-nums text-muted-foreground" suppressHydrationWarning>
+										{sessionTail(session)}
 									</span>
 								</Link>
 							)}

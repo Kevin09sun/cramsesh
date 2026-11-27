@@ -68,6 +68,12 @@ export interface ChatRecord {
 	 *  spend too. Same parallel-log discipline as `turns` (nothing rides
 	 *  inside messages). Keyed by startedAt; idempotent appends. */
 	extractions?: ExtractionRunUsage[];
+	/** Study time (issue #16, owner-approved 2026-11-27): the session's
+	 *  counted active time, one entry per LOCAL calendar day. Written by the
+	 *  open session page's clock through POST /api/chats/[id]/time — chunks
+	 *  merged per day, so a session has at most one entry per day it was
+	 *  used. Absent = none counted yet. */
+	studyTime?: StudyTimeDay[];
 	/** Per-chat model/thinking overrides for the conversation agents. */
 	settings?: ChatSettings;
 	/** SCHEMA STAMP (schema-versioning wave, owner 2026-10-10): LAZY v1 —
@@ -80,6 +86,14 @@ export interface ChatRecord {
 
 /** The chat record format this build writes and understands. */
 export const CURRENT_CHAT_VERSION = 1;
+
+/** One local calendar day's counted study time on a session (issue #16). */
+export interface StudyTimeDay {
+	/** The learner's local calendar day, YYYY-MM-DD. */
+	day: string;
+	/** Counted milliseconds that day. */
+	ms: number;
+}
 
 /** The conversation agents' runtime model choice (model-control wave,
  *  2026-09-12): a per-chat override of config.ts's pinned prober/teacher
@@ -306,6 +320,11 @@ export interface ChatSummary {
 	/** The running token counter (core/session-tokens.ts), joined by the list
 	 *  route with the session's background jobs. */
 	tokens?: TokenTotals;
+	/** Counted study time in milliseconds (issue #16) — a fold over the
+	 *  record's per-day log. Present only once the clock has written
+	 *  something; absent means none counted yet. The per-day log itself
+	 *  stays out of the list payload. */
+	timeMs?: number;
 }
 
 /** Everything a session caused, in tokens. `total` is every token the model

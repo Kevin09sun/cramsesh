@@ -124,11 +124,11 @@ describe("SessionRow", () => {
 });
 
 describe("Session doors (study boxes, 2026-11-17)", () => {
-	it("Teaching and Practice create; Tests and AP link to their pages", () => {
+	it("Teaching and Practice create; Tests, AP and Study time link to their pages", () => {
 		const html = renderToStaticMarkup(<SessionDoorLinks onNewTeaching={() => {}} onNewPractice={() => {}} />);
 		const ids = [...html.matchAll(/data-testid="([^"]+)"/g)].map((match) => match[1]);
-		assert.deepEqual(ids, ["new-session", "new-session-practice", "tests-link", "ap-link"]);
-		for (const [id, href] of [["tests-link", "/tests"], ["ap-link", "/ap"]] as const) {
+		assert.deepEqual(ids, ["new-session", "new-session-practice", "tests-link", "ap-link", "study-time-link"]);
+		for (const [id, href] of [["tests-link", "/tests"], ["ap-link", "/ap"], ["study-time-link", "/time"]] as const) {
 			const tag = html.match(new RegExp(`<[a-z]+[^>]*data-testid="${id}"[^>]*>`))?.[0] ?? "";
 			assert.match(tag, /^<a /, `${id} is a link`);
 			assert.match(tag, new RegExp(`href="${href}"`));

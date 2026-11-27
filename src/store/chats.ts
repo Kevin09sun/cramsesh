@@ -13,8 +13,9 @@ import { createHash } from "node:crypto";
 import { PATHS } from "../../config.ts";
 import { emit } from "../core/events.ts";
 import type { ChatStore } from "../core/ports.ts";
-import type { ChatRecord, ChatSettings, ChatSummary, ExtractionRunUsage, ImageSnapshot, PlanTree, TurnUsage } from "../core/contracts.ts";
+import type { ChatRecord, ChatSettings, ChatSummary, ExtractionRunUsage, ImageSnapshot, PlanTree, StudyTimeDay, TurnUsage } from "../core/contracts.ts";
 import { CURRENT_CHAT_VERSION } from "../core/contracts.ts";
+import { mergeStudyTime, studyTimeTotal } from "../core/study-time.ts";
 import type { ApLearnScope, ApSitting } from "../core/ap.ts";
 import type { LhMessage } from "../core/native-messages.ts";
 import { activeProblemOf, danglingQuestionOf } from "../core/native-messages.ts";
@@ -29,7 +30,8 @@ function chatFile(id: string): string {
 /** THE SILENCE LAW (push S6, 2026-10-02): chats-changed announces ONLY
  *  list-SHAPE mutations — createChat, renameChat, deleteChat (below,
  *  each emits post-write). The content writers (saveMessages,
- *  appendTurnUsage, appendExtractionUsage, saveSettings, saveTree) are
+ *  appendTurnUsage, appendExtractionUsage, saveSettings, saveTree,
+ *  addStudyTime) are
  *  DELIBERATELY SILENT: saveMessages fires per turn-persist and would
  *  spam the bus, and every list-visible change it causes (title, order,
  *  phase, busy, pendingQuestion) is already announced by turn-started /
@@ -108,7 +110,7 @@ function listChats(): ChatSummary[] {
 			.filter((f) => f.endsWith(".json"))
 			.map((f) => getChat(f.slice(0, -5)))
 			.filter((r): r is ChatRecord => r !== null)
-			.map(({ messages, tree, turns, extractions, imageSnapshots: _imageSnapshots, ...summary }) => {
+			.map(({ messages, tree, turns, extractions, studyTime, imageSnapshots: _imageSnapshots, ...summary }) => {
 				// Per-record isolation (Wave B): a record whose messages fail the
 				// projection (e.g. pre-Wave-B UIMessage-format scratch — the
 				// zero-back-compat wipe makes these "corrupt") must not blank the
@@ -119,6 +121,9 @@ function listChats(): ChatSummary[] {
 						// summaries; usage aggregates ride the full record, the picker
 						// never needs them).
 						...summary,
+						// Study time (issue #16): the per-day log stays out of the list
+						// too — rows and the study boxes only need the total.
+						...(studyTimeTotal(studyTime) > 0 ? { timeMs: studyTimeTotal(studyTime) } : {}),
 						// Normalized kind: absent record field reads as teach.
 						kind: summary.kind ?? "teach",
 						messageCount: messages.length,
@@ -248,6 +253,43 @@ function saveTree(id: string, tree: PlanTree): void {
 	writeChat(record);
 }
 
+/** Merge one study-time chunk into the record's per-day log (issue #16).
+ *  Deliberately does NOT bump updatedAt: the clock heartbeats every 15
+ *  seconds, and a timer is not conversation activity — sidebar order must
+ *  never churn on it. Silently merged per day, so a session's record holds
+ *  at most one entry per day however many chunks arrive. Returns the
+ *  session's new total in milliseconds. */
+function addStudyTime(id: string, day: string, ms: number): number {
+	const record = getChat(id);
+	if (!record) throw new Error(`Chat not found: ${id}`);
+	record.studyTime = mergeStudyTime(record.studyTime, day, ms);
+	writeChat(record);
+	return studyTimeTotal(record.studyTime);
+}
+
+/** Every session's study time folded per local calendar day — the Study
+ *  time tracker's read. One directory pass, same per-file isolation as
+ *  listChats: a corrupt record contributes nothing instead of blanking the
+ *  tracker. */
+function studyTimeByDay(): StudyTimeDay[] {
+	try {
+		fs.mkdirSync(PATHS.chats, { recursive: true });
+		const totals = new Map<string, number>();
+		for (const file of fs.readdirSync(PATHS.chats)) {
+			if (!file.endsWith(".json")) continue;
+			const record = getChat(file.slice(0, -5));
+			for (const entry of record?.studyTime ?? []) {
+				totals.set(entry.day, (totals.get(entry.day) ?? 0) + entry.ms);
+			}
+		}
+		return [...totals]
+			.map(([day, ms]) => ({ day, ms }))
+			.sort((a, b) => a.day.localeCompare(b.day));
+	} catch {
+		return [];
+	}
+}
+
 export const chatStore: ChatStore = {
 	createChat,
 	getChat,
@@ -260,4 +302,6 @@ export const chatStore: ChatStore = {
 	deleteChat,
 	appendTurnUsage,
 	appendExtractionUsage,
+	addStudyTime,
+	studyTimeByDay,
 };
